@@ -1,0 +1,183 @@
+{% extends 'migration_app/dashboard_base.html' %}
+{% load static %}
+
+{% block title %}Oracle 表列表{% endblock %}
+
+{% block page_title %}Oracle 表列表{% endblock %}
+
+{% block breadcrumb %}
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{% url 'migration_app:index' %}">首页</a></li>
+        <li class="breadcrumb-item">Oracle</li>
+        <li class="breadcrumb-item active" aria-current="page">表列表</li>
+    </ol>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="card-title mb-0">
+            <i class="fas fa-table me-2"></i>表列表
+        </h5>
+        <div class="d-flex gap-2">
+            <select class="form-select form-select-sm" id="connectionSelect">
+                <option value="">选择连接</option>
+                {% for connection in connections %}
+                <option value="{{ connection.id }}">{{ connection.name }}</option>
+                {% endfor %}
+            </select>
+            <select class="form-select form-select-sm" id="schemaSelect" disabled>
+                <option value="">选择模式</option>
+            </select>
+            <button class="btn btn-primary btn-sm" id="refreshBtn" disabled>
+                <i class="fas fa-sync-alt me-1"></i>刷新
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-striped table-hover">
+                <thead>
+                    <tr>
+                        <th>表名</th>
+                        <th>行数</th>
+                        <th>表空间</th>
+                        <th>注释</th>
+                        <th>分区</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="tableList">
+                    <tr>
+                        <td colspan="6" class="text-center">请选择连接和模式</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    const connectionSelect = $('#connectionSelect');
+    const schemaSelect = $('#schemaSelect');
+    const refreshBtn = $('#refreshBtn');
+    const tableList = $('#tableList');
+
+    // 连接变化时加载模式列表
+    connectionSelect.change(function() {
+        const connectionId = $(this).val();
+        if (connectionId) {
+            showLoader();
+            $.post('/app/schemas/', {
+                connection_id: connectionId,
+                csrfmiddlewaretoken: '{{ csrf_token }}'
+            })
+            .done(function(response) {
+                schemaSelect.empty().append('<option value="">选择模式</option>');
+                response.schemas.forEach(function(schema) {
+                    schemaSelect.append(`<option value="${schema}">${schema}</option>`);
+                });
+                schemaSelect.prop('disabled', false);
+            })
+            .fail(function(xhr) {
+                showToast('加载模式列表失败: ' + xhr.responseText, 'error');
+            })
+            .always(function() {
+                hideLoader();
+            });
+        } else {
+            schemaSelect.empty().append('<option value="">选择模式</option>').prop('disabled', true);
+            refreshBtn.prop('disabled', true);
+        }
+    });
+
+    // 模式变化时启用刷新按钮
+    schemaSelect.change(function() {
+        refreshBtn.prop('disabled', !$(this).val());
+        if ($(this).val()) {
+            loadTables();
+        }
+    });
+
+    // 刷新按钮点击事件
+    refreshBtn.click(loadTables);
+
+    // 加载表列表
+    function loadTables() {
+        const connectionId = connectionSelect.val();
+        const schema = schemaSelect.val();
+        
+        if (!connectionId || !schema) return;
+
+        showLoader();
+        $.post('/app/oracle/tables/', {
+            connection_id: connectionId,
+            schema: schema,
+            csrfmiddlewaretoken: '{{ csrf_token }}'
+        })
+        .done(function(response) {
+            tableList.empty();
+            if (response.tables.length === 0) {
+                tableList.append('<tr><td colspan="6" class="text-center">没有找到表</td></tr>');
+                return;
+            }
+
+            response.tables.forEach(function(table) {
+                const partitionBadge = table.is_partitioned ? 
+                    '<span class="badge bg-info">已分区</span>' : 
+                    '<span class="badge bg-secondary">未分区</span>';
+                    
+                tableList.append(`
+                    <tr>
+                        <td>${table.name}</td>
+                        <td>${table.rows || '-'}</td>
+                        <td>${table.tablespace || '-'}</td>
+                        <td>${table.comment || '-'}</td>
+                        <td>${partitionBadge}</td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-primary view-table" data-table="${table.name}" title="查看表结构">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                <button class="btn btn-outline-info view-data" data-table="${table.name}" title="查看数据">
+                                    <i class="fas fa-table"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `);
+            });
+        })
+        .fail(function(xhr) {
+            showToast('加载表列表失败: ' + xhr.responseText, 'error');
+        })
+        .always(function() {
+            hideLoader();
+        });
+    }
+
+    // 查看表结构
+    $(document).on('click', '.view-table', function() {
+        const tableName = $(this).data('table');
+        const connectionId = connectionSelect.val();
+        const schema = schemaSelect.val();
+        
+        window.location.href = `/app/oracle/tables/${connectionId}/${schema}/${tableName}/`;
+    });
+
+    // 查看表数据
+    $(document).on('click', '.view-data', function() {
+        const tableName = $(this).data('table');
+        const connectionId = connectionSelect.val();
+        const schema = schemaSelect.val();
+        
+        window.location.href = `/app/oracle/tables/${connectionId}/${schema}/${tableName}/data/`;
+    });
+});
+</script>
+{% endblock %} 

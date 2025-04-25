@@ -1,0 +1,440 @@
+{% extends 'migration_app/dashboard_base.html' %}
+
+{% block title %}任务详情 - {{ task.name }}{% endblock %}
+
+{% block page_title %}任务详情 - {{ task.name }}{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'migration_app:task_list' %}">迁移任务</a></li>
+<li class="breadcrumb-item active" aria-current="page">任务详情</li>
+{% endblock %}
+
+{% block dashboard_content %}
+<!-- 调试区域 -->
+<div id="debug-panel" class="card mb-4">
+    <div class="card-header bg-info text-white">
+        <i class="fas fa-bug me-1"></i> 调试信息
+        <button class="btn btn-sm btn-light float-end" onclick="document.getElementById('debug-panel').style.display='none'">关闭</button>
+    </div>
+    <div class="card-body">
+        <div id="debug-output" class="bg-dark text-light p-2" style="max-height: 200px; overflow: auto;">
+            <div>调试面板已加载</div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <i class="fas fa-info-circle me-1"></i> 基本信息
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-6">
+                <div class="mb-3">
+                    <h5 class="mb-1">任务名称</h5>
+                    <p class="mb-0">{{ task.name }}</p>
+                </div>
+                <div class="mb-3">
+                    <h5 class="mb-1">任务类型</h5>
+                    <p class="mb-0">{{ task.get_task_type_display }}</p>
+                </div>
+                <div class="mb-3">
+                    <h5 class="mb-1">源信息</h5>
+                    <p class="mb-0">{{ task.oracle_connection.name }} / {{ task.source_schema }}{% if task.source_object %}.{{ task.source_object }}{% endif %}</p>
+                </div>
+                <div class="mb-3">
+                    <h5 class="mb-1">目标信息</h5>
+                    <p class="mb-0">{{ task.postgres_connection.name }} / {{ task.target_schema }}{% if task.source_object %}.{{ task.source_object }}{% endif %}</p>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="mb-3">
+                    <h5 class="mb-1">任务状态</h5>
+                    <p id="task-status" class="mb-0">
+                        {% if task.status == 'pending' %}
+                        <span class="badge bg-warning">等待执行</span>
+                        {% elif task.status == 'running' %}
+                        <span class="badge bg-primary">执行中</span>
+                        {% elif task.status == 'completed' %}
+                        <span class="badge bg-success">已完成</span>
+                        {% elif task.status == 'failed' %}
+                        <span class="badge bg-danger">执行失败</span>
+                        {% elif task.status == 'canceled' %}
+                        <span class="badge bg-secondary">已取消</span>
+                        {% elif task.status == 'partial' %}
+                        <span class="badge bg-info">部分成功</span>
+                        {% endif %}
+                    </p>
+                </div>
+
+                <div class="mb-3">
+                    <h5 class="mb-1">进度</h5>
+                    <div class="progress">
+                        <div id="task-progress" class="progress-bar" role="progressbar" style="width: {{ task.progress }}%;" aria-valuenow="{{ task.progress }}" aria-valuemin="0" aria-valuemax="100">{{ task.progress }}%</div>
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <h5 class="mb-1">创建时间</h5>
+                    <p class="mb-0">{{ task.created_at }}</p>
+                </div>
+                
+                <div class="mb-3">
+                    <h5 class="mb-1">更新时间</h5>
+                    <p id="task-updated-at" class="mb-0">{{ task.updated_at }}</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mt-4">
+            {% if task.status == 'pending' or task.status == 'failed' or task.status == 'canceled' %}
+            <button id="start-task-btn" class="btn btn-primary me-2" data-task-id="{{ task.id }}">
+                <i class="fas fa-play me-1"></i> 启动任务
+            </button>
+            {% endif %}
+            
+            {% if task.status == 'running' %}
+            <button id="cancel-task-btn" class="btn btn-danger me-2" data-task-id="{{ task.id }}">
+                <i class="fas fa-stop me-1"></i> 取消任务
+            </button>
+            {% endif %}
+            
+            <a href="{% url 'migration_app:task_list' %}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left me-1"></i> 返回列表
+            </a>
+        </div>
+    </div>
+</div>
+
+{% if task.log %}
+<div class="card mb-4">
+    <div class="card-header">
+        <i class="fas fa-terminal me-1"></i> 执行日志
+    </div>
+    <div class="card-body">
+        <div class="position-relative">
+            <pre id="task-log" class="bg-dark text-light p-3" style="max-height: 500px; overflow: auto;">{{ task.log }}</pre>
+            <div class="position-absolute top-0 end-0 m-2">
+                <button id="copy-log-btn" class="btn btn-sm btn-light" title="复制日志">
+                    <i class="fas fa-copy"></i>
+                </button>
+                <button id="refresh-log-btn" class="btn btn-sm btn-light ms-1" title="刷新日志">
+                    <i id="refresh-icon" class="fas fa-sync-alt"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if subtasks %}
+<div class="card">
+    <div class="card-header">
+        <i class="fas fa-tasks me-1"></i> 子任务列表
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>名称</th>
+                        <th>类型</th>
+                        <th>状态</th>
+                        <th>进度</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for subtask in subtasks %}
+                    <tr>
+                        <td>{{ subtask.id }}</td>
+                        <td>{{ subtask.name }}</td>
+                        <td>{{ subtask.get_task_type_display }}</td>
+                        <td>
+                            {% if subtask.status == 'pending' %}
+                            <span class="badge bg-warning">等待执行</span>
+                            {% elif subtask.status == 'running' %}
+                            <span class="badge bg-primary">执行中</span>
+                            {% elif subtask.status == 'completed' %}
+                            <span class="badge bg-success">已完成</span>
+                            {% elif subtask.status == 'failed' %}
+                            <span class="badge bg-danger">执行失败</span>
+                            {% elif subtask.status == 'canceled' %}
+                            <span class="badge bg-secondary">已取消</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="progress" style="height: 10px;">
+                                <div class="progress-bar" role="progressbar" style="width: {{ subtask.progress }}%;" aria-valuenow="{{ subtask.progress }}" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                            <small>{{ subtask.progress }}%</small>
+                        </td>
+                        <td>{{ subtask.created_at }}</td>
+                        <td>
+                            <a href="{% url 'migration_app:task_detail' subtask.id %}" class="btn btn-sm btn-info">
+                                <i class="fas fa-eye"></i>
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // 调试函数
+    function debugLog(message, type = 'info') {
+        // 记录到控制台
+        console.log(message);
+        
+        // 记录到页面调试区域
+        const debugOutput = document.getElementById('debug-output');
+        if (debugOutput) {
+            const timestamp = new Date().toLocaleTimeString();
+            const messageElement = document.createElement('div');
+            messageElement.className = type === 'error' ? 'text-danger' : (type === 'success' ? 'text-success' : 'text-info');
+            messageElement.innerHTML = `[${timestamp}] ${message}`;
+            debugOutput.appendChild(messageElement);
+            debugOutput.scrollTop = debugOutput.scrollHeight;
+        }
+    }
+
+    let isLoading = false;
+    let isAutoRefreshing = false;
+    let refreshTimer = null;
+    const taskId = {{ task.id }};
+    const taskStatus = "{{ task.status }}";
+    
+    // 格式化时间字符串
+    function formatDateTime(dateTimeStr) {
+        if (!dateTimeStr) return "未记录";
+        const date = new Date(dateTimeStr);
+        return date.toLocaleString();
+    }
+    
+    // 更新任务状态UI
+    function updateTaskStatusUI(data) {
+        let statusHTML = '';
+        
+        if (data.status === 'pending') {
+            statusHTML = '<span class="badge bg-warning">等待执行</span>';
+        } else if (data.status === 'running') {
+            statusHTML = '<span class="badge bg-primary">执行中</span>';
+        } else if (data.status === 'completed') {
+            statusHTML = '<span class="badge bg-success">已完成</span>';
+        } else if (data.status === 'failed') {
+            statusHTML = '<span class="badge bg-danger">执行失败</span>';
+        } else if (data.status === 'canceled') {
+            statusHTML = '<span class="badge bg-secondary">已取消</span>';
+        } else if (data.status === 'partial') {
+            statusHTML = '<span class="badge bg-info">部分成功</span>';
+        }
+        
+        $('#task-status').html(statusHTML);
+        
+        // 更新进度条
+        const progress = data.progress || 0;
+        $('#task-progress').css('width', progress + '%').attr('aria-valuenow', progress).text(progress + '%');
+        
+        // 更新日志
+        if (data.log) {
+            $('#task-log').text(data.log);
+            $('#task-log').scrollTop($('#task-log')[0].scrollHeight);
+        }
+        
+        // 更新时间
+        if (data.completed_at) {
+            $('#task-updated-at').text(formatDateTime(data.completed_at));
+        }
+        
+        // 当任务完成或失败时停止自动刷新
+        if (data.status === 'completed' || data.status === 'failed' || data.status === 'canceled' || data.status === 'partial') {
+            stopAutoRefresh();
+            
+            // 刷新页面以显示按钮状态
+            location.reload();
+        }
+    }
+    
+    // 获取任务状态
+    async function getTaskStatus() {
+        if (isLoading) return;
+        
+        isLoading = true;
+        $('#refresh-icon').addClass('fa-spin');
+        
+        try {
+            const response = await fetch(`{% url 'migration_app:task_status' task.id %}`);
+            const data = await response.json();
+            
+            updateTaskStatusUI(data);
+        } catch (error) {
+            console.error('获取任务状态失败:', error);
+        } finally {
+            isLoading = false;
+            $('#refresh-icon').removeClass('fa-spin');
+        }
+    }
+    
+    // 启动自动刷新
+    function startAutoRefresh() {
+        if (isAutoRefreshing) return;
+        
+        isAutoRefreshing = true;
+        $('#refresh-icon').addClass('text-success');
+        
+        // 初次立即获取一次
+        getTaskStatus();
+        
+        // 设置每3秒自动刷新
+        refreshTimer = setInterval(getTaskStatus, 3000);
+    }
+    
+    // 停止自动刷新
+    function stopAutoRefresh() {
+        isAutoRefreshing = false;
+        $('#refresh-icon').removeClass('text-success');
+        
+        if (refreshTimer) {
+            clearInterval(refreshTimer);
+            refreshTimer = null;
+        }
+    }
+    
+    // 启动任务
+    async function startTask() {
+        debugLog('开始启动任务...');
+        const url = `{% url 'migration_app:start_task' task.id %}`;
+        debugLog(`请求URL: ${url}`);
+        
+        try {
+            debugLog('发送启动任务请求...');
+            const csrfToken = '{{ csrf_token }}';
+            debugLog(`CSRF Token: ${csrfToken}`);
+            
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                }
+            });
+            
+            debugLog(`请求状态: ${response.status} ${response.statusText}`);
+            const responseText = await response.text();
+            debugLog(`响应原文: ${responseText}`);
+            
+            let data;
+            try {
+                data = JSON.parse(responseText);
+                debugLog(`解析的JSON响应: ${JSON.stringify(data)}`, 'info');
+            } catch (parseError) {
+                debugLog(`解析JSON失败: ${parseError}`, 'error');
+                debugLog(`非JSON响应: ${responseText}`, 'error');
+                alert('启动任务响应解析失败，请查看调试区域');
+                return;
+            }
+            
+            if (data.status === 'success') {
+                debugLog('启动任务成功，准备刷新页面', 'success');
+                // 刷新页面
+                location.reload();
+            } else {
+                debugLog(`启动任务失败: ${data.message}`, 'error');
+                alert('启动任务失败: ' + data.message);
+            }
+        } catch (error) {
+            debugLog(`启动任务请求异常: ${error}`, 'error');
+            console.error('启动任务请求失败:', error);
+            alert('启动任务请求失败，请查看控制台和调试区域');
+        }
+    }
+    
+    // 取消任务
+    async function cancelTask() {
+        if (!confirm('确定要取消任务吗？')) {
+            return;
+        }
+        
+        try {
+            const response = await fetch(`{% url 'migration_app:cancel_task' task.id %}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            });
+            
+            const data = await response.json();
+            
+            if (data.status === 'success') {
+                alert('任务已标记为取消，请等待系统处理');
+                
+                // 刷新页面
+                location.reload();
+            } else {
+                alert('取消任务失败: ' + data.message);
+            }
+        } catch (error) {
+            console.error('取消任务请求失败:', error);
+            alert('取消任务请求失败');
+        }
+    }
+    
+    // 复制日志
+    function copyLogToClipboard() {
+        const logText = $('#task-log').text();
+        
+        navigator.clipboard.writeText(logText).then(function() {
+            alert('日志已复制到剪贴板');
+        }, function(err) {
+            console.error('复制失败:', err);
+            alert('复制失败，请手动选择并复制');
+        });
+    }
+
+    $(document).ready(function() {
+        debugLog('页面初始化完成，已设置事件处理程序');
+        
+        // 启动任务按钮
+        $('#start-task-btn').click(function() {
+            debugLog('点击了启动任务按钮');
+            startTask();
+        });
+        
+        // 取消任务按钮
+        $('#cancel-task-btn').click(cancelTask);
+        
+        // 刷新日志按钮
+        $('#refresh-log-btn').click(function() {
+            if (isAutoRefreshing) {
+                stopAutoRefresh();
+            } else {
+                startAutoRefresh();
+            }
+        });
+        
+        // 复制日志按钮
+        $('#copy-log-btn').click(copyLogToClipboard);
+        
+        // 如果任务状态是运行中，自动开始刷新
+        if (taskStatus === 'running') {
+            startAutoRefresh();
+        }
+        
+        // 在页面卸载前停止刷新
+        $(window).on('beforeunload', function() {
+            stopAutoRefresh();
+        });
+        
+        debugLog(`当前任务ID: ${taskId}, 状态: ${taskStatus}`);
+    });
+</script>
+{% endblock %} 

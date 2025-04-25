@@ -1,0 +1,166 @@
+{% extends 'migration_app/dashboard_base.html' %}
+
+{% block title %}系统参数配置 - Oracle到PolarDB-PG迁移平台{% endblock %}
+
+{% block page_title %}系统参数配置{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'migration_app:system_settings' %}">系统配置</a></li>
+<li class="breadcrumb-item active" aria-current="page">系统参数</li>
+{% endblock %}
+
+{% block dashboard_content %}
+<div class="alert alert-info mb-4">
+    <i class="fas fa-info-circle me-2"></i> 系统参数配置影响整个迁移平台的运行。修改这些参数可能需要重启应用才能生效。
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <i class="fas fa-wrench me-1"></i> 系统参数配置
+    </div>
+    <div class="card-body">
+        <form id="system-settings-form" method="post">
+            {% csrf_token %}
+            
+            <h5 class="border-bottom pb-2 mb-3">系统基本设置</h5>
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="platform_name" class="form-label">平台名称</label>
+                        <input type="text" class="form-control" id="platform_name" name="platform_name" value="Oracle到PolarDB-PG迁移平台">
+                    </div>
+                    <div class="mb-3">
+                        <label for="admin_email" class="form-label">管理员邮箱</label>
+                        <input type="email" class="form-control" id="admin_email" name="admin_email" value="admin@example.com">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="log_level" class="form-label">日志级别</label>
+                        <select class="form-select" id="log_level" name="log_level">
+                            <option value="DEBUG">DEBUG</option>
+                            <option value="INFO" selected>INFO</option>
+                            <option value="WARNING">WARNING</option>
+                            <option value="ERROR">ERROR</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="log_retention" class="form-label">日志保留天数</label>
+                        <input type="number" class="form-control" id="log_retention" name="log_retention" value="30" min="1" max="365">
+                    </div>
+                </div>
+            </div>
+            
+            <h5 class="border-bottom pb-2 mb-3">安全设置</h5>
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="session_timeout" class="form-label">会话超时时间（分钟）</label>
+                        <input type="number" class="form-control" id="session_timeout" name="session_timeout" value="30" min="5" max="1440">
+                    </div>
+                    <div class="mb-3">
+                        <label for="password_expiry" class="form-label">密码过期天数</label>
+                        <input type="number" class="form-control" id="password_expiry" name="password_expiry" value="90" min="0" max="365">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="max_login_attempts" class="form-label">最大登录尝试次数</label>
+                        <input type="number" class="form-control" id="max_login_attempts" name="max_login_attempts" value="5" min="1" max="10">
+                    </div>
+                    <div class="mb-3 form-check mt-4">
+                        <input type="checkbox" class="form-check-input" id="enable_2fa" name="enable_2fa">
+                        <label class="form-check-label" for="enable_2fa">启用双因素认证</label>
+                    </div>
+                </div>
+            </div>
+            
+            <h5 class="border-bottom pb-2 mb-3">备份设置</h5>
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="backup_retention" class="form-label">备份保留天数</label>
+                        <input type="number" class="form-control" id="backup_retention" name="backup_retention" value="7" min="1" max="30">
+                    </div>
+                    <div class="mb-3">
+                        <label for="backup_time" class="form-label">备份时间</label>
+                        <input type="time" class="form-control" id="backup_time" name="backup_time" value="00:00">
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="enable_auto_backup" name="enable_auto_backup" checked>
+                        <label class="form-check-label" for="enable_auto_backup">启用自动备份</label>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="compress_backup" name="compress_backup" checked>
+                        <label class="form-check-label" for="compress_backup">压缩备份文件</label>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="text-center">
+                <button type="submit" class="btn btn-primary btn-lg me-2">
+                    <i class="fas fa-save me-1"></i> 保存配置
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-lg" id="restore-defaults-btn">
+                    <i class="fas fa-undo me-1"></i> 恢复默认值
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // 表单提交
+        const form = document.getElementById('system-settings-form');
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            // 显示加载提示
+            const submitBtn = form.querySelector('button[type="submit"]');
+            const originalText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 保存中...';
+            submitBtn.disabled = true;
+            
+            // 收集表单数据
+            const formData = new FormData(form);
+            
+            // 模拟AJAX请求，实际应该提交表单到后端
+            setTimeout(function() {
+                // 提示保存成功
+                alert('配置保存成功！');
+                
+                // 重置按钮
+                submitBtn.innerHTML = originalText;
+                submitBtn.disabled = false;
+            }, 1500);
+        });
+        
+        // 恢复默认值
+        const restoreDefaultsBtn = document.getElementById('restore-defaults-btn');
+        restoreDefaultsBtn.addEventListener('click', function() {
+            if (confirm('确定要恢复所有参数为默认值吗？这将丢失当前的自定义配置。')) {
+                // 恢复默认值
+                document.getElementById('platform_name').value = 'Oracle到PolarDB-PG迁移平台';
+                document.getElementById('admin_email').value = 'admin@example.com';
+                document.getElementById('log_level').value = 'INFO';
+                document.getElementById('log_retention').value = '30';
+                document.getElementById('session_timeout').value = '30';
+                document.getElementById('password_expiry').value = '90';
+                document.getElementById('max_login_attempts').value = '5';
+                document.getElementById('enable_2fa').checked = false;
+                document.getElementById('backup_retention').value = '7';
+                document.getElementById('backup_time').value = '00:00';
+                document.getElementById('enable_auto_backup').checked = true;
+                document.getElementById('compress_backup').checked = true;
+                
+                alert('已恢复所有参数为默认值。');
+            }
+        });
+    });
+</script>
+{% endblock %} 

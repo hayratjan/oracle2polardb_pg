@@ -1,0 +1,199 @@
+{% extends 'migration_app/dashboard_base.html' %}
+
+{% block title %}迁移参数配置 - Oracle到PolarDB-PG迁移平台{% endblock %}
+
+{% block page_title %}迁移参数配置{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'migration_app:migration_settings' %}">系统配置</a></li>
+<li class="breadcrumb-item active" aria-current="page">迁移参数</li>
+{% endblock %}
+
+{% block dashboard_content %}
+<div class="alert alert-info mb-4">
+    <i class="fas fa-info-circle me-2"></i> 迁移参数配置影响数据库迁移的行为和性能。请根据您的需求和环境谨慎设置这些参数。
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <i class="fas fa-sliders-h me-1"></i> 迁移参数配置
+    </div>
+    <div class="card-body">
+        <form id="migration-settings-form" method="post">
+            {% csrf_token %}
+            
+            <h5 class="border-bottom pb-2 mb-3">数据迁移参数</h5>
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="batch_size" class="form-label">批量处理大小</label>
+                        <input type="number" class="form-control" id="batch_size" name="batch_size" value="1000" min="100" max="10000">
+                        <div class="form-text">每批处理的行数。较大的批量大小可能提高性能，但会增加内存消耗。</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="parallel_threads" class="form-label">并行线程数</label>
+                        <input type="number" class="form-control" id="parallel_threads" name="parallel_threads" value="4" min="1" max="32">
+                        <div class="form-text">并行处理的线程数量。根据CPU核心数和系统资源来调整。</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="connection_timeout" class="form-label">连接超时（秒）</label>
+                        <input type="number" class="form-control" id="connection_timeout" name="connection_timeout" value="60" min="30" max="300">
+                        <div class="form-text">数据库连接超时时间，单位为秒。</div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="transaction_mode" class="form-label">事务模式</label>
+                        <select class="form-select" id="transaction_mode" name="transaction_mode">
+                            <option value="table">每表一个事务</option>
+                            <option value="batch" selected>每批次一个事务</option>
+                            <option value="row">每行一个事务</option>
+                        </select>
+                        <div class="form-text">控制数据迁移的事务粒度。</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="retry_count" class="form-label">重试次数</label>
+                        <input type="number" class="form-control" id="retry_count" name="retry_count" value="3" min="0" max="10">
+                        <div class="form-text">操作失败时的重试次数。</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="retry_interval" class="form-label">重试间隔（秒）</label>
+                        <input type="number" class="form-control" id="retry_interval" name="retry_interval" value="5" min="1" max="60">
+                        <div class="form-text">失败重试之间的间隔时间，单位为秒。</div>
+                    </div>
+                </div>
+            </div>
+            
+            <h5 class="border-bottom pb-2 mb-3">数据类型转换</h5>
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="varchar_length" class="form-label">VARCHAR最大长度</label>
+                        <input type="number" class="form-control" id="varchar_length" name="varchar_length" value="4000" min="1000" max="10000">
+                        <div class="form-text">VARCHAR类型字段的最大长度。超过此长度的字段将转换为TEXT类型。</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="date_format" class="form-label">日期格式</label>
+                        <select class="form-select" id="date_format" name="date_format">
+                            <option value="iso" selected>ISO标准 (YYYY-MM-DD)</option>
+                            <option value="us">美国格式 (MM/DD/YYYY)</option>
+                            <option value="eu">欧洲格式 (DD-MM-YYYY)</option>
+                        </select>
+                        <div class="form-text">迁移后的日期字段格式。</div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="number_decimal_places" class="form-label">数字小数位数</label>
+                        <input type="number" class="form-control" id="number_decimal_places" name="number_decimal_places" value="6" min="0" max="15">
+                        <div class="form-text">数值类型字段的默认小数位数。</div>
+                    </div>
+                    <div class="mb-3 form-check mt-4">
+                        <input type="checkbox" class="form-check-input" id="preserve_case" name="preserve_case" checked>
+                        <label class="form-check-label" for="preserve_case">保留标识符大小写</label>
+                        <div class="form-text">选择此项将保留表名、列名等的大小写，否则默认转为小写。</div>
+                    </div>
+                </div>
+            </div>
+            
+            <h5 class="border-bottom pb-2 mb-3">迁移对象选项</h5>
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="migrate_tables" name="migrate_tables" checked>
+                        <label class="form-check-label" for="migrate_tables">迁移表</label>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="migrate_views" name="migrate_views" checked>
+                        <label class="form-check-label" for="migrate_views">迁移视图</label>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="migrate_indexes" name="migrate_indexes" checked>
+                        <label class="form-check-label" for="migrate_indexes">迁移索引</label>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="migrate_constraints" name="migrate_constraints" checked>
+                        <label class="form-check-label" for="migrate_constraints">迁移约束</label>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="migrate_sequences" name="migrate_sequences" checked>
+                        <label class="form-check-label" for="migrate_sequences">迁移序列</label>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="migrate_triggers" name="migrate_triggers">
+                        <label class="form-check-label" for="migrate_triggers">迁移触发器</label>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="text-center">
+                <button type="submit" class="btn btn-primary btn-lg me-2">
+                    <i class="fas fa-save me-1"></i> 保存配置
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-lg" id="restore-defaults-btn">
+                    <i class="fas fa-undo me-1"></i> 恢复默认值
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // 表单提交
+        const form = document.getElementById('migration-settings-form');
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            // 显示加载提示
+            const submitBtn = form.querySelector('button[type="submit"]');
+            const originalText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 保存中...';
+            submitBtn.disabled = true;
+            
+            // 收集表单数据
+            const formData = new FormData(form);
+            
+            // 模拟AJAX请求，实际应该提交表单到后端
+            setTimeout(function() {
+                // 提示保存成功
+                alert('配置保存成功！');
+                
+                // 重置按钮
+                submitBtn.innerHTML = originalText;
+                submitBtn.disabled = false;
+            }, 1500);
+        });
+        
+        // 恢复默认值
+        const restoreDefaultsBtn = document.getElementById('restore-defaults-btn');
+        restoreDefaultsBtn.addEventListener('click', function() {
+            if (confirm('确定要恢复所有参数为默认值吗？这将丢失当前的自定义配置。')) {
+                // 恢复默认值
+                document.getElementById('batch_size').value = '1000';
+                document.getElementById('parallel_threads').value = '4';
+                document.getElementById('connection_timeout').value = '60';
+                document.getElementById('transaction_mode').value = 'batch';
+                document.getElementById('retry_count').value = '3';
+                document.getElementById('retry_interval').value = '5';
+                document.getElementById('varchar_length').value = '4000';
+                document.getElementById('date_format').value = 'iso';
+                document.getElementById('number_decimal_places').value = '6';
+                document.getElementById('preserve_case').checked = true;
+                document.getElementById('migrate_tables').checked = true;
+                document.getElementById('migrate_views').checked = true;
+                document.getElementById('migrate_indexes').checked = true;
+                document.getElementById('migrate_constraints').checked = true;
+                document.getElementById('migrate_sequences').checked = true;
+                document.getElementById('migrate_triggers').checked = false;
+                
+                alert('已恢复所有参数为默认值。');
+            }
+        });
+    });
+</script>
+{% endblock %} 

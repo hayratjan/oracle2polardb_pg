@@ -1,0 +1,430 @@
+{% extends 'migration_app/dashboard_base.html' %}
+
+{% block title %}创建迁移任务 - Oracle到PolarDB-PG迁移平台{% endblock %}
+
+{% block page_title %}创建迁移任务{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'migration_app:task_list' %}">迁移任务</a></li>
+<li class="breadcrumb-item active" aria-current="page">创建任务</li>
+{% endblock %}
+
+{% block dashboard_content %}
+<div class="card">
+    <div class="card-header">
+        <i class="fas fa-plus-circle me-1"></i> 创建新的迁移任务
+    </div>
+    <div class="card-body">
+        <form id="create-task-form">
+            {% csrf_token %}
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="task-name" class="form-label">任务名称</label>
+                        <input type="text" class="form-control" id="task-name" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="task-type" class="form-label">任务类型</label>
+                        <select class="form-select" id="task-type" name="task_type" required>
+                            <option value="">请选择任务类型</option>
+                            <option value="table">表</option>
+                            <option value="materialized_view">物化视图</option>
+                            <option value="view">视图</option>
+                            <option value="routine">例程</option>
+                            <option value="all_tables">所有表</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="oracle-connection" class="form-label">Oracle数据库连接</label>
+                        <select class="form-select" id="oracle-connection" name="oracle_connection" required>
+                            <option value="">请选择Oracle连接</option>
+                            {% for conn in oracle_connections %}
+                            <option value="{{ conn.id }}">{{ conn.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="postgres-connection" class="form-label">PolarDB-PG数据库连接</label>
+                        <select class="form-select" id="postgres-connection" name="postgres_connection" required>
+                            <option value="">请选择PolarDB-PG连接</option>
+                            {% for conn in postgres_connections %}
+                            <option value="{{ conn.id }}">{{ conn.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="source-schema" class="form-label">源Schema</label>
+                        <div class="input-group">
+                            <select class="form-select" id="source-schema" name="source_schema" required>
+                                <option value="">请先选择Oracle连接</option>
+                            </select>
+                            <button type="button" class="btn btn-outline-primary" id="get-source-schema-btn">
+                                <i class="fas fa-sync-alt me-1"></i> 获取Schema
+                            </button>
+                        </div>
+                        <div id="source-schema-loading" class="text-primary d-none">
+                            <div class="spinner-border spinner-border-sm me-1" role="status"></div>
+                            <span>加载中...</span>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="source-object" class="form-label">源对象</label>
+                        <div class="input-group">
+                            <select class="form-select" id="source-object" name="source_object" multiple size="5">
+                                <option value="">请先选择源Schema</option>
+                            </select>
+                            <button type="button" class="btn btn-outline-primary" id="get-source-object-btn">
+                                <i class="fas fa-sync-alt me-1"></i> 获取对象
+                            </button>
+                        </div>
+                        <div id="source-object-loading" class="text-primary d-none">
+                            <div class="spinner-border spinner-border-sm me-1" role="status"></div>
+                            <span>加载中...</span>
+                        </div>
+                        <div class="form-text">
+                            对于"所有表"类型的任务，无需选择源对象。<br>
+                            按住Ctrl键可多选对象。
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <label for="target-schema" class="form-label">目标Schema</label>
+                        <div class="input-group">
+                            <select class="form-select" id="target-schema" name="target_schema" required>
+                                <option value="">请先选择PolarDB-PG连接</option>
+                            </select>
+                            <button type="button" class="btn btn-outline-primary" id="get-target-schema-btn">
+                                <i class="fas fa-sync-alt me-1"></i> 获取Schema
+                            </button>
+                        </div>
+                        <div id="target-schema-loading" class="text-primary d-none">
+                            <div class="spinner-border spinner-border-sm me-1" role="status"></div>
+                            <span>加载中...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="text-center">
+                <button type="submit" class="btn btn-primary btn-lg">
+                    <i class="fas fa-save me-1"></i> 创建任务
+                </button>
+                <a href="{% url 'migration_app:task_list' %}" class="btn btn-outline-secondary btn-lg ms-2">
+                    <i class="fas fa-times me-1"></i> 取消
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts_1 %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // 获取表单元素
+        const form = document.getElementById('create-task-form');
+        const taskTypeSelect = document.getElementById('task-type');
+        const oracleConnectionSelect = document.getElementById('oracle-connection');
+        const sourceSchemaSelect = document.getElementById('source-schema');
+        const sourceObjectSelect = document.getElementById('source-object');
+        const postgresConnectionSelect = document.getElementById('postgres-connection');
+        const targetSchemaSelect = document.getElementById('target-schema');
+        const csrfToken = document.querySelector('input[name="csrfmiddlewaretoken"]') ? 
+                          document.querySelector('input[name="csrfmiddlewaretoken"]').value : '';
+        
+        // 获取按钮和加载指示器
+        const getSourceSchemaBtn = document.getElementById('get-source-schema-btn');
+        const getSourceObjectBtn = document.getElementById('get-source-object-btn');
+        const getTargetSchemaBtn = document.getElementById('get-target-schema-btn');
+        const sourceSchemaLoading = document.getElementById('source-schema-loading');
+        const sourceObjectLoading = document.getElementById('source-object-loading');
+        const targetSchemaLoading = document.getElementById('target-schema-loading');
+        
+        // 辅助函数 - 显示/隐藏加载指示器
+        function showLoading(element) {
+            if (element) element.classList.remove('d-none');
+        }
+        
+        function hideLoading(element) {
+            if (element) element.classList.add('d-none');
+        }
+        
+        // 异步请求函数
+        async function fetchData(url, requestData) {
+            try {
+                // 确保URL正确
+                const fullUrl = url.startsWith('http') ? url : window.location.origin + url;
+                
+                // 使用原生fetch API
+                const response = await fetch(fullUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken,
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify(requestData)
+                });
+                
+                const responseText = await response.text();
+                
+                try {
+                    const data = JSON.parse(responseText);
+                    return data;
+                } catch (error) {
+                    throw new Error('解析JSON失败: ' + error.message);
+                }
+            } catch (error) {
+                throw error;
+            }
+        }
+        
+        // 获取源Schema函数
+        async function getSourceSchema() {
+            if (!oracleConnectionSelect.value) {
+                alert('请先选择Oracle连接');
+                return;
+            }
+            
+            // 显示加载状态
+            showLoading(sourceSchemaLoading);
+            sourceSchemaSelect.innerHTML = '<option value="">加载中...</option>';
+            sourceSchemaSelect.disabled = true;
+            
+            try {
+                const requestData = {
+                    connection_id: oracleConnectionSelect.value,
+                    type: 'oracle',
+                    limit: 200  // 限制返回200条数据
+                };
+                
+                // 禁用按钮避免重复点击
+                getSourceSchemaBtn.disabled = true;
+                
+                const data = await fetchData('{% url "migration_app:get_schemas" %}', requestData);
+                
+                if (data.status === 'success') {
+                    sourceSchemaSelect.innerHTML = '<option value="">请选择Schema</option>';
+                    data.schemas.forEach(schema => {
+                        sourceSchemaSelect.innerHTML += `<option value="${schema}">${schema}</option>`;
+                    });
+                    sourceSchemaSelect.disabled = false;
+                    
+                    // 显示数据加载提示
+                    if (data.has_more) {
+                        const optionElement = document.createElement('option');
+                        optionElement.disabled = true;
+                        optionElement.textContent = `加载了 ${data.count}/${data.total} 条记录`;
+                        sourceSchemaSelect.appendChild(optionElement);
+                    }
+                } else {
+                    throw new Error(data.message || '获取Schema列表失败');
+                }
+            } catch (error) {
+                sourceSchemaSelect.innerHTML = '<option value="">加载失败，请重试</option>';
+                sourceSchemaSelect.disabled = false;
+                alert('获取源Schema失败：' + error.message);
+            } finally {
+                // 隐藏加载指示器
+                hideLoading(sourceSchemaLoading);
+                // 重新启用按钮
+                getSourceSchemaBtn.disabled = false;
+            }
+        }
+        
+        // 获取目标Schema函数
+        async function getTargetSchema() {
+            if (!postgresConnectionSelect.value) {
+                alert('请先选择PolarDB-PG连接');
+                return;
+            }
+            
+            // 显示加载状态
+            showLoading(targetSchemaLoading);
+            targetSchemaSelect.innerHTML = '<option value="">加载中...</option>';
+            targetSchemaSelect.disabled = true;
+            
+            try {
+                const requestData = {
+                    connection_id: postgresConnectionSelect.value,
+                    type: 'postgres',
+                    limit: 200  // 限制返回200条数据
+                };
+                
+                // 禁用按钮避免重复点击
+                getTargetSchemaBtn.disabled = true;
+                
+                const data = await fetchData('{% url "migration_app:get_schemas" %}', requestData);
+                
+                if (data.status === 'success') {
+                    targetSchemaSelect.innerHTML = '<option value="">请选择Schema</option>';
+                    data.schemas.forEach(schema => {
+                        targetSchemaSelect.innerHTML += `<option value="${schema}">${schema}</option>`;
+                    });
+                    targetSchemaSelect.disabled = false;
+                    
+                    // 显示数据加载提示
+                    if (data.has_more) {
+                        const optionElement = document.createElement('option');
+                        optionElement.disabled = true;
+                        optionElement.textContent = `加载了 ${data.count}/${data.total} 条记录`;
+                        targetSchemaSelect.appendChild(optionElement);
+                    }
+                } else {
+                    throw new Error(data.message || '获取Schema列表失败');
+                }
+            } catch (error) {
+                targetSchemaSelect.innerHTML = '<option value="">加载失败，请重试</option>';
+                targetSchemaSelect.disabled = false;
+                alert('获取目标Schema失败：' + error.message);
+            } finally {
+                // 隐藏加载指示器
+                hideLoading(targetSchemaLoading);
+                // 重新启用按钮
+                getTargetSchemaBtn.disabled = false;
+            }
+        }
+        
+        // 获取源对象函数
+        async function getSourceObject() {
+            if (!oracleConnectionSelect.value) {
+                alert('请先选择Oracle连接');
+                return;
+            }
+            
+            if (!sourceSchemaSelect.value) {
+                alert('请先选择源Schema');
+                return;
+            }
+            
+            if (!taskTypeSelect.value || taskTypeSelect.value === 'all_tables') {
+                alert('请选择有效的任务类型（不能是所有表）');
+                return;
+            }
+            
+            // 显示加载状态
+            showLoading(sourceObjectLoading);
+            sourceObjectSelect.innerHTML = '<option value="">加载中...</option>';
+            sourceObjectSelect.disabled = true;
+            
+            try {
+                const requestData = {
+                    connection_id: oracleConnectionSelect.value,
+                    schema: sourceSchemaSelect.value,
+                    object_type: taskTypeSelect.value,
+                    limit: 300  // 限制返回300条数据
+                };
+                
+                // 禁用按钮避免重复点击
+                getSourceObjectBtn.disabled = true;
+                
+                const data = await fetchData('{% url "migration_app:get_database_objects" %}', requestData);
+                
+                if (data.status === 'success') {
+                    sourceObjectSelect.innerHTML = '';
+                    
+                    if (data.objects.length === 0) {
+                        const optionElement = document.createElement('option');
+                        optionElement.textContent = '没有找到任何对象';
+                        sourceObjectSelect.appendChild(optionElement);
+                    } else {
+                        data.objects.forEach(obj => {
+                            sourceObjectSelect.innerHTML += `<option value="${obj}">${obj}</option>`;
+                        });
+                        
+                        // 显示数据加载提示
+                        if (data.has_more) {
+                            const optionElement = document.createElement('option');
+                            optionElement.disabled = true;
+                            optionElement.textContent = `加载了 ${data.count}/${data.total} 条记录`;
+                            sourceObjectSelect.appendChild(optionElement);
+                        }
+                    }
+                    sourceObjectSelect.disabled = false;
+                } else {
+                    throw new Error(data.message || '获取对象列表失败');
+                }
+            } catch (error) {
+                sourceObjectSelect.innerHTML = '<option value="">加载失败，请重试</option>';
+                sourceObjectSelect.disabled = false;
+                alert('获取源对象失败：' + error.message);
+            } finally {
+                // 隐藏加载指示器
+                hideLoading(sourceObjectLoading);
+                // 重新启用按钮
+                getSourceObjectBtn.disabled = false;
+            }
+        }
+        
+        // 绑定按钮事件
+        getSourceSchemaBtn.addEventListener('click', function() {
+            getSourceSchema();
+        });
+        
+        getTargetSchemaBtn.addEventListener('click', function() {
+            getTargetSchema();
+        });
+        
+        getSourceObjectBtn.addEventListener('click', function() {
+            getSourceObject();
+        });
+        
+        // 表单提交事件
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            if (!this.checkValidity()) {
+                this.reportValidity();
+                return;
+            }
+            
+            // 如果是"所有表"类型的任务，不需要源对象
+            if (taskTypeSelect.value === 'all_tables') {
+                sourceObjectSelect.removeAttribute('required');
+            }
+            
+            // 获取所有选中的源对象
+            const selectedObjects = Array.from(sourceObjectSelect.selectedOptions).map(option => option.value);
+            
+            const taskData = {
+                name: document.getElementById('task-name').value,
+                task_type: taskTypeSelect.value,
+                oracle_connection: oracleConnectionSelect.value,
+                postgres_connection: postgresConnectionSelect.value,
+                source_schema: sourceSchemaSelect.value,
+                target_schema: targetSchemaSelect.value,
+                source_object: taskTypeSelect.value === 'all_tables' ? '' : selectedObjects.join(',')
+            };
+            
+            // 显示加载状态
+            const submitBtn = form.querySelector('button[type="submit"]');
+            const originalBtnText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 创建中...';
+            submitBtn.disabled = true;
+            
+            try {
+                const data = await fetchData('{% url "migration_app:create_task" %}', taskData);
+                
+                if (data.status === 'success') {
+                    window.location.href = `{% url "migration_app:task_detail" 0 %}`.replace('0', data.task_id);
+                } else {
+                    throw new Error(data.message || '创建任务失败');
+                }
+            } catch (error) {
+                alert('创建任务失败：' + error.message);
+                // 恢复按钮状态
+                submitBtn.innerHTML = originalBtnText;
+                submitBtn.disabled = false;
+            }
+        });
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,160 @@
+{% extends 'migration_app/dashboard_base.html' %}
+
+{% block title %}迁移任务列表 - Oracle到PolarDB-PG迁移平台{% endblock %}
+
+{% block page_title %}迁移任务列表{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item active" aria-current="page">迁移任务</li>
+{% endblock %}
+
+{% block dashboard_content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <form method="get" class="d-flex">
+            <div class="input-group">
+                <input type="text" name="search" class="form-control" placeholder="搜索任务名称或数据库" value="{{ request.GET.search|default:'' }}">
+                <button class="btn btn-primary" type="submit">
+                    <i class="fas fa-search"></i> 搜索
+                </button>
+            </div>
+        </form>
+    </div>
+    <div class="col-md-4 text-end">
+        <a href="{% url 'migration_app:create_task' %}" class="btn btn-success">
+            <i class="fas fa-plus-circle"></i> 创建新任务
+        </a>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <div class="row align-items-center">
+            <div class="col">
+                <i class="fas fa-tasks me-1"></i> 迁移任务列表
+            </div>
+            <div class="col-auto">
+                <div class="btn-group btn-group-sm" role="group">
+                    <a href="?status=all" class="btn btn-outline-secondary {% if not request.GET.status or request.GET.status == 'all' %}active{% endif %}">全部</a>
+                    <a href="?status=pending" class="btn btn-outline-secondary {% if request.GET.status == 'pending' %}active{% endif %}">等待中</a>
+                    <a href="?status=running" class="btn btn-outline-secondary {% if request.GET.status == 'running' %}active{% endif %}">进行中</a>
+                    <a href="?status=completed" class="btn btn-outline-secondary {% if request.GET.status == 'completed' %}active{% endif %}">已完成</a>
+                    <a href="?status=failed" class="btn btn-outline-secondary {% if request.GET.status == 'failed' %}active{% endif %}">失败</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover table-striped">
+                <thead class="table-light">
+                    <tr>
+                        <th>ID</th>
+                        <th>任务名称</th>
+                        <th>源数据库</th>
+                        <th>目标数据库</th>
+                        <th>创建时间</th>
+                        <th>更新时间</th>
+                        <th>状态</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for task in tasks %}
+                    <tr>
+                        <td>{{ task.id }}</td>
+                        <td>{{ task.name }}</td>
+                        <td>{{ task.source_db }}</td>
+                        <td>{{ task.target_db }}</td>
+                        <td>{{ task.created_at|date:"Y-m-d H:i" }}</td>
+                        <td>{{ task.updated_at|date:"Y-m-d H:i" }}</td>
+                        <td>
+                            {% if task.status == 'pending' %}
+                            <span class="badge bg-secondary status-badge">等待中</span>
+                            {% elif task.status == 'running' %}
+                            <span class="badge bg-warning status-badge">进行中</span>
+                            {% elif task.status == 'completed' %}
+                            <span class="badge bg-success status-badge">已完成</span>
+                            {% elif task.status == 'failed' %}
+                            <span class="badge bg-danger status-badge">失败</span>
+                            {% else %}
+                            <span class="badge bg-info status-badge">{{ task.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <a href="{% url 'migration_app:task_detail' task.id %}" class="btn btn-outline-primary">
+                                    <i class="fas fa-eye"></i> 查看
+                                </a>
+                                {% if task.status == 'pending' %}
+                                <a href="{% url 'migration_app:start_task' task.id %}" class="btn btn-outline-success">
+                                    <i class="fas fa-play"></i> 开始
+                                </a>
+                                {% elif task.status == 'running' %}
+                                <a href="{% url 'migration_app:cancel_task' task.id %}" class="btn btn-outline-danger">
+                                    <i class="fas fa-stop"></i> 取消
+                                </a>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="8" class="text-center">暂无迁移任务，请先<a href="{% url 'migration_app:create_task' %}">创建任务</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 分页 -->
+{% if tasks.has_other_pages %}
+<nav>
+    <ul class="pagination justify-content-center">
+        {% if tasks.has_previous %}
+        <li class="page-item">
+            <a class="page-link" href="?page=1{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}">首页</a>
+        </li>
+        <li class="page-item">
+            <a class="page-link" href="?page={{ tasks.previous_page_number }}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}">上一页</a>
+        </li>
+        {% else %}
+        <li class="page-item disabled">
+            <a class="page-link" href="#">首页</a>
+        </li>
+        <li class="page-item disabled">
+            <a class="page-link" href="#">上一页</a>
+        </li>
+        {% endif %}
+        
+        {% for i in tasks.paginator.page_range %}
+            {% if tasks.number == i %}
+            <li class="page-item active"><a class="page-link" href="#">{{ i }}</a></li>
+            {% elif i > tasks.number|add:'-3' and i < tasks.number|add:'3' %}
+            <li class="page-item">
+                <a class="page-link" href="?page={{ i }}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}">{{ i }}</a>
+            </li>
+            {% endif %}
+        {% endfor %}
+        
+        {% if tasks.has_next %}
+        <li class="page-item">
+            <a class="page-link" href="?page={{ tasks.next_page_number }}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}">下一页</a>
+        </li>
+        <li class="page-item">
+            <a class="page-link" href="?page={{ tasks.paginator.num_pages }}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}{% if request.GET.search %}&search={{ request.GET.search }}{% endif %}">末页</a>
+        </li>
+        {% else %}
+        <li class="page-item disabled">
+            <a class="page-link" href="#">下一页</a>
+        </li>
+        <li class="page-item disabled">
+            <a class="page-link" href="#">末页</a>
+        </li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{% endblock %} 
