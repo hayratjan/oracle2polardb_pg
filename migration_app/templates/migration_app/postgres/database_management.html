@@ -1,0 +1,475 @@
+{% extends 'migration_app/dashboard_base.html' %}
+{% load static %}
+
+{% block title %}PolarDB-PG数据库连接管理 - Oracle到PolarDB-PG迁移平台{% endblock %}
+
+{% block page_title %}PolarDB-PG数据库连接管理{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'migration_app:pg_database_management' %}">PolarDB-PG</a></li>
+<li class="breadcrumb-item active" aria-current="page">数据库连接</li>
+{% endblock %}
+
+{% block dashboard_content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <div class="d-flex gap-2">
+            <div class="input-group">
+                <input type="text" id="searchInput" class="form-control" placeholder="搜索连接名称">
+                <button class="btn btn-primary" type="button" id="searchBtn">
+                    <i class="fas fa-search"></i> 搜索
+                </button>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 text-end">
+        <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addConnectionModal">
+            <i class="fas fa-plus"></i> 添加连接
+        </button>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="row align-items-center">
+            <div class="col">
+                <i class="fas fa-plug me-1"></i> PolarDB-PG数据库连接列表
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover table-striped" id="connectionTable">
+                <thead class="table-light">
+                    <tr>
+                        <th>连接名称</th>
+                        <th>主机地址</th>
+                        <th>端口</th>
+                        <th>数据库名</th>
+                        <th>用户名</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="connectionList">
+                    <tr>
+                        <td colspan="8" class="text-center">暂无数据库连接</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 添加连接模态框 -->
+<div class="modal fade" id="addConnectionModal" tabindex="-1" aria-labelledby="addConnectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addConnectionModalLabel">添加PolarDB-PG连接</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addConnectionForm">
+                    <div class="mb-3">
+                        <label for="connectionName" class="form-label">连接名称</label>
+                        <input type="text" class="form-control" id="connectionName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="host" class="form-label">主机地址</label>
+                        <input type="text" class="form-control" id="host" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="port" class="form-label">端口</label>
+                        <input type="number" class="form-control" id="port" value="5432" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="database" class="form-label">数据库名</label>
+                        <input type="text" class="form-control" id="database" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="username" class="form-label">用户名</label>
+                        <input type="text" class="form-control" id="username" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">密码</label>
+                        <input type="password" class="form-control" id="password" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="saveConnectionBtn">保存</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 测试连接模态框 -->
+<div class="modal fade" id="testConnectionModal" tabindex="-1" aria-labelledby="testConnectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="testConnectionModalLabel">测试连接</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="testResult" class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">测试中...</span>
+                    </div>
+                    <p class="mt-2">正在测试连接...</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 编辑连接模态框 -->
+<div class="modal fade" id="editConnectionModal" tabindex="-1" aria-labelledby="editConnectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editConnectionModalLabel">编辑PolarDB-PG连接</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editConnectionForm">
+                    <input type="hidden" id="connectionId">
+                    <div class="mb-3">
+                        <label for="editName" class="form-label">连接名称</label>
+                        <input type="text" class="form-control" id="editName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editHost" class="form-label">主机地址</label>
+                        <input type="text" class="form-control" id="editHost" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editPort" class="form-label">端口</label>
+                        <input type="number" class="form-control" id="editPort" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editDatabase" class="form-label">数据库名</label>
+                        <input type="text" class="form-control" id="editDatabase" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editUsername" class="form-label">用户名</label>
+                        <input type="text" class="form-control" id="editUsername" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editPassword" class="form-label">密码</label>
+                        <input type="password" class="form-control" id="editPassword">
+                        <div class="form-text">留空表示不修改密码</div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="updateConnectionBtn">更新</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    const searchInput = $('#searchInput');
+    const searchBtn = $('#searchBtn');
+    const connectionTable = $('#connectionTable');
+    const connectionList = $('#connectionList');
+    const addConnectionForm = $('#addConnectionForm');
+    const saveConnectionBtn = $('#saveConnectionBtn');
+    const testConnectionModal = $('#testConnectionModal');
+    const editConnectionModal = $('#editConnectionModal');
+    const editConnectionForm = $('#editConnectionForm');
+    const updateConnectionBtn = $('#updateConnectionBtn');
+    
+    // 全局变量存储连接数据
+    let connections = [];
+    
+    // 加载连接列表
+    function loadConnections() {
+        showLoader();
+        $.get('{% url "migration_app:get_pg_connections" %}')
+            .done(function(response) {
+                if (response.status === 'success') {
+                    connections = response.connections; // 更新全局连接数据
+                    renderConnections(response.connections);
+                } else {
+                    showToast('加载连接列表失败: ' + response.message, 'error');
+                }
+            })
+            .fail(function(xhr) {
+                showToast('加载连接列表失败: ' + xhr.responseText, 'error');
+            })
+            .always(function() {
+                hideLoader();
+            });
+    }
+    
+    // 渲染连接列表
+    function renderConnections(connections) {
+        connectionList.empty();
+        
+        if (connections.length === 0) {
+            connectionList.append('<tr><td colspan="8" class="text-center">暂无数据库连接</td></tr>');
+            return;
+        }
+        
+        connections.forEach(function(conn) {
+            const statusBadge = getStatusBadge(conn.status);
+            connectionList.append(`
+                <tr>
+                    <td>${conn.name}</td>
+                    <td>${conn.host}</td>
+                    <td>${conn.port}</td>
+                    <td>${conn.database}</td>
+                    <td>${conn.username}</td>
+                    <td>${statusBadge}</td>
+                    <td>${conn.created_at}</td>
+                    <td>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-primary test-connection" 
+                                    data-id="${conn.id}"
+                                    title="测试连接">
+                                <i class="fas fa-check"></i>
+                            </button>
+                            <button class="btn btn-outline-success edit-connection" 
+                                    data-id="${conn.id}"
+                                    title="编辑连接">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button class="btn btn-outline-danger delete-connection" 
+                                    data-id="${conn.id}"
+                                    title="删除连接">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `);
+        });
+        
+        // 绑定测试连接事件
+        $('.test-connection').click(function() {
+            const connectionId = $(this).data('id');
+            testConnection(connectionId);
+        });
+        
+        // 绑定编辑连接事件
+        $('.edit-connection').click(function() {
+            const connectionId = $(this).data('id');
+            editConnection(connectionId);
+        });
+        
+        // 绑定删除连接事件
+        $('.delete-connection').click(function() {
+            const connectionId = $(this).data('id');
+            deleteConnection(connectionId);
+        });
+    }
+    
+    // 测试连接
+    function testConnection(connectionId) {
+        testConnectionModal.modal('show');
+        showLoader();
+        
+        $.post('{% url "migration_app:test_pg_connection" %}', {
+            connection_id: connectionId,
+            csrfmiddlewaretoken: '{{ csrf_token }}'
+        })
+        .done(function(response) {
+            const testResult = $('#testResult');
+            if (response.status === 'success') {
+                testResult.html(`
+                    <i class="fas fa-check-circle text-success" style="font-size: 3rem;"></i>
+                    <p class="mt-2">连接测试成功！</p>
+                `);
+            } else {
+                testResult.html(`
+                    <i class="fas fa-times-circle text-danger" style="font-size: 3rem;"></i>
+                    <p class="mt-2">连接测试失败: ${response.message}</p>
+                `);
+            }
+        })
+        .fail(function(xhr) {
+            const testResult = $('#testResult');
+            testResult.html(`
+                <i class="fas fa-times-circle text-danger" style="font-size: 3rem;"></i>
+                <p class="mt-2">连接测试失败: ${xhr.responseText}</p>
+            `);
+        })
+        .always(function() {
+            hideLoader();
+        });
+    }
+    
+    // 编辑连接
+    function editConnection(connectionId) {
+        // 获取当前连接信息
+        const connection = connections.find(c => c.id === connectionId);
+        if (!connection) {
+            alert('找不到连接信息');
+            return;
+        }
+
+        // 填充表单
+        $('#connectionId').val(connection.id);
+        $('#editName').val(connection.name);
+        $('#editHost').val(connection.host);
+        $('#editPort').val(connection.port);
+        $('#editDatabase').val(connection.database);
+        $('#editUsername').val(connection.username);
+        $('#editPassword').val('');
+
+        // 显示编辑模态框
+        editConnectionModal.modal('show');
+        
+        // 设置焦点到第一个输入框
+        setTimeout(() => {
+            $('#editName').focus();
+        }, 500);
+    }
+    
+    // 更新连接
+    updateConnectionBtn.click(function() {
+        const formData = {
+            connection_id: $('#connectionId').val(),
+            name: $('#editName').val(),
+            host: $('#editHost').val(),
+            port: $('#editPort').val(),
+            database: $('#editDatabase').val(),
+            username: $('#editUsername').val(),
+            password: $('#editPassword').val(),
+            csrfmiddlewaretoken: '{{ csrf_token }}'
+        };
+        
+        showLoader();
+        $.post('{% url "migration_app:edit_pg_connection" %}', formData)
+            .done(function(response) {
+                if (response.status === 'success') {
+                    showToast('更新成功', 'success');
+                    editConnectionModal.modal('hide');
+                    // 在模态框完全隐藏后刷新列表
+                    editConnectionModal.on('hidden.bs.modal', function () {
+                        loadConnections();
+                        editConnectionForm[0].reset();
+                    });
+                } else {
+                    showToast('更新失败: ' + response.message, 'error');
+                }
+            })
+            .fail(function(xhr) {
+                showToast('更新失败: ' + xhr.responseText, 'error');
+            })
+            .always(function() {
+                hideLoader();
+            });
+    });
+    
+    // 处理模态框关闭事件
+    editConnectionModal.on('hidden.bs.modal', function () {
+        // 重置表单
+        editConnectionForm[0].reset();
+        // 移除事件监听器，避免重复绑定
+        editConnectionModal.off('hidden.bs.modal');
+    });
+    
+    // 删除连接
+    function deleteConnection(connectionId) {
+        if (confirm('确定要删除此连接吗？此操作不可恢复！')) {
+            showLoader();
+            $.post('{% url "migration_app:delete_pg_connection" %}', {
+                connection_id: connectionId,
+                csrfmiddlewaretoken: '{{ csrf_token }}'
+            })
+            .done(function(response) {
+                if (response.status === 'success') {
+                    showToast('删除成功', 'success');
+                    loadConnections();
+                } else {
+                    showToast('删除失败: ' + response.message, 'error');
+                }
+            })
+            .fail(function(xhr) {
+                showToast('删除失败: ' + xhr.responseText, 'error');
+            })
+            .always(function() {
+                hideLoader();
+            });
+        }
+    }
+    
+    // 保存连接
+    saveConnectionBtn.click(function() {
+        const formData = {
+            name: $('#connectionName').val(),
+            host: $('#host').val(),
+            port: $('#port').val(),
+            database: $('#database').val(),
+            username: $('#username').val(),
+            password: $('#password').val(),
+            csrfmiddlewaretoken: '{{ csrf_token }}'
+        };
+        
+        showLoader();
+        $.post('{% url "migration_app:add_pg_connection" %}', formData)
+            .done(function(response) {
+                if (response.status === 'success') {
+                    showToast('添加成功', 'success');
+                    $('#addConnectionModal').modal('hide');
+                    loadConnections();
+                    addConnectionForm[0].reset();
+                } else {
+                    showToast('添加失败: ' + response.message, 'error');
+                }
+            })
+            .fail(function(xhr) {
+                showToast('添加失败: ' + xhr.responseText, 'error');
+            })
+            .always(function() {
+                hideLoader();
+            });
+    });
+    
+    // 搜索按钮点击事件
+    searchBtn.click(function() {
+        loadConnections();
+    });
+    
+    // 获取状态标签
+    function getStatusBadge(status) {
+        const statusMap = {
+            'active': '<span class="badge bg-success">正常</span>',
+            'inactive': '<span class="badge bg-danger">异常</span>',
+            'testing': '<span class="badge bg-warning">测试中</span>'
+        };
+        return statusMap[status] || '<span class="badge bg-secondary">未知</span>';
+    }
+    
+    // 显示加载提示
+    function showLoader() {
+        // 实现加载提示
+    }
+    
+    // 隐藏加载提示
+    function hideLoader() {
+        // 实现隐藏加载提示
+    }
+    
+    // 显示提示消息
+    function showToast(message, type = 'info') {
+        // 实现提示消息
+    }
+    
+    // 初始加载
+    loadConnections();
+});
+</script>
+{% endblock %} 

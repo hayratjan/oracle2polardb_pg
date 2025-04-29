@@ -1,0 +1,274 @@
+{% extends 'migration_app/dashboard_base.html' %}
+{% load static %}
+
+{% block title %}Oracle数据库管理 - Oracle到PolarDB-PG迁移平台{% endblock %}
+
+{% block page_title %}Oracle数据库管理{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{% url 'migration_app:index' %}">首页</a></li>
+<li class="breadcrumb-item">Oracle</li>
+<li class="breadcrumb-item active" aria-current="page">数据库管理</li>
+{% endblock %}
+
+{% block dashboard_content %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-database me-2"></i>数据库连接管理
+                </h5>
+                <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addConnectionModal">
+                    <i class="fas fa-plus me-2"></i>添加连接
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover" id="connectionTable">
+                        <thead>
+                            <tr>
+                                <th>连接名称</th>
+                                <th>主机</th>
+                                <th>端口</th>
+                                <th>服务名</th>
+                                <th>用户名</th>
+                                <th>创建时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for connection in oracle_connections %}
+                            <tr>
+                                <td>{{ connection.name }}</td>
+                                <td>{{ connection.host }}</td>
+                                <td>{{ connection.port }}</td>
+                                <td>{{ connection.service_name }}</td>
+                                <td>{{ connection.username }}</td>
+                                <td>{{ connection.created_at|date:"Y-m-d H:i:s" }}</td>
+                                <td>
+                                    <div class="btn-group">
+                                        <button class="btn btn-sm btn-outline-primary test-connection" data-id="{{ connection.id }}">
+                                            <i class="fas fa-plug"></i> 测试连接
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-info edit-connection" data-id="{{ connection.id }}">
+                                            <i class="fas fa-edit"></i> 编辑
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-danger delete-connection" data-id="{{ connection.id }}">
+                                            <i class="fas fa-trash"></i> 删除
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="7" class="text-center">暂无数据库连接</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 添加连接模态框 -->
+<div class="modal fade" id="addConnectionModal" tabindex="-1" aria-labelledby="addConnectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addConnectionModalLabel">添加Oracle连接</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addConnectionForm">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label for="connectionName" class="form-label">连接名称</label>
+                        <input type="text" class="form-control" id="connectionName" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="host" class="form-label">主机地址</label>
+                        <input type="text" class="form-control" id="host" name="host" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="port" class="form-label">端口</label>
+                        <input type="number" class="form-control" id="port" name="port" value="1521" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="serviceName" class="form-label">服务名</label>
+                        <input type="text" class="form-control" id="serviceName" name="service_name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="username" class="form-label">用户名</label>
+                        <input type="text" class="form-control" id="username" name="username" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">密码</label>
+                        <input type="password" class="form-control" id="password" name="password" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="saveConnection">保存</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 编辑连接模态框 -->
+<div class="modal fade" id="editConnectionModal" tabindex="-1" aria-labelledby="editConnectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editConnectionModalLabel">编辑Oracle连接</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editConnectionForm">
+                    {% csrf_token %}
+                    <input type="hidden" id="editConnectionId" name="connection_id">
+                    <div class="mb-3">
+                        <label for="editName" class="form-label">连接名称</label>
+                        <input type="text" class="form-control" id="editName" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editHost" class="form-label">主机地址</label>
+                        <input type="text" class="form-control" id="editHost" name="host" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editPort" class="form-label">端口</label>
+                        <input type="number" class="form-control" id="editPort" name="port" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editServiceName" class="form-label">服务名</label>
+                        <input type="text" class="form-control" id="editServiceName" name="service_name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editUsername" class="form-label">用户名</label>
+                        <input type="text" class="form-control" id="editUsername" name="username" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editPassword" class="form-label">密码</label>
+                        <input type="password" class="form-control" id="editPassword" name="password">
+                        <div class="form-text">留空表示不修改密码</div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="updateConnection">更新</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(document).ready(function() {
+    // 测试连接
+    $('.test-connection').click(function() {
+        const connectionId = $(this).data('id');
+        $.post('/app/oracle/test_connection/', {
+            connection_id: connectionId,
+            csrfmiddlewaretoken: '{{ csrf_token }}'
+        })
+        .done(function(response) {
+            if (response.status === 'success') {
+                alert('连接测试成功！');
+            } else {
+                alert('连接测试失败：' + response.message);
+            }
+        })
+        .fail(function(xhr) {
+            alert('连接测试失败：' + xhr.responseText);
+        });
+    });
+
+    // 保存连接
+    $('#saveConnection').click(function() {
+        const formData = $('#addConnectionForm').serialize();
+        $.post('/app/oracle/save_connection/', formData)
+        .done(function(response) {
+            if (response.status === 'success') {
+                location.reload();
+            } else {
+                alert('保存失败：' + response.message);
+            }
+        })
+        .fail(function(xhr) {
+            alert('保存失败：' + xhr.responseText);
+        });
+    });
+
+    // 删除连接
+    $('.delete-connection').click(function() {
+        if (confirm('确定要删除这个连接吗？')) {
+            const connectionId = $(this).data('id');
+            $.post('/app/oracle/delete_connection/', {
+                connection_id: connectionId,
+                csrfmiddlewaretoken: '{{ csrf_token }}'
+            })
+            .done(function(response) {
+                if (response.status === 'success') {
+                    location.reload();
+                } else {
+                    alert('删除失败：' + response.message);
+                }
+            })
+            .fail(function(xhr) {
+                alert('删除失败：' + xhr.responseText);
+            });
+        }
+    });
+
+    // 编辑连接
+    $('.edit-connection').click(function() {
+        const connectionId = $(this).data('id');
+        const row = $(this).closest('tr');
+        
+        // 填充表单
+        $('#editConnectionId').val(connectionId);
+        $('#editName').val(row.find('td:eq(0)').text());
+        $('#editHost').val(row.find('td:eq(1)').text());
+        $('#editPort').val(row.find('td:eq(2)').text());
+        $('#editServiceName').val(row.find('td:eq(3)').text());
+        $('#editUsername').val(row.find('td:eq(4)').text());
+        $('#editPassword').val('');
+        
+        // 显示编辑模态框
+        $('#editConnectionModal').modal('show');
+        
+        // 设置焦点到第一个输入框
+        setTimeout(() => {
+            $('#editName').focus();
+        }, 500);
+    });
+    
+    // 更新连接
+    $('#updateConnection').click(function() {
+        const formData = $('#editConnectionForm').serialize();
+        $.post('/app/oracle/edit_connection/', formData)
+        .done(function(response) {
+            if (response.status === 'success') {
+                location.reload();
+            } else {
+                alert('更新失败：' + response.message);
+            }
+        })
+        .fail(function(xhr) {
+            alert('更新失败：' + xhr.responseText);
+        });
+    });
+    
+    // 处理模态框关闭事件
+    $('#editConnectionModal').on('hidden.bs.modal', function () {
+        // 重置表单
+        $('#editConnectionForm')[0].reset();
+    });
+});
+</script>
+{% endblock %} 

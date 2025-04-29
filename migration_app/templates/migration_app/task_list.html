@@ -9,6 +9,37 @@
 {% endblock %}
 
 {% block dashboard_content %}
+<!-- 冲突处理策略模态框 -->
+<div class="modal fade" id="conflictStrategyModal" tabindex="-1" aria-labelledby="conflictStrategyModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="conflictStrategyModalLabel">选择冲突处理策略</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group mb-3">
+                    <label for="conflict-strategy-select" class="form-label">冲突处理策略</label>
+                    <select class="form-select" id="conflict-strategy-select">
+                        <option value="error">遇到冲突时报错</option>
+                        <option value="replace">删除并替换已存在对象</option>
+                        <option value="skip">跳过已存在对象</option>
+                        <option value="append">追加数据（仅适用于表）</option>
+                    </select>
+                    <div class="form-text">
+                        设置当目标Schema中已存在同名对象时如何处理。
+                    </div>
+                </div>
+                <input type="hidden" id="selected-task-id">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="confirm-start-task-btn">确认启动</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="row mb-4">
     <div class="col-md-8">
         <form method="get" class="d-flex">
@@ -87,12 +118,20 @@
                                     <i class="fas fa-eye"></i> 查看
                                 </a>
                                 {% if task.status == 'pending' %}
-                                <a href="{% url 'migration_app:start_task' task.id %}" class="btn btn-outline-success">
+                                <a href="javascript:void(0)" onclick="showStartTaskModal({{ task.id }})" class="btn btn-outline-success">
                                     <i class="fas fa-play"></i> 开始
                                 </a>
                                 {% elif task.status == 'running' %}
-                                <a href="{% url 'migration_app:cancel_task' task.id %}" class="btn btn-outline-danger">
+                                <a href="javascript:void(0)" onclick="showCancelConfirm({{ task.id }})" class="btn btn-outline-danger">
                                     <i class="fas fa-stop"></i> 取消
+                                </a>
+                                {% elif task.status == 'completed' %}
+                                <a href="javascript:void(0)" onclick="showStartTaskModal({{ task.id }})" class="btn btn-outline-primary">
+                                    <i class="fas fa-redo"></i> 重新运行
+                                </a>
+                                {% elif task.status == 'failed' or task.status == 'canceled' %}
+                                <a href="javascript:void(0)" onclick="showStartTaskModal({{ task.id }})" class="btn btn-outline-success">
+                                    <i class="fas fa-play"></i> 重试
                                 </a>
                                 {% endif %}
                             </div>
@@ -157,4 +196,102 @@
     </ul>
 </nav>
 {% endif %}
+{% endblock %}
+
+{% block scripts_1 %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // 初始化 Bootstrap 模态框
+        const modal = new bootstrap.Modal(document.getElementById('conflictStrategyModal'));
+        
+        // 确认启动任务按钮
+        document.getElementById('confirm-start-task-btn').addEventListener('click', function() {
+            const taskId = document.getElementById('selected-task-id').value;
+            const conflictStrategy = document.getElementById('conflict-strategy-select').value;
+            
+            // 显示加载动画
+            showLoader();
+            
+            // 发送启动任务请求
+            fetch(`{% url "migration_app:start_task" 0 %}`.replace('0', taskId), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: JSON.stringify({
+                    conflict_strategy: conflictStrategy
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // 无论成功与否，都隐藏加载动画
+                hideLoader();
+                
+                if (data.status === 'success') {
+                    // 关闭模态框
+                    modal.hide();
+                    // 刷新页面以显示更新
+                    location.reload();
+                } else {
+                    alert('启动任务失败: ' + (data.message || '未知错误'));
+                }
+            })
+            .catch(error => {
+                // 请求失败时也要隐藏加载动画
+                hideLoader();
+                
+                console.error('启动任务请求失败:', error);
+                alert('启动任务请求失败');
+            });
+        });
+    });
+    
+    // 显示任务启动模态框
+    function showStartTaskModal(taskId) {
+        // 设置任务ID到隐藏输入框
+        document.getElementById('selected-task-id').value = taskId;
+        
+        // 显示冲突策略选择模态框
+        const modal = new bootstrap.Modal(document.getElementById('conflictStrategyModal'));
+        modal.show();
+    }
+    
+    // 显示取消任务确认
+    function showCancelConfirm(taskId) {
+        if (confirm('确定要取消任务吗？')) {
+            // 显示加载动画
+            showLoader();
+            
+            // 发送取消任务请求
+            fetch(`{% url "migration_app:cancel_task" 0 %}`.replace('0', taskId), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                // 隐藏加载动画
+                hideLoader();
+                
+                if (data.status === 'success') {
+                    alert('任务已标记为取消，请等待系统处理');
+                    // 刷新页面以显示更新
+                    location.reload();
+                } else {
+                    alert('取消任务失败: ' + (data.message || '未知错误'));
+                }
+            })
+            .catch(error => {
+                // 请求失败时也要隐藏加载动画
+                hideLoader();
+                
+                console.error('取消任务请求失败:', error);
+                alert('取消任务请求失败');
+            });
+        }
+    }
+</script>
 {% endblock %} 

@@ -1,5 +1,5 @@
 from django.shortcuts import render, redirect, get_object_or_404
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.contrib import messages
@@ -9,13 +9,60 @@ import psycopg2
 import logging
 import json
 import traceback
+import datetime
+import threading
 from concurrent.futures import ThreadPoolExecutor
 import os
 from django.conf import settings
 import io
+import re
+import datetime
+from io import StringIO
+from django.core.paginator import Paginator
+import atexit
+from django.contrib.auth.decorators import login_required
+from django.db import models
 
 # 配置日志
 logger = logging.getLogger(__name__)
+
+# 全局线程池
+_task_executor = None
+
+def get_task_executor():
+    """获取全局任务执行器"""
+    global _task_executor
+    
+    if _task_executor is None:
+        logger.info("初始化任务执行线程池")
+        
+        # 创建一个有5个工作线程的线程池
+        _task_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="migration_task_")
+        
+    return _task_executor
+
+# 在模块初始化时预热线程池
+try:
+    executor = get_task_executor()
+    logger.info("任务执行线程池已初始化")
+except Exception as e:
+    logger.error(f"初始化任务执行线程池失败: {str(e)}")
+
+# 注册应用退出时的清理函数
+def cleanup_executor():
+    """在应用退出时关闭线程池"""
+    global _task_executor
+    try:
+        if _task_executor:
+            logger.info("关闭线程池")
+            _task_executor.shutdown(wait=False)
+    except Exception as e:
+        logger.warning(f"关闭线程池时出错: {e}")
+    finally:
+        _task_executor = None
+
+# 注册清理函数
+atexit.register(cleanup_executor)
 
 def index(request):
     """首页视图"""
@@ -41,19 +88,53 @@ def get_oracle_connection(connection_id):
     )
     return connection
 
-def get_postgres_connection(connection_id):
+def get_postgres_connection(connection_id, database=None):
     """创建PostgreSQL连接"""
     conn_obj = get_object_or_404(PostgresConnection, pk=connection_id)
+    
+    # 如果指定了数据库，使用指定的数据库名
+    db_name = database if database else conn_obj.database
+    
     connection = psycopg2.connect(
         host=conn_obj.host,
         port=conn_obj.port,
-        database=conn_obj.database,
+        database=db_name,
         user=conn_obj.username,
         password=conn_obj.password
     )
     return connection
 
-def migrate_materialized_view(task_id):
+def switch_postgres_database(request, task_id):
+    """
+    切换任务的目标PostgreSQL数据库
+    """
+    try:
+        task = MigrationTask.objects.get(id=task_id)
+        
+        # 从请求中获取数据库名称
+        data = json.loads(request.body)
+        postgres_database = data.get('postgres_database')
+        
+        if not postgres_database:
+            return JsonResponse({'status': 'error', 'message': '未提供PostgreSQL数据库名称'})
+        
+        # 记录请求
+        log_message = f"收到切换目标数据库请求：{postgres_database}"
+        task.log = (task.log or '') + f"\n{log_message}"
+        task.save()
+        
+        return JsonResponse({
+            'status': 'success', 
+            'message': f'已设置目标数据库为 {postgres_database}',
+            'postgres_database': postgres_database
+        })
+        
+    except MigrationTask.DoesNotExist:
+        return JsonResponse({'status': 'error', 'message': '任务不存在'})
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)})
+
+def migrate_materialized_view(task_id, postgres_database=None):
     """迁移物化视图"""
     task = get_object_or_404(MigrationTask, pk=task_id)
     
@@ -64,14 +145,23 @@ def migrate_materialized_view(task_id):
     
     log = []
     
+    # 记录数据库信息
+    if postgres_database:
+        log.append(f"目标PostgreSQL数据库: {postgres_database}")
+    
     try:
         # 连接Oracle数据库
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
         
         # 连接PostgreSQL数据库
-        pg_conn = get_postgres_connection(task.postgres_connection.id)
+        pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
         pg_cursor = pg_conn.cursor()
+        
+        # 获取PostgreSQL数据库名
+        pg_cursor.execute("SELECT current_database()")
+        current_db = pg_cursor.fetchone()[0]
+        log.append(f"已连接到PostgreSQL数据库: {current_db}")
         
         # 获取物化视图定义
         query = """
@@ -126,7 +216,7 @@ def migrate_materialized_view(task_id):
         task.completed_at = timezone.now()
         task.save()
 
-def migrate_view(task_id):
+def migrate_view(task_id, postgres_database=None):
     """迁移视图"""
     task = get_object_or_404(MigrationTask, pk=task_id)
     
@@ -137,14 +227,23 @@ def migrate_view(task_id):
     
     log = []
     
+    # 记录数据库信息
+    if postgres_database:
+        log.append(f"目标PostgreSQL数据库: {postgres_database}")
+    
     try:
         # 连接Oracle数据库
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
         
         # 连接PostgreSQL数据库
-        pg_conn = get_postgres_connection(task.postgres_connection.id)
+        pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
         pg_cursor = pg_conn.cursor()
+        
+        # 获取PostgreSQL数据库名
+        pg_cursor.execute("SELECT current_database()")
+        current_db = pg_cursor.fetchone()[0]
+        log.append(f"已连接到PostgreSQL数据库: {current_db}")
         
         # 获取视图定义
         query = """
@@ -160,20 +259,72 @@ def migrate_view(task_id):
         view_text = result[0]
         log.append(f"获取到视图定义: {view_text}")
         
-        # 转换为PostgreSQL视图语法
-        pg_view_text = convert_oracle_to_pg_view(view_text)
-        log.append(f"转换后的PostgreSQL视图定义: {pg_view_text}")
-        
-        # 创建PostgreSQL视图
-        create_view_sql = f"""
-        CREATE OR REPLACE VIEW {task.target_schema}.{task.source_object} AS
-        {pg_view_text}
+        # 获取视图列信息
+        query = """
+        SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE
+        FROM ALL_TAB_COLUMNS
+        WHERE OWNER = :schema AND TABLE_NAME = :view_name
+        ORDER BY COLUMN_ID
         """
+        oracle_cursor.execute(query, schema=task.source_schema, view_name=task.source_object)
+        columns = oracle_cursor.fetchall()
         
-        pg_cursor.execute(create_view_sql)
-        pg_conn.commit()
+        if not columns:
+            raise Exception(f"找不到视图 {task.source_schema}.{task.source_object} 的列信息")
         
-        log.append(f"成功创建PostgreSQL视图 {task.target_schema}.{task.source_object}")
+        # 创建PostgreSQL中的表而不是视图
+        create_table_sql = f"CREATE TABLE public.{task.source_object} (\n"
+        column_defs = []
+        
+        log.append(f"获取到视图列信息: 共 {len(columns)} 列")
+        
+        for column in columns:
+            column_name, data_type, data_length, data_precision, data_scale, nullable = column
+            pg_type = convert_oracle_to_pg_type(data_type, data_length, data_precision, data_scale)
+            
+            if data_type == 'VARCHAR2' and (data_length is None or data_length == 0):
+                log.append(f"警告: 列 {column_name} 的VARCHAR长度为0，已自动调整为VARCHAR(255)")
+                pg_type = "VARCHAR(255)"
+            
+            nullable_str = "" if nullable == 'N' else " NOT NULL"
+            column_defs.append(f"    {column_name} {pg_type}{nullable_str}")
+        
+        create_table_sql += ",\n".join(column_defs)
+        create_table_sql += "\n)"
+        
+        log.append(f"创建表SQL: \n{create_table_sql}")
+        
+        # 执行创建表
+        try:
+            pg_cursor.execute(create_table_sql)
+            pg_conn.commit()
+            log.append(f"成功创建PostgreSQL表 {task.target_schema}.{task.source_object}")
+            
+            # 从Oracle视图查询数据并插入到PostgreSQL表中
+            oracle_query = f"SELECT * FROM {task.source_schema}.{task.source_object}"
+            log.append(f"查询视图数据SQL: {oracle_query}")
+            
+            oracle_cursor.execute(oracle_query)
+            rows = oracle_cursor.fetchall()
+            
+            # 如果有数据，批量插入到PostgreSQL表中
+            if rows:
+                # 获取列名（小写）
+                column_names = [col[0].lower() for col in oracle_cursor.description]
+                
+                # 创建INSERT语句
+                placeholders = ", ".join(["%s"] * len(column_names))
+                insert_sql = f"INSERT INTO public.{task.source_object.lower()} ({', '.join(['\"' + col + '\"' for col in column_names])}) VALUES ({placeholders})"
+                
+                # 批量插入数据
+                pg_cursor.executemany(insert_sql, rows)
+                pg_conn.commit()
+                log.append(f"成功从视图导入 {len(rows)} 行数据到表 {task.target_schema}.{task.source_object}")
+            else:
+                log.append(f"视图 {task.source_schema}.{task.source_object} 中没有找到数据")
+        except Exception as table_err:
+            log.append(f"创建表或导入数据时出错: {str(table_err)}")
+            raise
         
         # 关闭连接
         oracle_cursor.close()
@@ -190,8 +341,21 @@ def migrate_view(task_id):
     except Exception as e:
         error_msg = str(e)
         trace = traceback.format_exc()
-        log.append(f"错误: {error_msg}")
+        log.append(f"处理视图 {task.source_object} 时发生错误: {error_msg}")
         log.append(f"详细错误: {trace}")
+        
+        # 尝试关闭连接
+        try:
+            if 'oracle_cursor' in locals() and oracle_cursor:
+                oracle_cursor.close()
+            if 'oracle_conn' in locals() and oracle_conn:
+                oracle_conn.close()
+            if 'pg_cursor' in locals() and pg_cursor:
+                pg_cursor.close()
+            if 'pg_conn' in locals() and pg_conn:
+                pg_conn.close()
+        except Exception as close_err:
+            log.append(f"关闭数据库连接时出错: {str(close_err)}")
         
         # 更新任务状态
         task.status = 'failed'
@@ -199,7 +363,7 @@ def migrate_view(task_id):
         task.completed_at = timezone.now()
         task.save()
 
-def migrate_routine(task_id):
+def migrate_routine(task_id, postgres_database=None):
     """迁移例程（存储过程、函数）"""
     task = get_object_or_404(MigrationTask, pk=task_id)
     
@@ -210,14 +374,23 @@ def migrate_routine(task_id):
     
     log = []
     
+    # 记录数据库信息
+    if postgres_database:
+        log.append(f"目标PostgreSQL数据库: {postgres_database}")
+    
     try:
         # 连接Oracle数据库
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
         
         # 连接PostgreSQL数据库
-        pg_conn = get_postgres_connection(task.postgres_connection.id)
+        pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
         pg_cursor = pg_conn.cursor()
+        
+        # 获取PostgreSQL数据库名
+        pg_cursor.execute("SELECT current_database()")
+        current_db = pg_cursor.fetchone()[0]
+        log.append(f"已连接到PostgreSQL数据库: {current_db}")
         
         # 获取存储过程或函数定义
         query = """
@@ -268,17 +441,20 @@ def migrate_routine(task_id):
         task.completed_at = timezone.now()
         task.save()
 
-def migrate_table(task_id):
-    """迁移表"""
+def migrate_table(task_id, postgres_database=None):
+    """迁移表结构和数据"""
     task = get_object_or_404(MigrationTask, pk=task_id)
     
     # 更新任务状态
     task.status = 'running'
     task.started_at = timezone.now()
-    task.progress = 0
     task.save()
     
     log = []
+    
+    # 记录数据库信息
+    if postgres_database:
+        log.append(f"目标PostgreSQL数据库: {postgres_database}")
     
     try:
         # 连接Oracle数据库
@@ -286,8 +462,13 @@ def migrate_table(task_id):
         oracle_cursor = oracle_conn.cursor()
         
         # 连接PostgreSQL数据库
-        pg_conn = get_postgres_connection(task.postgres_connection.id)
+        pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
         pg_cursor = pg_conn.cursor()
+        
+        # 获取PostgreSQL数据库名
+        pg_cursor.execute("SELECT current_database()")
+        current_db = pg_cursor.fetchone()[0]
+        log.append(f"已连接到PostgreSQL数据库: {current_db}")
         
         # 获取表结构信息
         column_query = """
@@ -340,232 +521,58 @@ def migrate_table(task_id):
             # 根据Oracle数据类型转换为PostgreSQL数据类型
             pg_type = convert_oracle_to_pg_type(data_type, data_length, data_precision, data_scale)
             
+            # 处理VARCHAR长度为0或过小的问题
+            if pg_type.startswith('VARCHAR('):
+                # 提取括号中的长度
+                match = re.search(r'VARCHAR\((\d+)\)', pg_type)
+                if match:
+                    length = int(match.group(1))
+                    # 如果长度为0或过小，使用默认值
+                    if length < 1:
+                        pg_type = 'VARCHAR(255)'  # 设置默认长度为255
+                        log.append(f"警告: 列 {column_name} 的VARCHAR长度为0，已自动调整为VARCHAR(255)")
+            
             # 添加非空约束
             not_null = "NOT NULL" if nullable == 'N' else ""
             
             column_definitions.append(f"    {column_name} {pg_type} {not_null}")
         
-        # 添加主键约束
-        if primary_keys:
-            primary_key_clause = f",\n    PRIMARY KEY ({', '.join(primary_keys)})"
-        else:
-            primary_key_clause = ""
-        
         create_table_sql += ",\n".join(column_definitions)
-        create_table_sql += primary_key_clause
         create_table_sql += "\n)"
         
         log.append(f"创建表SQL: \n{create_table_sql}")
         
-        # 创建表
-        pg_cursor.execute(create_table_sql)
-        pg_conn.commit()
-        
-        # 更新进度
-        task.progress = 20
-        task.log = '\n'.join(log)
-        task.save()
-        
-        # 检查是否请求取消
-        task.refresh_from_db()
-        if task.cancel_requested:
-            raise Exception("任务被用户取消")
-        
-        # 获取数据总量
-        count_query = f"SELECT COUNT(*) FROM {task.source_schema}.{task.source_object}"
-        oracle_cursor.execute(count_query)
-        total_count = oracle_cursor.fetchone()[0]
-        log.append(f"总共有 {total_count} 条数据需要迁移")
-        
-        # 获取表数据
-        data_query = f"SELECT * FROM {task.source_schema}.{task.source_object}"
-        oracle_cursor.execute(data_query)
-        
-        # 准备插入语句
-        column_names = [col[0] for col in columns]
-        placeholders = ", ".join(["%s"] * len(column_names))
-        insert_sql = f"INSERT INTO {task.target_schema}.{task.source_object} ({', '.join(column_names)}) VALUES ({placeholders})"
-        
-        # 批量插入数据
-        batch_size = 1000
-        row_count = 0
-        batch_data = []
-        
-        for row in oracle_cursor:
-            # 检查是否请求取消
-            if row_count % 5000 == 0:  # 每5000行检查一次
-                task.refresh_from_db()
-                if task.cancel_requested:
-                    raise Exception("任务被用户取消")
+        # 执行创建表
+        try:
+            pg_cursor.execute(create_table_sql)
+            pg_conn.commit()
+            log.append(f"成功创建PostgreSQL表 {task.target_schema}.{task.source_object}")
             
-            # 将None转换为对应的null值，LOB类型转换为字符串或二进制数据
-            processed_row = []
-            for i, val in enumerate(row):
-                # 处理LOB类型
-                if val is None:
-                    processed_row.append(None)
-                elif isinstance(val, cx_Oracle.LOB):
-                    # 记录LOB类型处理
-                    column_name = column_names[i] if i < len(column_names) else f"列{i}"
-                    logger.debug(f"处理LOB类型 {type(val).__name__} 数据，列: {column_name}")
-                    
-                    try:
-                        # 根据LOB类型处理
-                        if isinstance(val, cx_Oracle.CLOB) or isinstance(val, cx_Oracle.NCLOB):
-                            # 文本LOB转为字符串
-                            if val.size() > 10 * 1024 * 1024:  # 大于10MB的LOB
-                                logger.info(f"发现大型CLOB，大小: {val.size()/(1024*1024):.2f}MB，使用分块读取")
-                                # 分块读取大型LOB
-                                chunk_size = 1024 * 1024  # 1MB块
-                                offset = 1  # Oracle LOB是1-based
-                                buffer = []
-                                while offset <= val.size():
-                                    chunk = val.read(offset, min(chunk_size, val.size() - offset + 1))
-                                    buffer.append(chunk)
-                                    offset += len(chunk)
-                                processed_val = ''.join(buffer)
-                            else:
-                                processed_val = val.read()
-                            logger.debug(f"已将CLOB/NCLOB转换为字符串，长度: {len(processed_val) if processed_val else 0}")
-                        else:  # BLOB
-                            # 二进制LOB转为二进制数据
-                            if val.size() > 10 * 1024 * 1024:  # 大于10MB的LOB
-                                logger.info(f"发现大型BLOB，大小: {val.size()/(1024*1024):.2f}MB，使用分块读取")
-                                # 分块读取大型LOB
-                                chunk_size = 1024 * 1024  # 1MB块
-                                offset = 1  # Oracle LOB是1-based
-                                buffer = io.BytesIO()
-                                while offset <= val.size():
-                                    chunk = val.read(offset, min(chunk_size, val.size() - offset + 1))
-                                    buffer.write(chunk)
-                                    offset += len(chunk)
-                                buffer.seek(0)
-                                processed_val = buffer.read()
-                            else:
-                                processed_val = val.read()
-                            logger.debug(f"已将BLOB转换为二进制数据，长度: {len(processed_val) if processed_val else 0}")
-                        
-                        processed_row.append(processed_val)
-                    except Exception as lob_err:
-                        error_detail = str(lob_err)
-                        logger.error(f"处理LOB数据失败: {error_detail}", exc_info=True)
-                        log.append(f"处理列 {column_name} 的LOB数据失败: {error_detail}")
-                        # 如果读取失败，用空值代替
-                        processed_row.append(None)
-                else:
-                    processed_row.append(val)
+            # 从Oracle视图查询数据并插入到PostgreSQL表中
+            oracle_query = f"SELECT * FROM {task.source_schema}.{task.source_object}"
+            log.append(f"查询视图数据SQL: {oracle_query}")
             
-            batch_data.append(processed_row)
-            row_count += 1
+            oracle_cursor.execute(oracle_query)
+            rows = oracle_cursor.fetchall()
             
-            # 达到批处理大小时执行批量插入
-            if len(batch_data) >= batch_size:
-                try:
-                    pg_cursor.executemany(insert_sql, batch_data)
-                    pg_conn.commit()
-                    progress_percent = min(80, 20 + (row_count / total_count * 60)) if total_count > 0 else 50
-                    task.progress = progress_percent
-                    log.append(f"已迁移 {row_count} 条数据，进度: {row_count}/{total_count}")
-                except Exception as batch_error:
-                    error_msg = str(batch_error)
-                    logger.error(f"批量插入数据失败: {error_msg}", exc_info=True)
-                    log.append(f"批量插入数据失败: {error_msg}")
-                    # 尝试单行插入，跳过有问题的行
-                    log.append("尝试单行插入模式，跳过有问题的行...")
-                    success_count = 0
-                    for i, single_row in enumerate(batch_data):
-                        try:
-                            pg_cursor.execute(insert_sql, single_row)
-                            success_count += 1
-                        except Exception as row_error:
-                            log.append(f"跳过第 {row_count - len(batch_data) + i + 1} 行: {str(row_error)}")
-                    
-                    pg_conn.commit()
-                    log.append(f"单行模式成功插入 {success_count}/{len(batch_data)} 行")
+            # 如果有数据，批量插入到PostgreSQL表中
+            if rows:
+                # 获取列名（小写）
+                column_names = [col[0].lower() for col in oracle_cursor.description]
                 
-                task.log = '\n'.join(log)
-                task.save()
-                batch_data = []
-        
-        # 处理剩余数据
-        if batch_data:
-            try:
-                pg_cursor.executemany(insert_sql, batch_data)
-                pg_conn.commit()
-                log.append(f"已迁移 {row_count} 条数据，进度: {row_count}/{total_count}")
-            except Exception as batch_error:
-                error_msg = str(batch_error)
-                logger.error(f"批量插入剩余数据失败: {error_msg}", exc_info=True)
-                log.append(f"批量插入剩余数据失败: {error_msg}")
-                # 尝试单行插入，跳过有问题的行
-                log.append("尝试单行插入模式，跳过有问题的行...")
-                success_count = 0
-                for i, single_row in enumerate(batch_data):
-                    try:
-                        pg_cursor.execute(insert_sql, single_row)
-                        success_count += 1
-                    except Exception as row_error:
-                        log.append(f"跳过第 {row_count - len(batch_data) + i + 1} 行: {str(row_error)}")
+                # 创建INSERT语句
+                placeholders = ", ".join(["%s"] * len(column_names))
+                insert_sql = f"INSERT INTO public.{task.source_object.lower()} ({', '.join(['\"' + col + '\"' for col in column_names])}) VALUES ({placeholders})"
                 
+                # 批量插入数据
+                pg_cursor.executemany(insert_sql, rows)
                 pg_conn.commit()
-                log.append(f"单行模式成功插入 {success_count}/{len(batch_data)} 行")
-        
-        # 更新进度
-        task.progress = 90
-        task.log = '\n'.join(log)
-        task.save()
-        
-        # 检查是否请求取消
-        task.refresh_from_db()
-        if task.cancel_requested:
-            raise Exception("任务被用户取消")
-        
-        # 创建索引
-        index_query = """
-        SELECT 
-            i.INDEX_NAME,
-            i.UNIQUENESS,
-            c.COLUMN_NAME
-        FROM ALL_INDEXES i
-        JOIN ALL_IND_COLUMNS c ON i.INDEX_NAME = c.INDEX_NAME AND i.OWNER = c.INDEX_OWNER
-        WHERE i.TABLE_OWNER = :schema
-          AND i.TABLE_NAME = :table_name
-          AND i.INDEX_TYPE = 'NORMAL'
-          AND i.UNIQUENESS = 'UNIQUE'
-        ORDER BY i.INDEX_NAME, c.COLUMN_POSITION
-        """
-        oracle_cursor.execute(index_query, schema=task.source_schema, table_name=task.source_object)
-        indexes = oracle_cursor.fetchall()
-        
-        # 按索引名称分组
-        index_map = {}
-        for idx in indexes:
-            index_name = idx[0]
-            uniqueness = idx[1]
-            column_name = idx[2]
-            
-            if index_name not in index_map:
-                index_map[index_name] = {
-                    'uniqueness': uniqueness,
-                    'columns': []
-                }
-            
-            index_map[index_name]['columns'].append(column_name)
-        
-        # 创建索引
-        for index_name, index_info in index_map.items():
-            unique = "UNIQUE" if index_info['uniqueness'] == 'UNIQUE' else ""
-            columns = ", ".join(index_info['columns'])
-            create_index_sql = f"CREATE {unique} INDEX {index_name} ON {task.target_schema}.{task.source_object} ({columns})"
-            
-            try:
-                pg_cursor.execute(create_index_sql)
-                pg_conn.commit()
-                log.append(f"创建索引: {create_index_sql}")
-            except Exception as e:
-                log.append(f"创建索引失败: {str(e)}")
-        
-        log.append(f"成功创建并填充表 {task.target_schema}.{task.source_object}")
+                log.append(f"成功从视图导入 {len(rows)} 行数据到表 {task.target_schema}.{task.source_object}")
+            else:
+                log.append(f"视图 {task.source_schema}.{task.source_object} 中没有找到数据")
+        except Exception as table_err:
+            log.append(f"创建表或导入数据时出错: {str(table_err)}")
+            raise
         
         # 关闭连接
         oracle_cursor.close()
@@ -575,7 +582,6 @@ def migrate_table(task_id):
         
         # 更新任务状态
         task.status = 'completed'
-        task.progress = 100
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
@@ -583,18 +589,8 @@ def migrate_table(task_id):
     except Exception as e:
         error_msg = str(e)
         trace = traceback.format_exc()
-        log.append(f"错误: {error_msg}")
+        log.append(f"处理表 {task.source_object} 时发生错误: {error_msg}")
         log.append(f"详细错误: {trace}")
-        
-        # 判断是否是用户取消
-        if "任务被用户取消" in error_msg:
-            task.status = 'canceled'
-        else:
-            task.status = 'failed'
-        
-        task.log = '\n'.join(log)
-        task.completed_at = timezone.now()
-        task.save()
         
         # 尝试关闭连接
         try:
@@ -606,11 +602,110 @@ def migrate_table(task_id):
                 pg_cursor.close()
             if 'pg_conn' in locals() and pg_conn:
                 pg_conn.close()
-        except:
-            pass
+        except Exception as close_err:
+            log.append(f"关闭数据库连接时出错: {str(close_err)}")
+        
+        # 更新任务状态
+        task.status = 'failed'
+        task.log = '\n'.join(log)
+        task.completed_at = timezone.now()
+        task.save()
 
-def migrate_all_tables(task_id):
-    """迁移所有表"""
+def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None, data_scale=None):
+    """将Oracle数据类型转换为PostgreSQL数据类型"""
+    logger.debug(f"转换数据类型: {oracle_type}, 长度={data_length}, 精度={data_precision}, 小数位={data_scale}")
+    
+    oracle_type = oracle_type.upper()
+    
+    # 基本数据类型映射
+    type_map = {
+        'NUMBER': 'NUMERIC',
+        'VARCHAR2': 'VARCHAR',
+        'CHAR': 'CHAR',
+        'DATE': 'DATE',
+        'TIMESTAMP': 'TIMESTAMP',
+        'CLOB': 'TEXT',
+        'BLOB': 'BYTEA',
+        'NVARCHAR2': 'VARCHAR',
+        'NCHAR': 'CHAR',
+        'FLOAT': 'REAL',
+        'BINARY_FLOAT': 'REAL',
+        'BINARY_DOUBLE': 'DOUBLE PRECISION',
+        'RAW': 'BYTEA',
+        'LONG RAW': 'BYTEA',
+        'LONG': 'TEXT',
+    }
+    
+    if oracle_type == 'NUMBER':
+        # 根据精度和小数位处理NUMBER类型
+        if data_precision is not None:
+            if data_scale is not None and data_scale > 0:
+                return f"NUMERIC({data_precision}, {data_scale})"
+            else:
+                # 如果精度小于等于10且没有小数位，使用INTEGER或BIGINT
+                if data_precision <= 4:
+                    return "SMALLINT"
+                elif data_precision <= 9:
+                    return "INTEGER"
+                elif data_precision <= 18:
+                    return "BIGINT"
+                else:
+                    return f"NUMERIC({data_precision})"
+        else:
+            # 未指定精度的NUMBER，使用NUMERIC
+            return "NUMERIC"
+    elif oracle_type == 'VARCHAR2' or oracle_type == 'NVARCHAR2':
+        # 处理字符串类型，添加长度限制
+        if data_length is not None and data_length > 0:
+            # PostgreSQL的VARCHAR限制为10485760
+            if data_length > 10485760:
+                return "TEXT"
+            else:
+                return f"VARCHAR({data_length})"
+        else:
+            # 如果没有指定长度或长度为0，使用VARCHAR(255)
+            return "VARCHAR(255)"
+    elif oracle_type == 'CHAR' or oracle_type == 'NCHAR':
+        # 处理定长字符串
+        if data_length is not None and data_length > 0:
+            return f"CHAR({data_length})"
+        else:
+            return "CHAR(1)"
+    elif oracle_type == 'TIMESTAMP' and data_scale is not None:
+        # 处理带精度的TIMESTAMP
+        return f"TIMESTAMP({data_scale})"
+    elif oracle_type in type_map:
+        # 使用映射表中的对应类型
+        return type_map[oracle_type]
+    else:
+        # 对于未知类型，记录警告并返回TEXT
+        logger.warning(f"未知的Oracle数据类型: {oracle_type}，将使用TEXT代替")
+        return "TEXT"
+
+def convert_oracle_to_pg_mview(oracle_mview_text):
+    """将Oracle物化视图定义转换为PostgreSQL物化视图定义"""
+    # 示例简单转换，实际情况可能需要更复杂的解析和转换
+    pg_mview_text = oracle_mview_text
+    
+    # 替换Oracle特定的SQL语法
+    pg_mview_text = pg_mview_text.replace('SYSDATE', 'CURRENT_DATE')
+    pg_mview_text = pg_mview_text.replace('NVL(', 'COALESCE(')
+    
+    return pg_mview_text
+
+def convert_oracle_to_pg_routine(oracle_routine_text):
+    """将Oracle存储过程/函数定义转换为PostgreSQL函数定义"""
+    # 示例简单转换，实际情况可能需要更复杂的解析和转换
+    pg_routine_text = oracle_routine_text
+    
+    # 替换Oracle特定的SQL语法
+    pg_routine_text = pg_routine_text.replace('SYSDATE', 'CURRENT_DATE')
+    pg_routine_text = pg_routine_text.replace('NVL(', 'COALESCE(')
+    
+    return pg_routine_text
+
+def migrate_all_tables(task_id, postgres_database=None):
+    """迁移指定schema的所有表"""
     task = get_object_or_404(MigrationTask, pk=task_id)
     
     # 更新任务状态
@@ -620,86 +715,82 @@ def migrate_all_tables(task_id):
     
     log = []
     
+    # 记录数据库信息
+    if postgres_database:
+        log.append(f"目标PostgreSQL数据库: {postgres_database}")
+    
     try:
         # 连接Oracle数据库
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
         
-        # 获取源Schema中所有表
+        # 连接PostgreSQL数据库
+        pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
+        pg_cursor = pg_conn.cursor()
+        
+        # 获取PostgreSQL数据库名
+        pg_cursor.execute("SELECT current_database()")
+        current_db = pg_cursor.fetchone()[0]
+        log.append(f"已连接到PostgreSQL数据库: {current_db}")
+        
+        # 获取源schema中的所有表
         query = """
-        SELECT TABLE_NAME 
-        FROM ALL_TABLES 
-        WHERE OWNER = :schema 
+        SELECT TABLE_NAME FROM ALL_TABLES 
+        WHERE OWNER = :schema
         ORDER BY TABLE_NAME
         """
         oracle_cursor.execute(query, schema=task.source_schema)
         tables = oracle_cursor.fetchall()
         
         if not tables:
-            raise Exception(f"在Schema {task.source_schema}中未找到任何表")
+            log.append(f"源schema '{task.source_schema}'中没有找到表")
+            task.status = 'completed'
+            task.log = '\n'.join(log)
+            task.completed_at = timezone.now()
+            task.save()
+            return
         
-        log.append(f"在Schema {task.source_schema}中找到 {len(tables)} 个表")
+        log.append(f"在源schema '{task.source_schema}'中找到 {len(tables)} 个表")
+        
+        # 创建批处理任务
+        task.is_batch = True
+        task.save()
         
         # 为每个表创建子任务
-        successful_tables = 0
-        failed_tables = 0
-        
-        for table in tables:
-            table_name = table[0]
-            sub_task = MigrationTask.objects.create(
+        for table_row in tables:
+            table_name = table_row[0]
+            log.append(f"为表 {table_name} 创建子任务")
+            
+            # 创建子任务
+            subtask = MigrationTask(
                 name=f"{task.name} - {table_name}",
                 task_type='table',
-                oracle_connection=task.oracle_connection,
-                postgres_connection=task.postgres_connection,
                 source_schema=task.source_schema,
                 target_schema=task.target_schema,
                 source_object=table_name,
+                oracle_connection=task.oracle_connection,
+                postgres_connection=task.postgres_connection,
+                conflict_strategy=task.conflict_strategy,
                 parent_task=task,
-                is_batch=False
+                status='pending'
             )
+            subtask.save()
             
-            log.append(f"创建子任务 #{sub_task.id} 用于迁移表 {table_name}")
-            
-            try:
-                # 同步执行迁移，而不是异步
-                migrate_table(sub_task.id)
-                
-                # 检查子任务状态
-                sub_task.refresh_from_db()
-                if sub_task.status == 'completed':
-                    successful_tables += 1
-                    log.append(f"表 {table_name} 迁移成功")
-                else:
-                    failed_tables += 1
-                    log.append(f"表 {table_name} 迁移失败：{sub_task.log}")
-            except Exception as e:
-                failed_tables += 1
-                error_msg = str(e)
-                log.append(f"表 {table_name} 迁移出错: {error_msg}")
-                
-                # 更新子任务状态
-                sub_task.status = 'failed'
-                sub_task.log = error_msg
-                sub_task.completed_at = timezone.now()
-                sub_task.save()
+            # 提交子任务到执行器
+            executor = get_task_executor()
+            executor.submit(migrate_table, subtask.id, postgres_database)
+        
+        log.append(f"已为所有表创建子任务并提交执行")
         
         # 关闭连接
         oracle_cursor.close()
         oracle_conn.close()
+        pg_cursor.close()
+        pg_conn.close()
         
-        # 更新主任务状态
-        if failed_tables == 0:
-            task.status = 'completed'
-            log.append(f"所有 {len(tables)} 个表迁移成功")
-        elif successful_tables == 0:
-            task.status = 'failed'
-            log.append(f"所有 {len(tables)} 个表迁移失败")
-        else:
-            task.status = 'partial'
-            log.append(f"部分表迁移成功: {successful_tables} 成功, {failed_tables} 失败")
-        
+        # 更新任务状态
+        task.status = 'running'  # 保持运行状态，直到所有子任务完成
         task.log = '\n'.join(log)
-        task.completed_at = timezone.now()
         task.save()
         
     except Exception as e:
@@ -714,732 +805,217 @@ def migrate_all_tables(task_id):
         task.completed_at = timezone.now()
         task.save()
 
-# 转换函数
-def convert_oracle_to_pg_mview(oracle_mview_text):
-    """将Oracle物化视图语法转换为PostgreSQL物化视图语法"""
-    # 这里实现语法转换逻辑
-    # 简单示例，实际中可能需要更复杂的处理
-    pg_mview_text = oracle_mview_text
+def oracle_database_management(request):
+    """Oracle数据库管理视图"""
+    # 获取所有Oracle连接
+    oracle_connections = OracleConnection.objects.all()
     
-    # 替换常见的Oracle特有语法
-    pg_mview_text = pg_mview_text.replace('NVL(', 'COALESCE(')
-    pg_mview_text = pg_mview_text.replace('TO_CHAR(', 'CAST(')
-    pg_mview_text = pg_mview_text.replace('TO_DATE(', 'TO_TIMESTAMP(')
-    
-    return pg_mview_text
-
-def convert_oracle_to_pg_view(oracle_view_text):
-    """将Oracle视图语法转换为PostgreSQL视图语法"""
-    # 这里实现语法转换逻辑
-    # 简单示例，实际中可能需要更复杂的处理
-    pg_view_text = oracle_view_text
-    
-    # 替换常见的Oracle特有语法
-    pg_view_text = pg_view_text.replace('NVL(', 'COALESCE(')
-    pg_view_text = pg_view_text.replace('TO_CHAR(', 'CAST(')
-    pg_view_text = pg_view_text.replace('TO_DATE(', 'TO_TIMESTAMP(')
-    
-    return pg_view_text
-
-def convert_oracle_to_pg_routine(oracle_routine_text):
-    """将Oracle存储过程/函数语法转换为PostgreSQL函数语法"""
-    # 这里实现语法转换逻辑
-    # 简单示例，实际中需要更复杂的处理
-    
-    # 检测是函数还是过程
-    is_function = 'FUNCTION' in oracle_routine_text.upper()
-    
-    if is_function:
-        # 处理函数
-        # 提取函数名、参数和返回类型
-        pg_routine_text = oracle_routine_text
-        
-        # 替换BEGIN/END语法为PostgreSQL的$$ ... $$语法
-        pg_routine_text = pg_routine_text.replace('BEGIN', '$$')
-        pg_routine_text = pg_routine_text.replace('END;', '$$')
-        
-        # 替换常见的Oracle特有语法
-        pg_routine_text = pg_routine_text.replace('NVL(', 'COALESCE(')
-        pg_routine_text = pg_routine_text.replace(':=', '=')
-    else:
-        # 处理存储过程
-        # 在PostgreSQL中，存储过程也是以函数形式实现的
-        pg_routine_text = oracle_routine_text
-        
-        # 替换常见的Oracle特有语法
-        pg_routine_text = pg_routine_text.replace('PROCEDURE', 'FUNCTION')
-        pg_routine_text = pg_routine_text.replace('BEGIN', '$$')
-        pg_routine_text = pg_routine_text.replace('END;', '$$')
-        pg_routine_text = pg_routine_text.replace('NVL(', 'COALESCE(')
-        pg_routine_text = pg_routine_text.replace(':=', '=')
-        
-        # 添加返回类型
-        if 'RETURNS' not in pg_routine_text:
-            pg_routine_text = pg_routine_text.replace(')', ') RETURNS VOID')
-    
-    return pg_routine_text
-
-def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None, data_scale=None):
-    """将Oracle数据类型转换为PostgreSQL数据类型"""
-    oracle_type = oracle_type.upper()
-    
-    # 数值类型转换
-    if oracle_type == 'NUMBER':
-        if data_precision is None:
-            return 'NUMERIC'
-        elif data_scale == 0:
-            if data_precision <= 4:
-                return 'SMALLINT'
-            elif data_precision <= 9:
-                return 'INTEGER'
-            elif data_precision <= 18:
-                return 'BIGINT'
-            else:
-                return 'NUMERIC'
-        else:
-            return f'NUMERIC({data_precision}, {data_scale})'
-    
-    # 字符类型转换
-    elif oracle_type in ('VARCHAR', 'VARCHAR2', 'NVARCHAR2'):
-        return f'VARCHAR({data_length})'
-    elif oracle_type == 'CHAR':
-        return f'CHAR({data_length})'
-    elif oracle_type == 'CLOB':
-        return 'TEXT'
-    elif oracle_type == 'NCLOB':
-        return 'TEXT'
-    
-    # 日期和时间类型
-    elif oracle_type == 'DATE':
-        return 'TIMESTAMP'
-    elif oracle_type == 'TIMESTAMP':
-        return 'TIMESTAMP'
-    
-    # LOB类型
-    elif oracle_type == 'BLOB':
-        return 'BYTEA'
-    elif oracle_type == 'RAW':
-        return 'BYTEA'
-    
-    # 默认使用TEXT
-    else:
-        return 'TEXT'
+    context = {
+        'oracle_connections': oracle_connections,
+    }
+    return render(request, 'migration_app/oracle/database_management.html', context)
 
 @csrf_exempt
-def create_task(request):
-    """创建新的迁移任务"""
-    if request.method == 'GET':
-        # 获取数据库连接列表
-        oracle_connections = OracleConnection.objects.all()
-        postgres_connections = PostgresConnection.objects.all()
-        return render(request, 'migration_app/create_task.html', {
-            'oracle_connections': oracle_connections,
-            'postgres_connections': postgres_connections,
-        })
-    elif request.method == 'POST':
+def test_oracle_connection(request):
+    """测试Oracle数据库连接"""
+    if request.method == 'POST':
         try:
-            data = json.loads(request.body)
-            task = MigrationTask.objects.create(
-                name=data.get('name'),
-                task_type=data.get('task_type'),
-                oracle_connection_id=data.get('oracle_connection'),
-                postgres_connection_id=data.get('postgres_connection'),
-                source_schema=data.get('source_schema'),
-                target_schema=data.get('target_schema'),
-                source_object=data.get('source_object'),
-                is_batch=data.get('task_type') == 'all_tables'
+            connection_id = request.POST.get('connection_id')
+            if not connection_id:
+                return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
+            
+            connection = get_oracle_connection(connection_id)
+            connection.close()
+            return JsonResponse({'status': 'success'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)})
+    return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
+
+@csrf_exempt
+def save_oracle_connection(request):
+    """保存Oracle数据库连接"""
+    if request.method == 'POST':
+        try:
+            name = request.POST.get('name')
+            host = request.POST.get('host')
+            port = request.POST.get('port')
+            service_name = request.POST.get('service_name')
+            username = request.POST.get('username')
+            password = request.POST.get('password')
+            
+            if not all([name, host, port, service_name, username, password]):
+                return JsonResponse({'status': 'error', 'message': '请填写所有必填字段'})
+            
+            # 创建新的连接
+            connection = OracleConnection.objects.create(
+                name=name,
+                host=host,
+                port=port,
+                service_name=service_name,
+                username=username,
+                password=password
             )
             
-            # 启动异步任务
-            executor = ThreadPoolExecutor(max_workers=1)
-            
-            if task.task_type == 'table':
-                executor.submit(migrate_table, task.id)
-            elif task.task_type == 'materialized_view':
-                executor.submit(migrate_materialized_view, task.id)
-            elif task.task_type == 'view':
-                executor.submit(migrate_view, task.id)
-            elif task.task_type == 'routine':
-                executor.submit(migrate_routine, task.id)
-            elif task.task_type == 'all_tables':
-                executor.submit(migrate_all_tables, task.id)
-            
-            return JsonResponse({'status': 'success', 'task_id': task.id})
-        
+            return JsonResponse({'status': 'success', 'message': '连接保存成功'})
         except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
-    
-    return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=405)
-
-def task_detail(request, task_id):
-    """任务详情页面"""
-    task = get_object_or_404(MigrationTask, pk=task_id)
-    subtasks = None
-    
-    if task.is_batch:
-        subtasks = task.subtasks.all().order_by('-created_at')
-    
-    return render(request, 'migration_app/task_detail.html', {
-        'task': task,
-        'subtasks': subtasks
-    })
+            return JsonResponse({'status': 'error', 'message': str(e)})
+    return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
 @csrf_exempt
-def task_status(request, task_id):
-    """获取任务状态"""
-    task = get_object_or_404(MigrationTask, pk=task_id)
-    return JsonResponse({
-        'status': task.status,
-        'progress': task.progress,
-        'log': task.log,
-        'created_at': task.created_at.isoformat() if task.created_at else None,
-        'started_at': task.started_at.isoformat() if task.started_at else None,
-        'completed_at': task.completed_at.isoformat() if task.completed_at else None
-    })
-
-@csrf_exempt
-def get_schemas(request):
-    """获取Schema列表"""
+def delete_oracle_connection(request):
+    """删除Oracle数据库连接"""
     if request.method == 'POST':
         try:
-            # 添加日志
-            logger.info(f"收到获取Schema请求 - 请求方法: {request.method}")
-            logger.info(f"请求内容类型: {request.content_type}")
-            logger.info(f"请求体: {request.body}")
+            connection_id = request.POST.get('connection_id')
+            if not connection_id:
+                return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
             
-            # 处理不同格式的请求数据
-            if request.content_type and 'application/json' in request.content_type:
-                # JSON格式请求
-                data = json.loads(request.body)
-            else:
-                # 表单提交
-                data = request.POST
+            connection = OracleConnection.objects.get(id=connection_id)
+            connection.delete()
             
-            connection_id = data.get('connection_id')
-            db_type = data.get('type')  # 'oracle' 或 'postgres'
-            search_term = data.get('search_term', '')  # 可选的搜索条件
-            limit = int(data.get('limit', 100))  # 默认限制100条
-            
-            logger.info(f"解析请求参数: connection_id={connection_id}, db_type={db_type}, search_term={search_term}, limit={limit}")
-            
-            if not connection_id or not db_type:
-                logger.error("缺少必要参数")
-                return JsonResponse({
-                    'status': 'error',
-                    'message': '缺少必要参数'
-                }, status=400)
-            
-            # 限制最大查询数量
-            if limit > 500:
-                limit = 500
-            
-            # 根据数据库类型获取实际Schema列表
-            schemas = []
-            total_count = 0
-            try:
-                if db_type == 'oracle':
-                    # 获取Oracle的Schema列表
-                    connection = get_oracle_connection(connection_id)
-                    cursor = connection.cursor()
-                    
-                    # 先获取总数
-                    if search_term:
-                        count_sql = "SELECT COUNT(*) FROM all_users WHERE username LIKE :search_term"
-                        cursor.execute(count_sql, search_term=f"%{search_term.upper()}%")
-                    else:
-                        count_sql = "SELECT COUNT(*) FROM all_users"
-                        cursor.execute(count_sql)
-                    total_count = cursor.fetchone()[0]
-                    
-                    # 执行查询，添加搜索和限制条件
-                    if search_term:
-                        query = """
-                            SELECT username FROM all_users 
-                            WHERE username LIKE :search_term
-                            ORDER BY username
-                        """
-                        cursor.execute(query, search_term=f"%{search_term.upper()}%")
-                    else:
-                        query = "SELECT username FROM all_users ORDER BY username"
-                        cursor.execute(query)
-                    
-                    # 只获取指定数量的记录
-                    schemas = [row[0] for row in cursor.fetchmany(limit)]
-                    
-                    cursor.close()
-                    connection.close()
-                    logger.info(f"获取到Oracle Schema: {len(schemas)}条 (总共{total_count}条)")
-                    
-                elif db_type == 'postgres':
-                    # 获取PostgreSQL的Schema列表
-                    connection = get_postgres_connection(connection_id)
-                    cursor = connection.cursor()
-                    
-                    # 先获取总数
-                    if search_term:
-                        count_sql = """
-                            SELECT COUNT(*) FROM information_schema.schemata 
-                            WHERE schema_name NOT LIKE 'pg_%' 
-                            AND schema_name != 'information_schema'
-                            AND schema_name LIKE %s
-                        """
-                        cursor.execute(count_sql, (f"%{search_term}%",))
-                    else:
-                        count_sql = """
-                            SELECT COUNT(*) FROM information_schema.schemata 
-                            WHERE schema_name NOT LIKE 'pg_%' 
-                            AND schema_name != 'information_schema'
-                        """
-                        cursor.execute(count_sql)
-                    total_count = cursor.fetchone()[0]
-                    
-                    # 执行查询，添加搜索和限制条件
-                    if search_term:
-                        query = """
-                            SELECT schema_name FROM information_schema.schemata 
-                            WHERE schema_name NOT LIKE 'pg_%%' 
-                            AND schema_name != 'information_schema'
-                            AND schema_name LIKE %s
-                            ORDER BY schema_name
-                            LIMIT %s
-                        """
-                        cursor.execute(query, (f"%{search_term}%", limit))
-                    else:
-                        query = """
-                            SELECT schema_name FROM information_schema.schemata 
-                            WHERE schema_name NOT LIKE 'pg_%%' 
-                            AND schema_name != 'information_schema'
-                            ORDER BY schema_name
-                            LIMIT %s
-                        """
-                        cursor.execute(query, [limit])
-                    
-                    schemas = [row[0] for row in cursor.fetchall()]
-                    
-                    cursor.close()
-                    connection.close()
-                    logger.info(f"获取到PostgreSQL Schema: {len(schemas)}条 (总共{total_count}条)")
-                    
-                else:
-                    return JsonResponse({
-                        'status': 'error',
-                        'message': f'不支持的数据库类型: {db_type}'
-                    }, status=400)
-            except Exception as db_error:
-                logger.error(f"数据库查询错误: {str(db_error)}", exc_info=True)
-                return JsonResponse({
-                    'status': 'error',
-                    'message': f'数据库查询错误: {str(db_error)}'
-                }, status=500)
-            
-            # 构造响应
-            response_data = {
-                'status': 'success',
-                'schemas': schemas,
-                'total': total_count,
-                'count': len(schemas),
-                'has_more': len(schemas) < total_count
-            }
-            logger.info(f"返回响应: schema数量 {len(schemas)}")
-            return JsonResponse(response_data)
-            
+            return JsonResponse({'status': 'success', 'message': '连接删除成功'})
+        except OracleConnection.DoesNotExist:
+            return JsonResponse({'status': 'error', 'message': '连接不存在'})
         except Exception as e:
-            logger.error(f"获取Schema列表出错: {str(e)}", exc_info=True)
-            return JsonResponse({
-                'status': 'error',
-                'message': str(e)
-            }, status=500)
-    
-    return JsonResponse({
-        'status': 'error',
-        'message': 'Invalid request method'
-    }, status=405)
+            return JsonResponse({'status': 'error', 'message': str(e)})
+    return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
-@csrf_exempt
-def get_database_objects(request):
-    """获取数据库对象列表"""
-    if request.method == 'POST':
-        try:
-            # 添加日志
-            logger.info(f"收到获取数据库对象请求 - 请求方法: {request.method}")
-            logger.info(f"请求内容类型: {request.content_type}")
-            logger.info(f"请求体: {request.body}")
-            
-            # 处理不同格式的请求数据
-            if request.content_type and 'application/json' in request.content_type:
-                # JSON格式请求
-                data = json.loads(request.body)
-            else:
-                # 表单提交
-                data = request.POST
-            
-            connection_id = data.get('connection_id')
-            schema = data.get('schema')
-            object_type = data.get('object_type')
-            search_term = data.get('search_term', '')  # 可选的搜索条件
-            limit = int(data.get('limit', 100))  # 默认限制100条
-            
-            logger.info(f"解析请求参数: connection_id={connection_id}, schema={schema}, object_type={object_type}, search_term={search_term}, limit={limit}")
-            
-            if not connection_id or not schema or not object_type:
-                logger.error("缺少必要参数")
-                return JsonResponse({
-                    'status': 'error',
-                    'message': '缺少必要参数'
-                }, status=400)
-            
-            # 限制最大查询数量
-            if limit > 500:
-                limit = 500
-            
-            # 查询实际的数据库对象
-            objects = []
-            total_count = 0
-            try:
-                # 获取Oracle连接
-                connection = get_oracle_connection(connection_id)
-                cursor = connection.cursor()
-                
-                # 根据对象类型构建查询SQL并添加搜索条件
-                if object_type == 'table':
-                    # 先获取总数
-                    if search_term:
-                        count_query = """
-                            SELECT COUNT(*) 
-                            FROM all_tables 
-                            WHERE owner = :schema 
-                            AND table_name LIKE :search_term
-                        """
-                        cursor.execute(count_query, schema=schema, search_term=f"%{search_term.upper()}%")
-                    else:
-                        count_query = """
-                            SELECT COUNT(*) 
-                            FROM all_tables 
-                            WHERE owner = :schema
-                        """
-                        cursor.execute(count_query, schema=schema)
-                    total_count = cursor.fetchone()[0]
-                    
-                    # 获取数据列表
-                    if search_term:
-                        query = """
-                            SELECT table_name 
-                            FROM all_tables 
-                            WHERE owner = :schema 
-                            AND table_name LIKE :search_term
-                            ORDER BY table_name
-                        """
-                        cursor.execute(query, schema=schema, search_term=f"%{search_term.upper()}%")
-                    else:
-                        query = """
-                            SELECT table_name 
-                            FROM all_tables 
-                            WHERE owner = :schema 
-                            ORDER BY table_name
-                        """
-                        cursor.execute(query, schema=schema)
-                    
-                elif object_type == 'view':
-                    # 先获取总数
-                    if search_term:
-                        count_query = """
-                            SELECT COUNT(*) 
-                            FROM all_views 
-                            WHERE owner = :schema 
-                            AND view_name LIKE :search_term
-                        """
-                        cursor.execute(count_query, schema=schema, search_term=f"%{search_term.upper()}%")
-                    else:
-                        count_query = """
-                            SELECT COUNT(*) 
-                            FROM all_views 
-                            WHERE owner = :schema
-                        """
-                        cursor.execute(count_query, schema=schema)
-                    total_count = cursor.fetchone()[0]
-                    
-                    # 获取数据列表
-                    if search_term:
-                        query = """
-                            SELECT view_name 
-                            FROM all_views 
-                            WHERE owner = :schema 
-                            AND view_name LIKE :search_term
-                            ORDER BY view_name
-                        """
-                        cursor.execute(query, schema=schema, search_term=f"%{search_term.upper()}%")
-                    else:
-                        query = """
-                            SELECT view_name 
-                            FROM all_views 
-                            WHERE owner = :schema 
-                            ORDER BY view_name
-                        """
-                        cursor.execute(query, schema=schema)
-                    
-                elif object_type == 'materialized_view':
-                    # 先获取总数
-                    if search_term:
-                        count_query = """
-                            SELECT COUNT(*) 
-                            FROM all_mviews 
-                            WHERE owner = :schema 
-                            AND mview_name LIKE :search_term
-                        """
-                        cursor.execute(count_query, schema=schema, search_term=f"%{search_term.upper()}%")
-                    else:
-                        count_query = """
-                            SELECT COUNT(*) 
-                            FROM all_mviews 
-                            WHERE owner = :schema
-                        """
-                        cursor.execute(count_query, schema=schema)
-                    total_count = cursor.fetchone()[0]
-                    
-                    # 获取数据列表
-                    if search_term:
-                        query = """
-                            SELECT mview_name 
-                            FROM all_mviews 
-                            WHERE owner = :schema 
-                            AND mview_name LIKE :search_term
-                            ORDER BY mview_name
-                        """
-                        cursor.execute(query, schema=schema, search_term=f"%{search_term.upper()}%")
-                    else:
-                        query = """
-                            SELECT mview_name 
-                            FROM all_mviews 
-                            WHERE owner = :schema 
-                            ORDER BY mview_name
-                        """
-                        cursor.execute(query, schema=schema)
-                    
-                elif object_type == 'routine':
-                    # 先获取总数
-                    if search_term:
-                        count_query = """
-                            SELECT COUNT(*) 
-                            FROM all_objects 
-                            WHERE owner = :schema 
-                            AND object_type IN ('FUNCTION', 'PROCEDURE')
-                            AND object_name LIKE :search_term
-                        """
-                        cursor.execute(count_query, schema=schema, search_term=f"%{search_term.upper()}%")
-                    else:
-                        count_query = """
-                            SELECT COUNT(*) 
-                            FROM all_objects 
-                            WHERE owner = :schema 
-                            AND object_type IN ('FUNCTION', 'PROCEDURE')
-                        """
-                        cursor.execute(count_query, schema=schema)
-                    total_count = cursor.fetchone()[0]
-                    
-                    # 获取数据列表
-                    if search_term:
-                        query = """
-                            SELECT object_name 
-                            FROM all_objects 
-                            WHERE owner = :schema 
-                            AND object_type IN ('FUNCTION', 'PROCEDURE')
-                            AND object_name LIKE :search_term
-                            ORDER BY object_name
-                        """
-                        cursor.execute(query, schema=schema, search_term=f"%{search_term.upper()}%")
-                    else:
-                        query = """
-                            SELECT object_name 
-                            FROM all_objects 
-                            WHERE owner = :schema 
-                            AND object_type IN ('FUNCTION', 'PROCEDURE')
-                            ORDER BY object_name
-                        """
-                        cursor.execute(query, schema=schema)
-                    
-                else:
-                    cursor.close()
-                    connection.close()
-                    logger.error(f"不支持的对象类型: {object_type}")
-                    return JsonResponse({
-                        'status': 'error',
-                        'message': f'不支持的对象类型: {object_type}'
-                    }, status=400)
-                
-                # 执行查询，只获取指定数量的记录
-                objects = [row[0] for row in cursor.fetchmany(limit)]
-                
-                cursor.close()
-                connection.close()
-                
-                logger.info(f"从数据库获取到 {len(objects)} 个对象 (总共 {total_count} 个)")
-                
-            except Exception as db_error:
-                logger.error(f"数据库查询错误: {str(db_error)}", exc_info=True)
-                return JsonResponse({
-                    'status': 'error',
-                    'message': f'数据库查询错误: {str(db_error)}'
-                }, status=500)
-            
-            response_data = {
-                'status': 'success',
-                'objects': objects,
-                'total': total_count,
-                'count': len(objects),
-                'has_more': len(objects) < total_count
-            }
-            logger.info(f"返回响应: 对象数量 {len(objects)}")
-            
-            return JsonResponse(response_data)
-            
-        except Exception as e:
-            logger.error(f"获取数据库对象列表出错: {str(e)}", exc_info=True)
-            return JsonResponse({
-                'status': 'error',
-                'message': str(e)
-            }, status=500)
-    
-    return JsonResponse({
-        'status': 'error',
-        'message': 'Invalid request method'
-    }, status=405)
+# PolarDB-PG数据库连接管理
 
-@csrf_exempt
-def start_task(request, task_id):
-    """启动迁移任务"""
-    # 添加详细的请求调试日志
-    logger.info(f"收到启动任务请求: 任务ID={task_id}")
-    logger.info(f"请求方法: {request.method}")
-    logger.info(f"请求头: {dict(request.headers)}")
-    logger.info(f"请求体: {request.body.decode('utf-8') if request.body else '空'}")
-    logger.info(f"Content-Type: {request.content_type}")
-    
-    if request.method == 'POST':
-        try:
-            logger.info(f"开始处理启动任务: 任务ID={task_id}")
-            task = get_object_or_404(MigrationTask, pk=task_id)
-            logger.info(f"任务信息: {task.name}, 当前状态: {task.status}")
-            
-            # 只有待执行和失败的任务可以重新启动
-            if task.status not in ['pending', 'failed', 'canceled']:
-                logger.warning(f"任务状态不允许启动: {task.status}")
-                return JsonResponse({
-                    'status': 'error',
-                    'message': f'任务当前状态为{task.get_status_display()}，无法启动'
-                }, status=400)
-            
-            # 重置任务状态
-            task.status = 'pending'
-            task.cancel_requested = False
-            task.progress = 0
-            task.log = ''
-            task.started_at = None
-            task.completed_at = None
-            task.save()
-            logger.info(f"任务状态已重置为待执行: 任务ID={task_id}")
-            
-            # 启动异步任务
-            executor = ThreadPoolExecutor(max_workers=1)
-            
-            if task.task_type == 'table':
-                logger.info(f"提交表迁移任务: {task.source_schema}.{task.source_object}")
-                executor.submit(migrate_table, task.id)
-            elif task.task_type == 'materialized_view':
-                logger.info(f"提交物化视图迁移任务: {task.source_schema}.{task.source_object}")
-                executor.submit(migrate_materialized_view, task.id)
-            elif task.task_type == 'view':
-                logger.info(f"提交视图迁移任务: {task.source_schema}.{task.source_object}")
-                executor.submit(migrate_view, task.id)
-            elif task.task_type == 'routine':
-                logger.info(f"提交存储过程/函数迁移任务: {task.source_schema}.{task.source_object}")
-                executor.submit(migrate_routine, task.id)
-            elif task.task_type == 'all_tables':
-                logger.info(f"提交全部表迁移任务: {task.source_schema}.*")
-                executor.submit(migrate_all_tables, task.id)
-            else:
-                logger.error(f"未知的任务类型: {task.task_type}")
-                return JsonResponse({
-                    'status': 'error',
-                    'message': f'未知的任务类型: {task.task_type}'
-                }, status=400)
-            
-            logger.info(f"任务已成功提交执行: 任务ID={task_id}")
-            return JsonResponse({'status': 'success'})
-            
-        except Exception as e:
-            logger.error(f"启动任务时发生错误: {str(e)}", exc_info=True)
-            return JsonResponse({
-                'status': 'error',
-                'message': str(e)
-            }, status=500)
-    
-    logger.warning(f"非法的请求方法: {request.method}")
-    return JsonResponse({
-        'status': 'error',
-        'message': 'Invalid request method'
-    }, status=405)
+def pg_database_management(request):
+    return render(request, 'migration_app/postgres/database_management.html')
 
-@csrf_exempt
-def cancel_task(request, task_id):
-    """取消迁移任务"""
-    # 添加详细的请求调试日志
-    logger.info(f"收到取消任务请求: 任务ID={task_id}")
-    logger.info(f"请求方法: {request.method}")
-    logger.info(f"请求头: {dict(request.headers)}")
-    logger.info(f"请求体: {request.body.decode('utf-8') if request.body else '空'}")
-    logger.info(f"Content-Type: {request.content_type}")
-    
-    if request.method == 'POST':
-        try:
-            logger.info(f"开始处理取消任务: 任务ID={task_id}")
-            task = get_object_or_404(MigrationTask, pk=task_id)
-            logger.info(f"任务信息: {task.name}, 当前状态: {task.status}")
-            
-            # 只有运行中的任务可以取消
-            if task.status != 'running':
-                logger.warning(f"任务状态不允许取消: {task.status}")
-                return JsonResponse({
-                    'status': 'error',
-                    'message': f'任务当前状态为{task.get_status_display()}，无法取消'
-                }, status=400)
-            
-            # 设置取消标志
-            task.cancel_requested = True
-            task.save()
-            logger.info(f"任务取消标志已设置: 任务ID={task_id}")
-            
-            # 如果是批量任务，也将所有运行中的子任务标记为取消
-            if task.is_batch:
-                logger.info(f"批量任务: 标记所有运行中的子任务为取消")
-                running_subtasks = task.subtasks.filter(status='running')
-                for subtask in running_subtasks:
-                    subtask.cancel_requested = True
-                    subtask.save()
-                    logger.info(f"子任务取消标志已设置: 子任务ID={subtask.id}")
-            
-            return JsonResponse({'status': 'success'})
-            
-        except Exception as e:
-            logger.error(f"取消任务时发生错误: {str(e)}", exc_info=True)
-            return JsonResponse({
-                'status': 'error',
-                'message': str(e)
-            }, status=500)
-    
-    logger.warning(f"非法的请求方法: {request.method}")
-    return JsonResponse({
-        'status': 'error',
-        'message': 'Invalid request method'
-    }, status=405)
 
-# 读取README.md并返回内容
-def get_readme_content():
+def get_pg_connections(request):
     try:
-        readme_path = settings.SIMPLEUI_HOME_INFO_PATH
-        if os.path.exists(readme_path):
-            with open(readme_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                return content
-        return "README.md 文件不存在"
+        # 获取当前用户的连接和没有指定用户的连接
+        connections = PostgresConnection.objects.filter(
+            models.Q(user=request.user) | models.Q(user__isnull=True)
+        )
+        data = [{
+            'id': conn.id,
+            'name': conn.name,
+            'host': conn.host,
+            'port': conn.port,
+            'database': conn.database,
+            'username': conn.username,
+            'status': conn.status,
+            'created_at': conn.created_at.strftime('%Y-%m-%d %H:%M:%S')
+        } for conn in connections]
+        return JsonResponse({'status': 'success', 'connections': data})
     except Exception as e:
-        return f"读取README.md失败: {str(e)}"
+        return JsonResponse({'status': 'error', 'message': str(e)})
+
+
+def add_pg_connection(request):
+    if request.method == 'POST':
+        try:
+            name = request.POST.get('name')
+            host = request.POST.get('host')
+            port = request.POST.get('port')
+            database = request.POST.get('database')
+            username = request.POST.get('username')
+            password = request.POST.get('password')
+            
+            # 创建新连接
+            connection = PostgresConnection.objects.create(
+                name=name,
+                host=host,
+                port=port,
+                database=database,
+                username=username,
+                password=password,
+                status='active'
+            )
+            
+            return JsonResponse({'status': 'success'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)})
+    return JsonResponse({'status': 'error', 'message': 'Invalid request method'})
+
+def test_pg_connection(request):
+    if request.method == 'POST':
+        try:
+            connection_id = request.POST.get('connection_id')
+            if not connection_id:
+                return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
+            
+            try:
+                connection = PostgresConnection.objects.get(id=connection_id)
+            except PostgresConnection.DoesNotExist:
+                return JsonResponse({'status': 'error', 'message': f'找不到ID为 {connection_id} 的连接'})
+            
+            # 更新连接状态为测试中
+            connection.status = 'testing'
+            connection.save()
+            
+            try:
+                # 测试连接
+                conn = psycopg2.connect(
+                    host=connection.host,
+                    port=connection.port,
+                    database=connection.database,
+                    user=connection.username,
+                    password=connection.password
+                )
+                conn.close()
+                
+                # 更新连接状态为正常
+                connection.status = 'active'
+                connection.save()
+                
+                return JsonResponse({'status': 'success'})
+            except psycopg2.Error as e:
+                # 更新连接状态为异常
+                connection.status = 'inactive'
+                connection.save()
+                return JsonResponse({'status': 'error', 'message': f'连接测试失败: {str(e)}'})
+            except Exception as e:
+                # 更新连接状态为异常
+                connection.status = 'inactive'
+                connection.save()
+                return JsonResponse({'status': 'error', 'message': f'连接测试失败: {str(e)}'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': f'测试连接时发生错误: {str(e)}'})
+    return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
+
+def delete_pg_connection(request):
+    if request.method == 'POST':
+        try:
+            connection_id = request.POST.get('connection_id')
+            connection = PostgresConnection.objects.get(id=connection_id, user=request.user)
+            connection.delete()
+            return JsonResponse({'status': 'success'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)})
+    return JsonResponse({'status': 'error', 'message': 'Invalid request method'})
+
+def edit_pg_connection(request):
+    if request.method == 'POST':
+        try:
+            connection_id = request.POST.get('connection_id')
+            if not connection_id:
+                return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
+            
+            try:
+                connection = PostgresConnection.objects.get(id=connection_id)
+            except PostgresConnection.DoesNotExist:
+                return JsonResponse({'status': 'error', 'message': f'找不到ID为 {connection_id} 的连接'})
+            
+            # 更新连接信息
+            connection.name = request.POST.get('name')
+            connection.host = request.POST.get('host')
+            connection.port = request.POST.get('port')
+            connection.database = request.POST.get('database')
+            connection.username = request.POST.get('username')
+            
+            # 如果提供了新密码，则更新密码
+            new_password = request.POST.get('password')
+            if new_password:
+                connection.password = new_password
+            
+            connection.save()
+            return JsonResponse({'status': 'success'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)})
+    return JsonResponse({'status': 'error', 'message': '无效的请求方法'})

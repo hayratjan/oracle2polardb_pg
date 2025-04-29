@@ -252,33 +252,6 @@
             color: var(--text-color);
         }
         
-        .page-loader {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(255, 255, 255, 0.8);
-            z-index: 9999;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-        
-        .loader {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid var(--primary-color);
-            border-radius: 50%;
-            width: 50px;
-            height: 50px;
-            animation: spin 2s linear infinite;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
         /* 子菜单样式 */
         .submenu {
             list-style: none;
@@ -301,11 +274,6 @@
     {% block extra_css %}{% endblock %}
 </head>
 <body>
-    <!-- 全页加载动画 -->
-    <div class="page-loader" id="page-loader" style="display: none;">
-        <div class="loader"></div>
-    </div>
-
     <!-- 顶部导航栏 -->
     <nav class="navbar navbar-expand-lg navbar-dark">
         <div class="container-fluid">
@@ -370,11 +338,11 @@
     <script>
         // 通用函数
         function showLoader() {
-            document.getElementById('page-loader').style.display = 'flex';
+            console.log('加载动画已禁用');
         }
         
         function hideLoader() {
-            document.getElementById('page-loader').style.display = 'none';
+            console.log('加载动画已禁用');
         }
         
         function showToast(title, icon) {
@@ -389,25 +357,16 @@
             });
         }
         
-        // 页面加载动画
+        // 页面加载
         document.addEventListener('DOMContentLoaded', function() {
-            hideLoader();
-            
             // 为所有表单添加加载动画
             document.querySelectorAll('form').forEach(form => {
-                form.addEventListener('submit', function() {
-                    showLoader();
-                });
+                // 已移除加载动画调用
             });
             
             // 为所有跳转链接添加加载动画
             document.querySelectorAll('a[href]:not([href^="#"])').forEach(link => {
-                link.addEventListener('click', function() {
-                    // 排除特定链接如控制按钮等
-                    if (!this.classList.contains('no-loader')) {
-                        showLoader();
-                    }
-                });
+                // 已移除加载动画调用
             });
         });
     </script>

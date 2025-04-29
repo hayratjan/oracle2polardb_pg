@@ -32,6 +32,7 @@
                             <option value="view">视图</option>
                             <option value="routine">例程</option>
                             <option value="all_tables">所有表</option>
+                            <option value="view_to_table">视图数据迁移到表</option>
                         </select>
                     </div>
                 </div>
@@ -66,29 +67,51 @@
                                 <option value="">请先选择Oracle连接</option>
                             </select>
                             <button type="button" class="btn btn-outline-primary" id="get-source-schema-btn">
-                                <i class="fas fa-sync-alt me-1"></i> 获取Schema
+                                <i class="fas fa-sync-alt me-1"></i> 刷新
                             </button>
                         </div>
                         <div id="source-schema-loading" class="text-primary d-none">
                             <div class="spinner-border spinner-border-sm me-1" role="status"></div>
                             <span>加载中...</span>
                         </div>
+                        <div class="form-text">
+                            选择Oracle连接后会自动加载Schema列表。
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label for="source-object" class="form-label">源对象</label>
+                        <div class="input-group mb-2">
+                            <input type="text" class="form-control" id="source-object-search" placeholder="输入关键词搜索...">
+                            <button class="btn btn-outline-secondary" type="button" id="source-object-search-btn">
+                                <i class="fas fa-search"></i> 搜索
+                            </button>
+                        </div>
                         <div class="input-group">
-                            <select class="form-select" id="source-object" name="source_object" multiple size="5">
-                                <option value="">请先选择源Schema</option>
-                            </select>
+                            <div class="form-control p-0" id="source-object-container" style="height: 400px; overflow-y: auto;">
+                                <div class="list-group list-group-flush" id="source-object-list">
+                                    <div class="list-group-item text-muted">请先选择源Schema</div>
+                                </div>
+                            </div>
                             <button type="button" class="btn btn-outline-primary" id="get-source-object-btn">
-                                <i class="fas fa-sync-alt me-1"></i> 获取对象
+                                <i class="fas fa-sync-alt me-1"></i> 刷新
                             </button>
                         </div>
                         <div id="source-object-loading" class="text-primary d-none">
                             <div class="spinner-border spinner-border-sm me-1" role="status"></div>
                             <span>加载中...</span>
                         </div>
+                        <div id="load-more-container" class="text-center mt-2 d-none">
+                            <button type="button" class="btn btn-sm btn-outline-primary" id="load-more-btn">
+                                <i class="fas fa-chevron-down me-1"></i> 加载更多
+                            </button>
+                            <span id="load-status" class="d-block text-muted mt-1 small"></span>
+                        </div>
+                        <div id="selected-objects" class="mt-2">
+                            <div class="fw-bold">已选择的对象：</div>
+                            <div id="selected-objects-list" class="mt-1"></div>
+                        </div>
                         <div class="form-text">
+                            选择Schema后会自动加载对象列表。<br>
                             对于"所有表"类型的任务，无需选择源对象。<br>
                             按住Ctrl键可多选对象。
                         </div>
@@ -97,17 +120,42 @@
                 <div class="col-md-6">
                     <div class="mb-3">
                         <label for="target-schema" class="form-label">目标Schema</label>
-                        <div class="input-group">
-                            <select class="form-select" id="target-schema" name="target_schema" required>
+                        <div class="mb-2">
+                            <select class="form-select" id="postgres-database" name="postgres_database">
                                 <option value="">请先选择PolarDB-PG连接</option>
                             </select>
+                            <div class="form-text">
+                                先选择PostgreSQL数据库
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <select class="form-select" id="target-schema" name="target_schema" required>
+                                <option value="">请先选择数据库</option>
+                            </select>
                             <button type="button" class="btn btn-outline-primary" id="get-target-schema-btn">
-                                <i class="fas fa-sync-alt me-1"></i> 获取Schema
+                                <i class="fas fa-sync-alt me-1"></i> 刷新
                             </button>
                         </div>
                         <div id="target-schema-loading" class="text-primary d-none">
                             <div class="spinner-border spinner-border-sm me-1" role="status"></div>
                             <span>加载中...</span>
+                        </div>
+                        <div class="form-text">
+                            选择数据库后会自动加载Schema列表。<br>
+                            通常选择"public"模式作为目标Schema。
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="conflict-strategy" class="form-label">目标对象冲突处理策略</label>
+                        <select class="form-select" id="conflict-strategy" name="conflict_strategy">
+                            <option value="error">遇到冲突时报错</option>
+                            <option value="replace">删除并替换已存在对象</option>
+                            <option value="skip">跳过已存在对象</option>
+                            <option value="append">追加数据（仅适用于表）</option>
+                            <option value="truncate">清空表并重新加载数据</option>
+                        </select>
+                        <div class="form-text">
+                            当目标Schema中已存在同名对象时的处理方式。
                         </div>
                     </div>
                 </div>
@@ -134,8 +182,15 @@
         const taskTypeSelect = document.getElementById('task-type');
         const oracleConnectionSelect = document.getElementById('oracle-connection');
         const sourceSchemaSelect = document.getElementById('source-schema');
-        const sourceObjectSelect = document.getElementById('source-object');
+        const sourceObjectList = document.getElementById('source-object-list');
+        const sourceObjectSearch = document.getElementById('source-object-search');
+        const sourceObjectSearchBtn = document.getElementById('source-object-search-btn');
+        const selectedObjectsList = document.getElementById('selected-objects-list');
+        const loadMoreContainer = document.getElementById('load-more-container');
+        const loadMoreBtn = document.getElementById('load-more-btn');
+        const loadStatus = document.getElementById('load-status');
         const postgresConnectionSelect = document.getElementById('postgres-connection');
+        const postgresDatabaseSelect = document.getElementById('postgres-database');
         const targetSchemaSelect = document.getElementById('target-schema');
         const csrfToken = document.querySelector('input[name="csrfmiddlewaretoken"]') ? 
                           document.querySelector('input[name="csrfmiddlewaretoken"]').value : '';
@@ -147,6 +202,12 @@
         const sourceSchemaLoading = document.getElementById('source-schema-loading');
         const sourceObjectLoading = document.getElementById('source-object-loading');
         const targetSchemaLoading = document.getElementById('target-schema-loading');
+        
+        // 分页加载相关变量
+        let currentOffset = 0;
+        let hasMoreObjects = false;
+        let totalObjectCount = 0;
+        let loadedObjectCount = 0;
         
         // 辅助函数 - 显示/隐藏加载指示器
         function showLoading(element) {
@@ -213,9 +274,15 @@
                 
                 if (data.status === 'success') {
                     sourceSchemaSelect.innerHTML = '<option value="">请选择Schema</option>';
-                    data.schemas.forEach(schema => {
-                        sourceSchemaSelect.innerHTML += `<option value="${schema}">${schema}</option>`;
-                    });
+                    
+                    // 按字母顺序排序
+                    if (data.schemas && data.schemas.length > 0) {
+                        const sortedSchemas = [...data.schemas].sort((a, b) => a.localeCompare(b));
+                        sortedSchemas.forEach(schema => {
+                            sourceSchemaSelect.innerHTML += `<option value="${schema}">${schema}</option>`;
+                        });
+                    }
+                    
                     sourceSchemaSelect.disabled = false;
                     
                     // 显示数据加载提示
@@ -240,10 +307,62 @@
             }
         }
         
+        // 当Oracle连接选择变化时，自动刷新源Schema列表
+        oracleConnectionSelect.addEventListener('change', function() {
+            // 清空源Schema选择和源对象选择
+            sourceSchemaSelect.innerHTML = '<option value="">请选择Schema</option>';
+            sourceObjectList.innerHTML = '<div class="list-group-item text-muted">请先选择源Schema</div>';
+            
+            // 如果选择了连接，自动获取Schema列表
+            if (this.value) {
+                getSourceSchema();
+            }
+        });
+        
+        // 当源Schema选择变化时，如果有任务类型，自动获取对象列表
+        sourceSchemaSelect.addEventListener('change', function() {
+            // 清空源对象选择
+            sourceObjectList.innerHTML = '<div class="list-group-item text-muted">请先选择源对象</div>';
+            
+            // 如果选择了Schema且有任务类型，且任务类型不是全部表，自动获取对象列表
+            if (this.value && taskTypeSelect.value && taskTypeSelect.value !== 'all_tables') {
+                getSourceObject();
+            }
+        });
+        
+        // 当任务类型变化时，如果已选择了Schema，自动获取对象列表
+        taskTypeSelect.addEventListener('change', function() {
+            // 清空已选择的对象显示
+            selectedObjectsList.innerHTML = '<span class="text-muted">未选择任何对象</span>';
+            
+            // 如果是全部表类型，清空并禁用源对象选择
+            if (this.value === 'all_tables') {
+                sourceObjectList.innerHTML = '<div class="list-group-item text-muted">对于"所有表"类型的任务，无需选择源对象</div>';
+                loadMoreContainer.classList.add('d-none');
+                return;
+            }
+            
+            // 恢复源对象选择
+            sourceObjectList.disabled = false;
+            
+            // 清空源对象选择
+            sourceObjectList.innerHTML = '<div class="list-group-item text-muted">请先选择源对象</div>';
+            
+            // 如果选择了Schema且选择了任务类型，自动获取对象列表
+            if (sourceSchemaSelect.value && this.value) {
+                getSourceObject();
+            }
+        });
+        
         // 获取目标Schema函数
         async function getTargetSchema() {
             if (!postgresConnectionSelect.value) {
                 alert('请先选择PolarDB-PG连接');
+                return;
+            }
+            
+            if (!postgresDatabaseSelect.value) {
+                alert('请先选择PostgreSQL数据库');
                 return;
             }
             
@@ -256,6 +375,7 @@
                 const requestData = {
                     connection_id: postgresConnectionSelect.value,
                     type: 'postgres',
+                    database: postgresDatabaseSelect.value,
                     limit: 200  // 限制返回200条数据
                 };
                 
@@ -266,9 +386,58 @@
                 
                 if (data.status === 'success') {
                     targetSchemaSelect.innerHTML = '<option value="">请选择Schema</option>';
-                    data.schemas.forEach(schema => {
-                        targetSchemaSelect.innerHTML += `<option value="${schema}">${schema}</option>`;
-                    });
+                    
+                    // 如果有结果，按分类排序显示
+                    if (data.schemas && data.schemas.length > 0) {
+                        // 首先显示public模式
+                        if (data.schemas.includes('public')) {
+                            targetSchemaSelect.innerHTML += `<option value="public">public</option>`;
+                        }
+                        
+                        // 添加其他用户模式（不包括pg_开头的系统模式）
+                        const userSchemas = data.schemas.filter(schema => 
+                            schema !== 'public' && 
+                            !schema.startsWith('pg_') && 
+                            schema !== 'information_schema'
+                        );
+                        
+                        if (userSchemas.length > 0) {
+                            // 添加用户模式分隔符
+                            const userOptgroup = document.createElement('optgroup');
+                            userOptgroup.label = '用户模式';
+                            
+                            userSchemas.forEach(schema => {
+                                const option = document.createElement('option');
+                                option.value = schema;
+                                option.textContent = schema;
+                                userOptgroup.appendChild(option);
+                            });
+                            
+                            targetSchemaSelect.appendChild(userOptgroup);
+                        }
+                        
+                        // 添加系统模式
+                        const systemSchemas = data.schemas.filter(schema => 
+                            schema.startsWith('pg_') || 
+                            schema === 'information_schema'
+                        );
+                        
+                        if (systemSchemas.length > 0) {
+                            // 添加系统模式分隔符
+                            const systemOptgroup = document.createElement('optgroup');
+                            systemOptgroup.label = '系统模式';
+                            
+                            systemSchemas.forEach(schema => {
+                                const option = document.createElement('option');
+                                option.value = schema;
+                                option.textContent = schema;
+                                systemOptgroup.appendChild(option);
+                            });
+                            
+                            targetSchemaSelect.appendChild(systemOptgroup);
+                        }
+                    }
+                    
                     targetSchemaSelect.disabled = false;
                     
                     // 显示数据加载提示
@@ -293,6 +462,173 @@
             }
         }
         
+        // 当PostgreSQL连接选择变化时，自动获取数据库列表
+        postgresConnectionSelect.addEventListener('change', function() {
+            // 清空PostgreSQL数据库选择
+            postgresDatabaseSelect.innerHTML = '<option value="">请选择数据库</option>';
+            
+            // 清空目标Schema选择
+            targetSchemaSelect.innerHTML = '<option value="">请先选择数据库</option>';
+            
+            // 如果选择了连接，自动获取数据库列表
+            if (this.value) {
+                getPostgresDatabases();
+            }
+        });
+        
+        // 当PostgreSQL数据库选择变化时，自动获取Schema列表
+        postgresDatabaseSelect.addEventListener('change', function() {
+            // 清空目标Schema选择
+            targetSchemaSelect.innerHTML = '<option value="">请选择Schema</option>';
+            
+            // 如果选择了数据库，自动获取Schema列表
+            if (this.value) {
+                getTargetSchema();
+            }
+        });
+        
+        // 获取PostgreSQL数据库列表
+        async function getPostgresDatabases() {
+            if (!postgresConnectionSelect.value) {
+                alert('请先选择PolarDB-PG连接');
+                return;
+            }
+            
+            // 显示数据库选择状态
+            postgresDatabaseSelect.innerHTML = '<option value="">加载中...</option>';
+            postgresDatabaseSelect.disabled = true;
+            
+            try {
+                const requestData = {
+                    connection_id: postgresConnectionSelect.value
+                };
+                
+                const data = await fetchData('{% url "migration_app:get_postgres_databases" %}', requestData);
+                
+                if (data.status === 'success') {
+                    postgresDatabaseSelect.innerHTML = '<option value="">请选择数据库</option>';
+                    
+                    // 按字母顺序排序
+                    if (data.databases && data.databases.length > 0) {
+                        data.databases.forEach(db => {
+                            postgresDatabaseSelect.innerHTML += `<option value="${db}">${db}</option>`;
+                        });
+                    }
+                    
+                    postgresDatabaseSelect.disabled = false;
+                } else {
+                    throw new Error(data.message || '获取数据库列表失败');
+                }
+            } catch (error) {
+                postgresDatabaseSelect.innerHTML = '<option value="">加载失败，请重试</option>';
+                postgresDatabaseSelect.disabled = false;
+                alert('获取PostgreSQL数据库失败：' + error.message);
+            }
+        }
+        
+        // 绑定加载更多按钮事件
+        loadMoreBtn.addEventListener('click', function() {
+            loadMoreObjects();
+        });
+        
+        // 加载更多对象
+        async function loadMoreObjects() {
+            if (!oracleConnectionSelect.value) {
+                alert('请先选择Oracle连接');
+                return;
+            }
+            
+            if (!sourceSchemaSelect.value) {
+                alert('请先选择源Schema');
+                return;
+            }
+            
+            if (!taskTypeSelect.value) {
+                alert('请先选择任务类型');
+                return;
+            }
+            
+            // 显示加载状态
+            showLoading(sourceObjectLoading);
+            loadMoreBtn.disabled = true;
+            
+            try {
+                const searchTerm = sourceObjectSearch.value.trim();
+                const requestData = {
+                    connection_id: oracleConnectionSelect.value,
+                    schema: sourceSchemaSelect.value,
+                    object_type: taskTypeSelect.value,
+                    search_term: searchTerm,
+                    limit: 500,  // 每次加载500条
+                    offset: currentOffset
+                };
+                
+                console.log("加载更多对象，请求数据:", requestData);
+                
+                const data = await fetchData('{% url "migration_app:get_database_objects" %}', requestData);
+                
+                console.log("加载更多对象，响应数据:", data);
+                
+                if (data.status === 'success') {
+                    // 移除加载提示选项
+                    Array.from(sourceObjectList.children).forEach(item => {
+                        if (item.classList.contains('text-muted') && item.textContent.includes('加载了')) {
+                            item.remove();
+                        }
+                    });
+                    
+                    if (!data.objects || data.objects.length === 0) {
+                        // 无更多数据，隐藏加载更多按钮
+                        loadMoreContainer.classList.add('d-none');
+                    } else {
+                        // 添加新加载的对象
+                        data.objects.forEach(obj => {
+                            const item = document.createElement('div');
+                            item.className = 'list-group-item';
+                            item.innerHTML = `
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="${obj}" id="obj-${obj}">
+                                    <label class="form-check-label" for="obj-${obj}">${obj}</label>
+                                </div>
+                            `;
+                            sourceObjectList.appendChild(item);
+                        });
+                        
+                        // 更新分页状态
+                        currentOffset += data.objects.length;
+                        loadedObjectCount += data.objects.length;
+                        totalObjectCount = data.total;
+                        hasMoreObjects = data.has_more;
+                        
+                        loadStatus.textContent = `已加载 ${loadedObjectCount}/${totalObjectCount} 条记录`;
+                        
+                        // 如果没有更多数据，隐藏加载更多按钮
+                        if (!hasMoreObjects) {
+                            loadMoreBtn.classList.add('d-none');
+                            loadStatus.textContent = `已加载全部 ${totalObjectCount} 条记录`;
+                        } else {
+                            loadMoreBtn.classList.remove('d-none');
+                        }
+                    }
+                    
+                    // 重新应用搜索过滤
+                    if (searchTerm) {
+                        filterObjects(searchTerm);
+                    }
+                } else {
+                    throw new Error(data.message || '获取更多对象失败');
+                }
+            } catch (error) {
+                console.error("加载更多对象异常:", error);
+                alert('加载更多对象失败：' + error.message);
+            } finally {
+                // 隐藏加载指示器
+                hideLoading(sourceObjectLoading);
+                // 重新启用按钮
+                loadMoreBtn.disabled = false;
+            }
+        }
+        
         // 获取源对象函数
         async function getSourceObject() {
             if (!oracleConnectionSelect.value) {
@@ -305,56 +641,91 @@
                 return;
             }
             
-            if (!taskTypeSelect.value || taskTypeSelect.value === 'all_tables') {
-                alert('请选择有效的任务类型（不能是所有表）');
+            if (!taskTypeSelect.value) {
+                alert('请先选择任务类型');
                 return;
             }
             
+            if (taskTypeSelect.value === 'all_tables') {
+                sourceObjectList.innerHTML = '<div class="list-group-item text-muted">对于"所有表"类型的任务，无需选择源对象</div>';
+                loadMoreContainer.classList.add('d-none');
+                return;
+            }
+            
+            // 重置分页状态
+            currentOffset = 0;
+            hasMoreObjects = false;
+            totalObjectCount = 0;
+            loadedObjectCount = 0;
+            
             // 显示加载状态
             showLoading(sourceObjectLoading);
-            sourceObjectSelect.innerHTML = '<option value="">加载中...</option>';
-            sourceObjectSelect.disabled = true;
+            sourceObjectList.innerHTML = '<div class="list-group-item text-muted">加载中...</div>';
+            loadMoreContainer.classList.add('d-none');
             
             try {
                 const requestData = {
                     connection_id: oracleConnectionSelect.value,
                     schema: sourceSchemaSelect.value,
-                    object_type: taskTypeSelect.value,
-                    limit: 300  // 限制返回300条数据
+                    object_type: taskTypeSelect.value
                 };
                 
                 // 禁用按钮避免重复点击
                 getSourceObjectBtn.disabled = true;
                 
+                console.log("获取源对象，请求数据:", requestData);
+                
                 const data = await fetchData('{% url "migration_app:get_database_objects" %}', requestData);
                 
+                console.log("获取源对象，响应数据:", data);
+                console.log(`获取到 ${data.objects ? data.objects.length : 0} 个对象，总数: ${data.total}`);
+                
                 if (data.status === 'success') {
-                    sourceObjectSelect.innerHTML = '';
+                    sourceObjectList.innerHTML = '';
                     
-                    if (data.objects.length === 0) {
-                        const optionElement = document.createElement('option');
-                        optionElement.textContent = '没有找到任何对象';
-                        sourceObjectSelect.appendChild(optionElement);
+                    if (!data.objects || data.objects.length === 0) {
+                        sourceObjectList.innerHTML = '<div class="list-group-item text-muted">没有找到任何对象</div>';
+                        loadMoreContainer.classList.add('d-none');
+                        console.log("未找到任何对象");
                     } else {
+                        console.log(`首个对象: ${data.objects[0]}`);
                         data.objects.forEach(obj => {
-                            sourceObjectSelect.innerHTML += `<option value="${obj}">${obj}</option>`;
+                            const item = document.createElement('div');
+                            item.className = 'list-group-item';
+                            item.innerHTML = `
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="${obj}" id="obj-${obj}">
+                                    <label class="form-check-label" for="obj-${obj}">${obj}</label>
+                                </div>
+                            `;
+                            sourceObjectList.appendChild(item);
                         });
                         
-                        // 显示数据加载提示
-                        if (data.has_more) {
-                            const optionElement = document.createElement('option');
-                            optionElement.disabled = true;
-                            optionElement.textContent = `加载了 ${data.count}/${data.total} 条记录`;
-                            sourceObjectSelect.appendChild(optionElement);
+                        // 更新分页状态
+                        loadedObjectCount = data.objects.length;
+                        totalObjectCount = data.total;
+                        
+                        // 显示数据加载完成状态
+                        loadMoreContainer.classList.remove('d-none');
+                        loadMoreBtn.classList.add('d-none');
+                        loadStatus.textContent = `已加载全部 ${totalObjectCount} 条记录`;
+                        
+                        // 如果有搜索词，立即应用本地过滤
+                        const searchTerm = sourceObjectSearch.value.trim();
+                        if (searchTerm) {
+                            filterObjects(searchTerm);
                         }
                     }
-                    sourceObjectSelect.disabled = false;
+                    
+                    // 更新已选择的对象显示
+                    updateSelectedObjects();
                 } else {
                     throw new Error(data.message || '获取对象列表失败');
                 }
             } catch (error) {
-                sourceObjectSelect.innerHTML = '<option value="">加载失败，请重试</option>';
-                sourceObjectSelect.disabled = false;
+                console.error("获取源对象异常:", error);
+                sourceObjectList.innerHTML = '<div class="list-group-item text-muted">加载失败，请重试</div>';
+                loadMoreContainer.classList.add('d-none');
                 alert('获取源对象失败：' + error.message);
             } finally {
                 // 隐藏加载指示器
@@ -363,6 +734,70 @@
                 getSourceObjectBtn.disabled = false;
             }
         }
+        
+        // 前端过滤对象
+        function filterObjects(searchTerm) {
+            const items = sourceObjectList.querySelectorAll('.list-group-item');
+            const lowercaseSearchTerm = searchTerm.toLowerCase();
+            
+            items.forEach(item => {
+                const label = item.querySelector('.form-check-label');
+                if (label) {
+                    const text = label.textContent.toLowerCase();
+                    if (text.includes(lowercaseSearchTerm)) {
+                        item.style.display = '';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                }
+            });
+        }
+
+        // 更新已选择对象的显示
+        function updateSelectedObjects() {
+            const selectedCheckboxes = sourceObjectList.querySelectorAll('.form-check-input:checked');
+            selectedObjectsList.innerHTML = '';
+            
+            if (selectedCheckboxes.length === 0) {
+                selectedObjectsList.innerHTML = '<span class="text-muted">未选择任何对象</span>';
+                return;
+            }
+            
+            selectedCheckboxes.forEach(checkbox => {
+                const badge = document.createElement('span');
+                badge.className = 'badge bg-primary me-1 mb-1';
+                badge.innerHTML = `${checkbox.value} <i class="fas fa-check ms-1"></i>`;
+                selectedObjectsList.appendChild(badge);
+            });
+        }
+        
+        // 监听源对象选择变化
+        sourceObjectList.addEventListener('change', function(e) {
+            if (e.target.matches('.form-check-input')) {
+                updateSelectedObjects();
+            }
+        });
+
+        // 搜索框输入时触发本地搜索
+        sourceObjectSearch.addEventListener('input', function() {
+            const searchTerm = this.value.trim();
+            filterObjects(searchTerm);
+        });
+
+        // 搜索按钮点击事件
+        sourceObjectSearchBtn.addEventListener('click', function() {
+            const searchTerm = sourceObjectSearch.value.trim();
+            filterObjects(searchTerm);
+        });
+
+        // 搜索框回车键触发搜索
+        sourceObjectSearch.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const searchTerm = this.value.trim();
+                filterObjects(searchTerm);
+            }
+        });
         
         // 绑定按钮事件
         getSourceSchemaBtn.addEventListener('click', function() {
@@ -381,36 +816,91 @@
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            if (!this.checkValidity()) {
-                this.reportValidity();
+            // 基础验证
+            if (!form.checkValidity()) {
+                form.reportValidity();
                 return;
             }
             
-            // 如果是"所有表"类型的任务，不需要源对象
-            if (taskTypeSelect.value === 'all_tables') {
-                sourceObjectSelect.removeAttribute('required');
+            // 附加验证
+            if (!oracleConnectionSelect.value) {
+                alert('请选择Oracle数据库连接');
+                oracleConnectionSelect.focus();
+                return;
             }
             
-            // 获取所有选中的源对象
-            const selectedObjects = Array.from(sourceObjectSelect.selectedOptions).map(option => option.value);
+            if (!postgresConnectionSelect.value) {
+                alert('请选择PolarDB-PG数据库连接');
+                postgresConnectionSelect.focus();
+                return;
+            }
             
+            if (!postgresDatabaseSelect.value) {
+                alert('请选择PostgreSQL数据库');
+                postgresDatabaseSelect.focus();
+                return;
+            }
+            
+            if (!sourceSchemaSelect.value) {
+                alert('请选择源Schema');
+                sourceSchemaSelect.focus();
+                return;
+            }
+            
+            if (!targetSchemaSelect.value) {
+                alert('请选择目标Schema');
+                targetSchemaSelect.focus();
+                return;
+            }
+            
+            if (taskTypeSelect.value !== 'all_tables') {
+                const selectedOptions = Array.from(sourceObjectList.querySelectorAll('.form-check-input:checked'));
+                if (selectedOptions.length === 0 || (selectedOptions.length === 1 && selectedOptions[0].value === '')) {
+                    alert('请选择源对象');
+                    sourceObjectList.focus();
+                    return;
+                }
+            }
+            
+            const submitBtn = document.querySelector('button[type="submit"]');
+            const originalBtnText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span> 创建中...';
+            submitBtn.disabled = true;
+            
+            // 获取表单数据
             const taskData = {
                 name: document.getElementById('task-name').value,
                 task_type: taskTypeSelect.value,
                 oracle_connection: oracleConnectionSelect.value,
                 postgres_connection: postgresConnectionSelect.value,
+                postgres_database: postgresDatabaseSelect.value,
                 source_schema: sourceSchemaSelect.value,
                 target_schema: targetSchemaSelect.value,
-                source_object: taskTypeSelect.value === 'all_tables' ? '' : selectedObjects.join(',')
+                conflict_strategy: document.getElementById('conflict-strategy').value
             };
             
-            // 显示加载状态
-            const submitBtn = form.querySelector('button[type="submit"]');
-            const originalBtnText = submitBtn.innerHTML;
-            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> 创建中...';
-            submitBtn.disabled = true;
+            // 添加源对象 (如果适用)
+            if (taskTypeSelect.value !== 'all_tables') {
+                // 获取所有选中的源对象，排除禁用选项和空值
+                const selectedOptions = Array.from(sourceObjectList.querySelectorAll('.form-check-input:checked'))
+                    .filter(option => option.value && !option.disabled);
+                
+                // 获取所有选中的对象值
+                const selectedValues = selectedOptions.map(option => option.value);
+                console.log('选中的对象值:', selectedValues);
+                
+                // 设置source_objects字段
+                taskData.source_objects = selectedValues;
+                console.log('设置后的source_objects:', taskData.source_objects);
+                
+                // 如果只选择了一个对象，同时设置source_object字段
+                if (selectedValues.length === 1) {
+                    taskData.source_object = selectedValues[0];
+                }
+            }
             
             try {
+                console.log('提交的任务数据:', taskData);
                 const data = await fetchData('{% url "migration_app:create_task" %}', taskData);
                 
                 if (data.status === 'success') {

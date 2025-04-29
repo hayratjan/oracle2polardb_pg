@@ -1,4 +1,5 @@
 {% extends 'migration_app/dashboard_base.html' %}
+{% load migration_extras %}
 
 {% block title %}任务详情 - {{ task.name }}{% endblock %}
 
@@ -23,6 +24,45 @@
     </div>
 </div>
 
+<!-- 冲突处理策略模态框 -->
+<div class="modal fade" id="conflictStrategyModal" tabindex="-1" aria-labelledby="conflictStrategyModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="conflictStrategyModalLabel">选择冲突处理策略</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group mb-3">
+                    <label for="conflict-strategy-select" class="form-label">冲突处理策略</label>
+                    <select class="form-select" id="conflict-strategy-select">
+                        <option value="error" {% if task.conflict_strategy == 'error' %}selected{% endif %}>遇到冲突时报错</option>
+                        <option value="replace" {% if task.conflict_strategy == 'replace' %}selected{% endif %}>删除并替换已存在对象</option>
+                        <option value="skip" {% if task.conflict_strategy == 'skip' %}selected{% endif %}>跳过已存在对象</option>
+                        <option value="append" {% if task.conflict_strategy == 'append' %}selected{% endif %}>追加数据（仅适用于表）</option>
+                        <option value="truncate" {% if task.conflict_strategy == 'truncate' %}selected{% endif %}>清空表并重新加载数据</option>
+                    </select>
+                    <div class="form-text">
+                        设置当目标Schema中已存在同名对象时如何处理。
+                    </div>
+                </div>
+                
+                <div class="form-group mb-3">
+                    <label for="postgres-database-input" class="form-label">PostgreSQL数据库名称（可选）</label>
+                    <input type="text" class="form-control" id="postgres-database-input" placeholder="留空将使用默认数据库">
+                    <div class="form-text">
+                        指定要连接的PostgreSQL数据库名称，留空则使用连接配置中的默认数据库。
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="confirm-start-task-btn">确认启动</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="card mb-4">
     <div class="card-header">
         <i class="fas fa-info-circle me-1"></i> 基本信息
@@ -41,10 +81,38 @@
                 <div class="mb-3">
                     <h5 class="mb-1">源信息</h5>
                     <p class="mb-0">{{ task.oracle_connection.name }} / {{ task.source_schema }}{% if task.source_object %}.{{ task.source_object }}{% endif %}</p>
+                    {% if task.source_objects %}
+                    <div class="mt-2">
+                        <h6 class="mb-1">多个源对象：</h6>
+                        <div>
+                            {% with source_objects_list=task.source_objects|split:"," %}
+                            {% for obj in source_objects_list %}
+                            {% if obj and obj|length > 0 %}
+                            <span class="badge {% if obj == task.source_object %}bg-primary{% else %}bg-secondary{% endif %} me-1 mb-1">{{ obj }}</span>
+                            {% endif %}
+                            {% endfor %}
+                            {% endwith %}
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
                 <div class="mb-3">
                     <h5 class="mb-1">目标信息</h5>
-                    <p class="mb-0">{{ task.postgres_connection.name }} / {{ task.target_schema }}{% if task.source_object %}.{{ task.source_object }}{% endif %}</p>
+                    <p class="mb-0">{{ task.postgres_connection.name }} / {{ task. }} / {{ task.target_schema }}{% if task.source_object %}.{{ task.source_object }}{% endif %}</p>
+                </div>
+                <div class="mb-3">
+                    <h5 class="mb-1">冲突处理策略</h5>
+                    <p class="mb-0">
+                        {% if task.conflict_strategy == 'error' %}
+                        <span class="badge bg-danger">遇到冲突时报错</span>
+                        {% elif task.conflict_strategy == 'replace' %}
+                        <span class="badge bg-warning">删除并替换已存在对象</span>
+                        {% elif task.conflict_strategy == 'skip' %}
+                        <span class="badge bg-info">跳过已存在对象</span>
+                        {% elif task.conflict_strategy == 'append' %}
+                        <span class="badge bg-success">追加数据（仅适用于表）</span>
+                        {% endif %}
+                    </p>
                 </div>
             </div>
             <div class="col-md-6">
@@ -69,9 +137,36 @@
 
                 <div class="mb-3">
                     <h5 class="mb-1">进度</h5>
-                    <div class="progress">
-                        <div id="task-progress" class="progress-bar" role="progressbar" style="width: {{ task.progress }}%;" aria-valuenow="{{ task.progress }}" aria-valuemin="0" aria-valuemax="100">{{ task.progress }}%</div>
+                    <div class="progress mb-2">
+                        <div id="task-progress" class="progress-bar" role="progressbar" style="width: {{ task.progress }}%;" aria-valuenow="{{ task.progress }}" aria-valuemin="0" aria-valuemax="100">
+                            {{ task.progress|floatformat:2 }}%
+                        </div>
                     </div>
+                    {% if task.task_type == 'view_to_table' and task.source_objects %}
+                    <div class="table-progress-container">
+                        <h6 class="mb-2">各视图迁移进度</h6>
+                        {% with view_list=task.source_objects|split:"," %}
+                        {% for view in view_list %}
+                        {% if view.strip %}
+                        <div class="mb-2">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <span class="small">{{ view.strip }}</span>
+                                <span class="small view-progress-text" id="view-progress-{{ view.strip|slugify }}">0%</span>
+                            </div>
+                            <div class="progress" style="height: 8px;">
+                                <div class="progress-bar view-progress-bar" id="view-progress-bar-{{ view.strip|slugify }}" 
+                                     role="progressbar" style="width: 0%;" 
+                                     aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                            <div class="view-log-container mt-1" id="view-log-{{ view.strip|slugify }}" style="display: none;">
+                                <pre class="small bg-light p-2 mb-0" style="max-height: 100px; overflow: auto;"></pre>
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% endfor %}
+                        {% endwith %}
+                    </div>
+                    {% endif %}
                 </div>
                 
                 <div class="mb-3">
@@ -87,9 +182,9 @@
         </div>
         
         <div class="mt-4">
-            {% if task.status == 'pending' or task.status == 'failed' or task.status == 'canceled' %}
+            {% if task.status == 'pending' or task.status == 'failed' or task.status == 'canceled' or task.status == 'completed' %}
             <button id="start-task-btn" class="btn btn-primary me-2" data-task-id="{{ task.id }}">
-                <i class="fas fa-play me-1"></i> 启动任务
+                <i class="fas fa-play me-1"></i> {% if task.status == 'completed' %}重新运行{% else %}启动任务{% endif %}
             </button>
             {% endif %}
             
@@ -185,6 +280,66 @@
     </div>
 </div>
 {% endif %}
+
+{% if task.task_type == 'view_to_table' %}
+<div class="mb-3">
+    <h6 class="text-muted">视图迁移状态</h6>
+    <div class="card">
+        <div class="card-body p-0">
+            {% if task.source_objects %}
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>视图名称</th>
+                            <th>状态</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% with view_list=task.source_objects|split:"," %}
+                        {% for view in view_list %}
+                        {% if view.strip %}
+                        <tr>
+                            <td>{{ view.strip }}</td>
+                            <td>
+                                {% if task.log and '=== 部分视图迁移成功:' in task.log %}
+                                    {% if '成功视图: ' in task.log and view.strip in task.log|cut:'成功视图: '|cut:'失败视图: ' %}
+                                    <span class="badge bg-success">迁移成功</span>
+                                    {% elif '失败视图: ' in task.log and view.strip in task.log|cut:'成功视图: '|cut:'失败视图: ' %}
+                                    <span class="badge bg-danger">迁移失败</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">未知状态</span>
+                                    {% endif %}
+                                {% elif task.status == 'completed' %}
+                                <span class="badge bg-success">迁移成功</span>
+                                {% elif task.status == 'failed' %}
+                                <span class="badge bg-danger">迁移失败</span>
+                                {% elif task.status == 'running' %}
+                                {% if task.source_object == view.strip %}
+                                <span class="badge bg-primary">正在迁移</span>
+                                {% else %}
+                                <span class="badge bg-secondary">等待迁移</span>
+                                {% endif %}
+                                {% else %}
+                                <span class="badge bg-secondary">未开始</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endif %}
+                        {% endfor %}
+                        {% endwith %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="p-3">
+                <p class="mb-0">无多视图迁移</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}
@@ -206,6 +361,25 @@
         }
     }
 
+    // 显示通知消息
+    function showToast(message, icon = 'info') {
+        // 确保页面上有SweetAlert2
+        if (typeof Swal !== 'undefined') {
+            Swal.fire({
+                title: message,
+                icon: icon,
+                toast: true,
+                position: 'top-end',
+                showConfirmButton: false,
+                timer: 3000,
+                timerProgressBar: true
+            });
+        } else {
+            // 如果没有SweetAlert2，回退到普通警告
+            alert(message);
+        }
+    }
+
     let isLoading = false;
     let isAutoRefreshing = false;
     let refreshTimer = null;
@@ -219,6 +393,34 @@
         return date.toLocaleString();
     }
     
+    // 更新视图进度
+    function updateViewProgress(viewName, progress, log) {
+        const viewId = viewName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const progressElement = $(`#view-progress-${viewId}`);
+        const progressBarElement = $(`#view-progress-bar-${viewId}`);
+        const logContainer = $(`#view-log-${viewId}`);
+        
+        if (progressElement.length && progressBarElement.length) {
+            const formattedProgress = progress.toFixed(2);
+            progressElement.text(formattedProgress + '%');
+            progressBarElement.css('width', progress + '%')
+                .attr('aria-valuenow', progress);
+            
+            // 更新日志
+            if (log && log.length > 0) {
+                logContainer.find('pre').text(log.join('\n'));
+                logContainer.show();
+            }
+            
+            // 根据进度设置进度条颜色
+            if (progress === 100) {
+                progressBarElement.removeClass('bg-primary').addClass('bg-success');
+            } else if (progress > 0) {
+                progressBarElement.removeClass('bg-success').addClass('bg-primary');
+            }
+        }
+    }
+
     // 更新任务状态UI
     function updateTaskStatusUI(data) {
         let statusHTML = '';
@@ -239,9 +441,19 @@
         
         $('#task-status').html(statusHTML);
         
-        // 更新进度条
+        // 更新总进度条
         const progress = data.progress || 0;
-        $('#task-progress').css('width', progress + '%').attr('aria-valuenow', progress).text(progress + '%');
+        const formattedProgress = progress.toFixed(2);
+        $('#task-progress').css('width', progress + '%')
+            .attr('aria-valuenow', progress)
+            .text(formattedProgress + '%');
+        
+        // 更新各视图的进度
+        if (data.view_progress) {
+            Object.entries(data.view_progress).forEach(([viewName, viewData]) => {
+                updateViewProgress(viewName, viewData.progress || 0, viewData.log || []);
+            });
+        }
         
         // 更新日志
         if (data.log) {
@@ -254,12 +466,24 @@
             $('#task-updated-at').text(formatDateTime(data.completed_at));
         }
         
-        // 当任务完成或失败时停止自动刷新
+        // 当任务状态改变时更新按钮显示
         if (data.status === 'completed' || data.status === 'failed' || data.status === 'canceled' || data.status === 'partial') {
+            // 停止自动刷新
             stopAutoRefresh();
             
-            // 刷新页面以显示按钮状态
-            location.reload();
+            // 如果状态是canceled且当前页面显示取消按钮，立即刷新页面
+            if (data.status === 'canceled' && $('#cancel-task-btn').length > 0) {
+                location.reload();
+                return;
+            }
+            
+            // 对于其他完成状态，如果按钮状态与当前状态不匹配，也刷新页面
+            const hasStartBtn = $('#start-task-btn').length > 0;
+            const hasCancelBtn = $('#cancel-task-btn').length > 0;
+            
+            if ((data.status !== 'running' && !hasStartBtn) || (data.status === 'running' && !hasCancelBtn)) {
+                location.reload();
+            }
         }
     }
     
@@ -271,12 +495,26 @@
         $('#refresh-icon').addClass('fa-spin');
         
         try {
-            const response = await fetch(`{% url 'migration_app:task_status' task.id %}`);
+            debugLog('正在获取任务状态...');
+            const response = await fetch(`{% url 'migration_app:task_status' task.id %}?t=${new Date().getTime()}`);
             const data = await response.json();
+            
+            debugLog(`获取到任务状态: ${data.status}, 进度: ${data.progress}%`);
+            
+            // 检查当前状态是否为running且返回的状态为canceled
+            const currentStatusElement = $('#task-status .badge');
+            const isCurrentlyRunning = currentStatusElement.length > 0 && currentStatusElement.hasClass('bg-primary');
+            
+            if (isCurrentlyRunning && data.status === 'canceled') {
+                debugLog('任务已被取消，刷新页面...');
+                location.reload();
+                return;
+            }
             
             updateTaskStatusUI(data);
         } catch (error) {
             console.error('获取任务状态失败:', error);
+            debugLog(`获取任务状态失败: ${error}`, 'error');
         } finally {
             isLoading = false;
             $('#refresh-icon').removeClass('fa-spin');
@@ -319,12 +557,37 @@
             const csrfToken = '{{ csrf_token }}';
             debugLog(`CSRF Token: ${csrfToken}`);
             
+            // 添加冲突处理策略
+            const conflictStrategy = document.getElementById('conflict-strategy-select').value;
+            debugLog(`冲突处理策略: ${conflictStrategy}`);
+            
+            // 获取PostgreSQL数据库名称
+            const postgresDatabase = document.getElementById('postgres-database-input').value.trim();
+            debugLog(`PostgreSQL数据库名称: ${postgresDatabase || '未指定（使用默认值）'}`);
+            
+            // 如果未指定PostgreSQL数据库，添加调试信息
+            if (!postgresDatabase) {
+                debugLog("未指定PostgreSQL数据库，将使用默认数据库");
+            }
+            
+            const requestBody = {
+                conflict_strategy: conflictStrategy
+            };
+            
+            // 如果指定了PostgreSQL数据库名称，则添加到请求中
+            if (postgresDatabase) {
+                requestBody.postgres_database = postgresDatabase;
+            }
+            
+            debugLog(`请求体: ${JSON.stringify(requestBody)}`);
+            
             const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-CSRFToken': csrfToken
-                }
+                },
+                body: JSON.stringify(requestBody)
             });
             
             debugLog(`请求状态: ${response.status} ${response.statusText}`);
@@ -343,9 +606,15 @@
             }
             
             if (data.status === 'success') {
-                debugLog('启动任务成功，准备刷新页面', 'success');
-                // 刷新页面
-                location.reload();
+                debugLog('启动任务成功，准备更新状态', 'success');
+                // 先更新UI状态为等待执行，不立即刷新页面
+                $('#task-status').html('<span class="badge bg-warning">等待执行</span>');
+                
+                // 启用自动刷新以监控状态变化
+                startAutoRefresh();
+                
+                // 显示成功消息
+                showToast('任务已成功启动，正在等待执行', 'success');
             } else {
                 debugLog(`启动任务失败: ${data.message}`, 'error');
                 alert('启动任务失败: ' + data.message);
@@ -364,27 +633,86 @@
         }
         
         try {
+            debugLog('发送取消任务请求...');
+            
+            // 获取CSRF Token
+            let csrfToken;
+            const csrfInput = document.querySelector('[name=csrfmiddlewaretoken]');
+            if (csrfInput) {
+                csrfToken = csrfInput.value;
+            } else {
+                // 尝试从cookie中获取
+                const name = 'csrftoken';
+                const value = `; ${document.cookie}`;
+                const parts = value.split(`; ${name}=`);
+                if (parts.length === 2) {
+                    csrfToken = parts.pop().split(';').shift();
+                }
+            }
+            
+            if (!csrfToken) {
+                throw new Error('无法获取CSRF Token');
+            }
+            
+            debugLog(`CSRF Token: ${csrfToken}`);
+            
             const response = await fetch(`{% url 'migration_app:cancel_task' task.id %}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-CSRFToken': '{{ csrf_token }}'
+                    'X-CSRFToken': csrfToken
                 }
             });
             
-            const data = await response.json();
+            debugLog(`响应状态: ${response.status}`);
+            const responseText = await response.text();
+            debugLog(`响应内容: ${responseText}`);
             
-            if (data.status === 'success') {
-                alert('任务已标记为取消，请等待系统处理');
+            let data;
+            try {
+                data = JSON.parse(responseText);
+                debugLog(`解析的响应数据: ${JSON.stringify(data)}`);
+            } catch (parseError) {
+                debugLog(`解析响应失败: ${parseError}`, 'error');
+                throw new Error('响应解析失败');
+            }
+            
+            if (data.status === 'success' || data.status === 'warning') {
+                debugLog('取消任务请求成功，更新UI状态', 'success');
                 
-                // 刷新页面
+                // 立即更新UI状态
+                $('#task-status').html('<span class="badge bg-secondary">已取消</span>');
+                $('#cancel-task-btn').hide();
+                $('#start-task-btn').show();
+                
+                // 更新进度条
+                $('#task-progress').css('width', '0%')
+                    .attr('aria-valuenow', 0)
+                    .text('0%');
+                
+                // 更新视图进度
+                if (data.view_progress) {
+                    Object.entries(data.view_progress).forEach(([viewName, viewData]) => {
+                        updateViewProgress(viewName, 0, viewData.log || []);
+                    });
+                }
+                
+                // 显示成功消息
+                showToast(data.message || '任务已成功取消', 'success');
+                
+                // 停止自动刷新
+                stopAutoRefresh();
+                
+                // 立即刷新页面以确保状态更新
                 location.reload();
             } else {
-                alert('取消任务失败: ' + data.message);
+                debugLog(`取消任务失败: ${data.message}`, 'error');
+                showToast(`取消任务失败: ${data.message}`, 'error');
             }
         } catch (error) {
             console.error('取消任务请求失败:', error);
-            alert('取消任务请求失败');
+            debugLog(`取消任务请求失败: ${error}`, 'error');
+            showToast('取消任务请求失败，请查看调试信息', 'error');
         }
     }
     
@@ -406,6 +734,17 @@
         // 启动任务按钮
         $('#start-task-btn').click(function() {
             debugLog('点击了启动任务按钮');
+            // 显示冲突策略选择模态框
+            const modal = new bootstrap.Modal(document.getElementById('conflictStrategyModal'));
+            modal.show();
+        });
+        
+        // 确认启动任务按钮
+        $('#confirm-start-task-btn').click(function() {
+            debugLog('点击了确认启动任务按钮');
+            // 隐藏模态框并启动任务
+            const modal = bootstrap.Modal.getInstance(document.getElementById('conflictStrategyModal'));
+            modal.hide();
             startTask();
         });
         
