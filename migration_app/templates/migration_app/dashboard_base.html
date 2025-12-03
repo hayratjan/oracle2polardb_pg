@@ -186,6 +186,11 @@
                 <i class="fas fa-plus-circle"></i> 创建任务
             </a>
         </li>
+        <li>
+            <a href="{% url 'migration_app:create_task' %}?task_type=view_to_sqlite" class="{% if request.resolver_match.url_name == 'create_task' and request.GET.task_type == 'view_to_sqlite' %}active{% endif %}">
+                <i class="fas fa-database"></i> SQLite导出
+            </a>
+        </li>
         
         <!-- 数据库管理部分 -->
         <li class="nav-item-header">数据库管理</li>
@@ -310,9 +315,6 @@
 </div>
 
 <!-- 页脚 -->
-<div class="footer">
-    <p class="mb-0">&copy; 2023 Oracle到PolarDB-PG迁移平台 | 版本 1.0.0</p>
-</div>
 
 {% endblock %}
 
