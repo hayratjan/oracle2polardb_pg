@@ -18,7 +18,7 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Initialize Oracle client
-cx_Oracle.init_oracle_client(lib_dir=r"D:\Program Files\instantclient_11_2")
+# cx_Oracle.init_oracle_client(lib_dir=r"D:\Program Files\instantclient_11_2")
 
 
 # Quick-start development settings - unsuitable for production
@@ -43,7 +43,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'migration_app',
-    'mdeditor',  # 添加Markdown编辑器支持
+    # 'mdeditor',  # 添加Markdown编辑器支持
 ]
 
 MIDDLEWARE = [
