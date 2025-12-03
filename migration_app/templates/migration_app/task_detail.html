@@ -47,6 +47,12 @@
                     </div>
                 </div>
                 
+                {% if task.task_type == 'view_to_sqlite' %}
+                <div class="alert alert-secondary">
+                    <i class="fas fa-database me-2 text-primary"></i>
+                    将把视图写入SQLite文件：<strong>{{ task.sqlite_path|default:"未配置" }}</strong>
+                </div>
+                {% else %}
                 <div class="form-group mb-3">
                     <label for="postgres-database-input" class="form-label">PostgreSQL数据库名称（可选）</label>
                     <input type="text" class="form-control" id="postgres-database-input" placeholder="留空将使用默认数据库">
@@ -54,6 +60,7 @@
                         指定要连接的PostgreSQL数据库名称，留空则使用连接配置中的默认数据库。
                     </div>
                 </div>
+                {% endif %}
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
@@ -98,7 +105,23 @@
                 </div>
                 <div class="mb-3">
                     <h5 class="mb-1">目标信息</h5>
-                    <p class="mb-0">{{ task.postgres_connection.name }} / {{ task. }} / {{ task.target_schema }}{% if task.source_object %}.{{ task.source_object }}{% endif %}</p>
+                    {% if task.task_type == 'view_to_sqlite' %}
+                    <div class="d-flex align-items-center mb-1">
+                        <span class="badge bg-info text-dark me-2">SQLite</span>
+                        <span>{{ task.sqlite_directory|default:"未设置目录" }}</span>
+                    </div>
+                    <p class="mb-0 text-muted small">
+                        输出文件：{{ task.sqlite_file_name|default:"未设置文件名" }}<br>
+                        完整路径：{{ task.sqlite_path|default:"-" }}
+                    </p>
+                    {% elif task.postgres_connection %}
+                    <p class="mb-0">
+                        {{ task.postgres_connection.name }} / {{ task.postgres_connection.database }} / {{ task.target_schema }}
+                        {% if task.source_object %}.{{ task.source_object }}{% endif %}
+                    </p>
+                    {% else %}
+                    <p class="mb-0 text-muted">未配置目标连接</p>
+                    {% endif %}
                 </div>
                 <div class="mb-3">
                     <h5 class="mb-1">冲突处理策略</h5>
@@ -142,7 +165,8 @@
                             {{ task.progress|floatformat:2 }}%
                         </div>
                     </div>
-                    {% if task.task_type == 'view_to_table' and task.source_objects %}
+                    {% if task.task_type == 'view_to_table' or task.task_type == 'view_to_sqlite' %}
+                    {% if task.source_objects %}
                     <div class="table-progress-container">
                         <h6 class="mb-2">各视图迁移进度</h6>
                         {% with view_list=task.source_objects|split:"," %}
@@ -166,6 +190,7 @@
                         {% endfor %}
                         {% endwith %}
                     </div>
+                    {% endif %}
                     {% endif %}
                 </div>
                 
@@ -281,7 +306,7 @@
 </div>
 {% endif %}
 
-{% if task.task_type == 'view_to_table' %}
+{% if task.task_type == 'view_to_table' or task.task_type == 'view_to_sqlite' %}
 <div class="mb-3">
     <h6 class="text-muted">视图迁移状态</h6>
     <div class="card">
@@ -385,6 +410,7 @@
     let refreshTimer = null;
     const taskId = {{ task.id }};
     const taskStatus = "{{ task.status }}";
+    const isSqliteTask = "{{ task.task_type }}" === "view_to_sqlite";
     
     // 格式化时间字符串
     function formatDateTime(dateTimeStr) {
@@ -561,13 +587,16 @@
             const conflictStrategy = document.getElementById('conflict-strategy-select').value;
             debugLog(`冲突处理策略: ${conflictStrategy}`);
             
-            // 获取PostgreSQL数据库名称
-            const postgresDatabase = document.getElementById('postgres-database-input').value.trim();
-            debugLog(`PostgreSQL数据库名称: ${postgresDatabase || '未指定（使用默认值）'}`);
-            
-            // 如果未指定PostgreSQL数据库，添加调试信息
-            if (!postgresDatabase) {
-                debugLog("未指定PostgreSQL数据库，将使用默认数据库");
+            let postgresDatabase = '';
+            if (!isSqliteTask) {
+                const postgresInput = document.getElementById('postgres-database-input');
+                postgresDatabase = postgresInput ? postgresInput.value.trim() : '';
+                debugLog(`PostgreSQL数据库名称: ${postgresDatabase || '未指定（使用默认值）'}`);
+                if (!postgresDatabase) {
+                    debugLog("未指定PostgreSQL数据库，将使用默认数据库");
+                }
+            } else {
+                debugLog('SQLite任务无需指定PostgreSQL数据库');
             }
             
             const requestBody = {
@@ -575,7 +604,7 @@
             };
             
             // 如果指定了PostgreSQL数据库名称，则添加到请求中
-            if (postgresDatabase) {
+            if (!isSqliteTask && postgresDatabase) {
                 requestBody.postgres_database = postgresDatabase;
             }
             
