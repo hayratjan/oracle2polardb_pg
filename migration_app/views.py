@@ -314,7 +314,8 @@ def migrate_view(task_id, postgres_database=None):
                 
                 # 创建INSERT语句
                 placeholders = ", ".join(["%s"] * len(column_names))
-                insert_sql = f"INSERT INTO public.{task.source_object.lower()} ({', '.join(['\"' + col + '\"' for col in column_names])}) VALUES ({placeholders})"
+                quoted_columns = [f'"{col}"' for col in column_names]
+                insert_sql = f"INSERT INTO public.{task.source_object.lower()} ({', '.join(quoted_columns)}) VALUES ({placeholders})"
                 
                 # 批量插入数据
                 pg_cursor.executemany(insert_sql, rows)
@@ -562,7 +563,8 @@ def migrate_table(task_id, postgres_database=None):
                 
                 # 创建INSERT语句
                 placeholders = ", ".join(["%s"] * len(column_names))
-                insert_sql = f"INSERT INTO public.{task.source_object.lower()} ({', '.join(['\"' + col + '\"' for col in column_names])}) VALUES ({placeholders})"
+                quoted_columns = [f'"{col}"' for col in column_names]
+                insert_sql = f"INSERT INTO public.{task.source_object.lower()} ({', '.join(quoted_columns)}) VALUES ({placeholders})"
                 
                 # 批量插入数据
                 pg_cursor.executemany(insert_sql, rows)
@@ -681,6 +683,31 @@ def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None
         # 对于未知类型，记录警告并返回TEXT
         logger.warning(f"未知的Oracle数据类型: {oracle_type}，将使用TEXT代替")
         return "TEXT"
+
+def convert_oracle_to_sqlite_type(oracle_type, data_length=None, data_precision=None, data_scale=None):
+    """将Oracle数据类型转换为SQLite数据类型"""
+    oracle_type = (oracle_type or '').upper()
+    
+    if oracle_type in ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'CLOB', 'NCLOB', 'LONG', 'XMLTYPE']:
+        return "TEXT"
+    if oracle_type in ['DATE', 'TIMESTAMP', 'TIMESTAMP WITH LOCAL TIME ZONE', 'TIMESTAMP WITH TIME ZONE']:
+        return "TEXT"
+    if oracle_type in ['BLOB', 'BYTEA', 'RAW', 'LONG RAW']:
+        return "BLOB"
+    if oracle_type in ['FLOAT', 'BINARY_FLOAT', 'BINARY_DOUBLE']:
+        return "REAL"
+    if oracle_type == 'NUMBER':
+        if data_scale and data_scale > 0:
+            return "REAL"
+        if data_precision and data_precision <= 10:
+            return "INTEGER"
+        return "NUMERIC"
+    if oracle_type == 'INTEGER':
+        return "INTEGER"
+    if oracle_type == 'DECIMAL':
+        return "NUMERIC"
+    
+    return "TEXT"
 
 def convert_oracle_to_pg_mview(oracle_mview_text):
     """将Oracle物化视图定义转换为PostgreSQL物化视图定义"""
