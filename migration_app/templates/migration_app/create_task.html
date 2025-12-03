@@ -10,6 +10,12 @@
 {% endblock %}
 
 {% block dashboard_content %}
+<div class="alert alert-info d-flex align-items-center mb-4" role="alert">
+    <i class="fas fa-magic me-2 fs-5"></i>
+    <div>
+        新增“视图迁移至SQLite”任务，可一键选择本地目录生成轻量级数据文件，同时优化了表单布局与交互提示。
+    </div>
+</div>
 <div class="card">
     <div class="card-header">
         <i class="fas fa-plus-circle me-1"></i> 创建新的迁移任务
@@ -33,6 +39,7 @@
                             <option value="routine">例程</option>
                             <option value="all_tables">所有表</option>
                             <option value="view_to_table">视图数据迁移到表</option>
+                            <option value="view_to_sqlite">视图数据迁移到SQLite</option>
                         </select>
                     </div>
                 </div>
@@ -46,7 +53,7 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="mb-3">
+                    <div class="mb-3 postgres-only">
                         <label for="postgres-connection" class="form-label">PolarDB-PG数据库连接</label>
                         <select class="form-select" id="postgres-connection" name="postgres_connection" required>
                             <option value="">请选择PolarDB-PG连接</option>
@@ -113,12 +120,12 @@
                         <div class="form-text">
                             选择Schema后会自动加载对象列表。<br>
                             对于"所有表"类型的任务，无需选择源对象。<br>
-                            按住Ctrl键可多选对象。
+                            勾选多个对象即可批量迁移，顺序可通过再次点击调整。
                         </div>
                     </div>
                 </div>
                 <div class="col-md-6">
-                    <div class="mb-3">
+                    <div class="mb-3 postgres-only">
                         <label for="target-schema" class="form-label">目标Schema</label>
                         <div class="mb-2">
                             <select class="form-select" id="postgres-database" name="postgres_database">
@@ -161,6 +168,45 @@
                 </div>
             </div>
 
+            <div class="row mb-4 sqlite-only d-none" id="sqlite-settings-card">
+                <div class="col-12">
+                    <div class="card border shadow-sm" style="border-style: dashed;">
+                        <div class="card-header bg-light">
+                            <i class="fas fa-save me-2 text-primary"></i> SQLite输出配置
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted small mb-4">
+                                将从Oracle视图中抽取的数据写入一个本地SQLite数据库文件。可通过下方目录选择器快速定位保存位置。
+                            </p>
+                            <div class="row g-4">
+                                <div class="col-md-6">
+                                    <label class="form-label">输出目录</label>
+                                    <div class="input-group">
+                                        <input type="text" class="form-control" id="sqlite-directory" name="sqlite_directory" placeholder="/Users/you/exports/sqlite" autocomplete="off">
+                                        <button type="button" class="btn btn-outline-secondary" id="open-directory-browser">
+                                            <i class="fas fa-folder-open me-1"></i> 浏览
+                                        </button>
+                                    </div>
+                                    <div class="form-text">选择一个有写入权限的文件夹。</div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">SQLite文件名</label>
+                                    <input type="text" class="form-control" id="sqlite-file-name" name="sqlite_file_name" placeholder="oracle_views.sqlite3" autocomplete="off">
+                                    <div class="form-text">无需包含路径，仅需文件名。</div>
+                                </div>
+                            </div>
+                            <div class="alert alert-secondary mt-4 mb-0 d-flex align-items-center" id="sqlite-preview">
+                                <i class="fas fa-info-circle me-2 text-primary"></i>
+                                <div>
+                                    <div class="small text-muted">实际保存位置预览</div>
+                                    <div class="fw-bold" id="sqlite-preview-path">请选择目录和文件名</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="text-center">
                 <button type="submit" class="btn btn-primary btn-lg">
                     <i class="fas fa-save me-1"></i> 创建任务
@@ -172,10 +218,43 @@
         </form>
     </div>
 </div>
+
+<!-- 目录浏览器 Modal -->
+<div class="modal fade" id="directoryBrowserModal" tabindex="-1" aria-labelledby="directoryBrowserLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="directoryBrowserLabel"><i class="fas fa-folder-open me-2 text-primary"></i>选择输出目录</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <div class="text-muted small">当前目录</div>
+                        <div class="fw-bold" id="directory-current-path">-</div>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="directory-go-parent">
+                        <i class="fas fa-level-up-alt me-1"></i> 返回上级
+                    </button>
+                </div>
+                <div class="list-group" id="directory-list" style="max-height: 360px; overflow-y: auto;">
+                    <div class="list-group-item text-muted">
+                        <span class="spinner-border spinner-border-sm me-2"></span> 正在加载目录...
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="directory-choose-btn" disabled>使用该目录</button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts_1 %}
 <script>
+    const defaultTaskType = "{{ default_task_type|default_if_none:''|escapejs }}";
     document.addEventListener('DOMContentLoaded', function() {
         // 获取表单元素
         const form = document.getElementById('create-task-form');
@@ -192,8 +271,27 @@
         const postgresConnectionSelect = document.getElementById('postgres-connection');
         const postgresDatabaseSelect = document.getElementById('postgres-database');
         const targetSchemaSelect = document.getElementById('target-schema');
+        const postgresSections = document.querySelectorAll('.postgres-only');
+        const sqliteSettingsCard = document.getElementById('sqlite-settings-card');
+        const sqliteDirectoryInput = document.getElementById('sqlite-directory');
+        const sqliteFileInput = document.getElementById('sqlite-file-name');
+        const sqlitePreviewPath = document.getElementById('sqlite-preview-path');
+        const openDirectoryBrowserBtn = document.getElementById('open-directory-browser');
+        const directoryModalElement = document.getElementById('directoryBrowserModal');
+        const directoryList = document.getElementById('directory-list');
+        const directoryCurrentPath = document.getElementById('directory-current-path');
+        const directoryChooseBtn = document.getElementById('directory-choose-btn');
+        const directoryGoParentBtn = document.getElementById('directory-go-parent');
+        const taskNameInput = document.getElementById('task-name');
+        const directoryModal = (window.bootstrap && bootstrap.Modal && directoryModalElement) ? new bootstrap.Modal(directoryModalElement) : null;
+        const browseDirectoryUrl = window.location.origin + '{% url "migration_app:browse_directories" %}';
+        let currentDirectoryPath = '';
         const csrfToken = document.querySelector('input[name="csrfmiddlewaretoken"]') ? 
                           document.querySelector('input[name="csrfmiddlewaretoken"]').value : '';
+        
+        if (defaultTaskType) {
+            taskTypeSelect.value = defaultTaskType;
+        }
         
         // 获取按钮和加载指示器
         const getSourceSchemaBtn = document.getElementById('get-source-schema-btn');
@@ -246,6 +344,127 @@
             } catch (error) {
                 throw error;
             }
+        }
+
+        function toggleTaskTypeSections() {
+            const isSQLiteTask = taskTypeSelect.value === 'view_to_sqlite';
+            postgresSections.forEach(section => {
+                if (section) {
+                    section.classList.toggle('d-none', isSQLiteTask);
+                }
+            });
+            if (sqliteSettingsCard) {
+                sqliteSettingsCard.classList.toggle('d-none', !isSQLiteTask);
+            }
+            if (postgresConnectionSelect) postgresConnectionSelect.required = !isSQLiteTask;
+            if (postgresDatabaseSelect) postgresDatabaseSelect.required = !isSQLiteTask;
+            if (targetSchemaSelect) targetSchemaSelect.required = !isSQLiteTask;
+            if (sqliteDirectoryInput) sqliteDirectoryInput.required = isSQLiteTask;
+            if (sqliteFileInput) sqliteFileInput.required = isSQLiteTask;
+            if (isSQLiteTask) {
+                updateSQLitePreview();
+            }
+        }
+
+        function updateSQLitePreview() {
+            if (!sqlitePreviewPath) return;
+            const directory = sqliteDirectoryInput ? sqliteDirectoryInput.value.trim() : '';
+            const fileName = sqliteFileInput ? sqliteFileInput.value.trim() : '';
+            if (directory && fileName) {
+                const normalizedDir = directory.replace(/\/+$/, '');
+                const preview = normalizedDir ? `${normalizedDir}/${fileName}` : fileName;
+                sqlitePreviewPath.textContent = preview;
+                sqlitePreviewPath.classList.add('text-success');
+            } else {
+                sqlitePreviewPath.textContent = '请选择目录和文件名';
+                sqlitePreviewPath.classList.remove('text-success');
+            }
+        }
+
+        function autoFillSqliteFileName() {
+            if (!taskNameInput || !sqliteFileInput) return;
+            if (taskTypeSelect.value !== 'view_to_sqlite') return;
+            if (sqliteFileInput.value.trim()) return;
+            const rawName = taskNameInput.value.trim().toLowerCase();
+            if (!rawName) return;
+            const safeName = rawName.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'oracle_views';
+            sqliteFileInput.value = `${safeName}.sqlite3`;
+            updateSQLitePreview();
+        }
+
+        async function loadDirectory(path = '') {
+            if (!directoryList) return;
+            directoryList.innerHTML = '<div class="list-group-item text-muted"><span class="spinner-border spinner-border-sm me-2"></span> 加载中...</div>';
+            if (directoryChooseBtn) directoryChooseBtn.disabled = true;
+            try {
+                const query = path ? `?path=${encodeURIComponent(path)}` : '';
+                const response = await fetch(`${browseDirectoryUrl}${query}`, {
+                    headers: {'X-Requested-With': 'XMLHttpRequest'}
+                });
+                const data = await response.json();
+                if (data.status !== 'success') {
+                    throw new Error(data.message || '目录加载失败');
+                }
+                currentDirectoryPath = data.current;
+                if (directoryCurrentPath) {
+                    directoryCurrentPath.textContent = data.current;
+                }
+                if (directoryGoParentBtn) {
+                    directoryGoParentBtn.dataset.parent = data.parent || '';
+                    directoryGoParentBtn.disabled = !data.parent;
+                }
+                directoryList.innerHTML = '';
+                if (!data.directories.length) {
+                    directoryList.innerHTML = '<div class="list-group-item text-muted">此目录下没有可用子目录</div>';
+                } else {
+                    data.directories.forEach(dir => {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'list-group-item list-group-item-action directory-entry d-flex align-items-center';
+                        if (dir.is_hidden) {
+                            button.classList.add('text-muted');
+                        }
+                        button.dataset.path = dir.path;
+                        button.innerHTML = `<i class="fas fa-folder me-2 text-warning"></i>${dir.name}`;
+                        directoryList.appendChild(button);
+                    });
+                }
+                if (directoryChooseBtn) directoryChooseBtn.disabled = false;
+            } catch (error) {
+                directoryList.innerHTML = `<div class="list-group-item text-danger">加载失败：${error.message}</div>`;
+            }
+        }
+
+        function normalizeObjectEntry(entry) {
+            if (typeof entry === 'string') {
+                return { name: entry, object_type: null };
+            }
+            if (entry && typeof entry === 'object') {
+                return {
+                    name: entry.name || entry.object_name || '',
+                    object_type: entry.object_type || entry.type || null
+                };
+            }
+            return { name: String(entry || ''), object_type: null };
+        }
+
+        function createObjectListItem(entry) {
+            const normalized = normalizeObjectEntry(entry);
+            const safeId = normalized.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const badgeText = normalized.object_type === 'TABLE' ? '表' : normalized.object_type === 'VIEW' ? '视图' : '';
+            const badgeClass = normalized.object_type === 'TABLE' ? 'bg-success' : 'bg-primary';
+            const badge = badgeText ? `<span class="badge ${badgeClass} me-2">${badgeText}</span>` : '';
+            const item = document.createElement('div');
+            item.className = 'list-group-item';
+            item.innerHTML = `
+                <div class="form-check d-flex align-items-center">
+                    <input class="form-check-input me-2" type="checkbox" value="${normalized.name}" id="obj-${safeId}" data-object-type="${normalized.object_type || ''}">
+                    <label class="form-check-label flex-grow-1" for="obj-${safeId}">
+                        ${badge}<span>${normalized.name}</span>
+                    </label>
+                </div>
+            `;
+            return item;
         }
         
         // 获取源Schema函数
@@ -332,6 +551,10 @@
         
         // 当任务类型变化时，如果已选择了Schema，自动获取对象列表
         taskTypeSelect.addEventListener('change', function() {
+            toggleTaskTypeSections();
+            if (this.value === 'view_to_sqlite') {
+                autoFillSqliteFileName();
+            }
             // 清空已选择的对象显示
             selectedObjectsList.innerHTML = '<span class="text-muted">未选择任何对象</span>';
             
@@ -525,6 +748,51 @@
                 alert('获取PostgreSQL数据库失败：' + error.message);
             }
         }
+
+        if (sqliteDirectoryInput) {
+            sqliteDirectoryInput.addEventListener('input', updateSQLitePreview);
+        }
+        if (sqliteFileInput) {
+            sqliteFileInput.addEventListener('input', updateSQLitePreview);
+        }
+        if (openDirectoryBrowserBtn && directoryModal) {
+            openDirectoryBrowserBtn.addEventListener('click', () => {
+                const initialPath = sqliteDirectoryInput ? sqliteDirectoryInput.value.trim() : '';
+                loadDirectory(initialPath);
+                directoryModal.show();
+            });
+        }
+        if (directoryList) {
+            directoryList.addEventListener('click', (event) => {
+                const entry = event.target.closest('.directory-entry');
+                if (entry) {
+                    loadDirectory(entry.dataset.path);
+                }
+            });
+        }
+        if (directoryGoParentBtn) {
+            directoryGoParentBtn.addEventListener('click', () => {
+                const parent = directoryGoParentBtn.dataset.parent;
+                if (parent) {
+                    loadDirectory(parent);
+                }
+            });
+        }
+        if (directoryChooseBtn) {
+            directoryChooseBtn.addEventListener('click', () => {
+                if (currentDirectoryPath && sqliteDirectoryInput) {
+                    sqliteDirectoryInput.value = currentDirectoryPath;
+                    updateSQLitePreview();
+                }
+                if (directoryModal) {
+                    directoryModal.hide();
+                }
+            });
+        }
+        if (taskNameInput) {
+            taskNameInput.addEventListener('blur', autoFillSqliteFileName);
+        }
+        toggleTaskTypeSections();
         
         // 绑定加载更多按钮事件
         loadMoreBtn.addEventListener('click', function() {
@@ -683,27 +951,19 @@
                 if (data.status === 'success') {
                     sourceObjectList.innerHTML = '';
                     
-                    if (!data.objects || data.objects.length === 0) {
+                    const objects = (data.objects || []).map(normalizeObjectEntry);
+                    if (objects.length === 0) {
                         sourceObjectList.innerHTML = '<div class="list-group-item text-muted">没有找到任何对象</div>';
                         loadMoreContainer.classList.add('d-none');
                         console.log("未找到任何对象");
                     } else {
-                        console.log(`首个对象: ${data.objects[0]}`);
-                        data.objects.forEach(obj => {
-                            const item = document.createElement('div');
-                            item.className = 'list-group-item';
-                            item.innerHTML = `
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" value="${obj}" id="obj-${obj}">
-                                    <label class="form-check-label" for="obj-${obj}">${obj}</label>
-                                </div>
-                            `;
-                            sourceObjectList.appendChild(item);
+                        objects.forEach(obj => {
+                            sourceObjectList.appendChild(createObjectListItem(obj));
                         });
                         
                         // 更新分页状态
-                        loadedObjectCount = data.objects.length;
-                        totalObjectCount = data.total;
+                        loadedObjectCount = objects.length;
+                        totalObjectCount = data.total || objects.length;
                         
                         // 显示数据加载完成状态
                         loadMoreContainer.classList.remove('d-none');
@@ -815,6 +1075,7 @@
         // 表单提交事件
         form.addEventListener('submit', async function(e) {
             e.preventDefault();
+            const isSQLiteTask = taskTypeSelect.value === 'view_to_sqlite';
             
             // 基础验证
             if (!form.checkValidity()) {
@@ -829,16 +1090,18 @@
                 return;
             }
             
-            if (!postgresConnectionSelect.value) {
-                alert('请选择PolarDB-PG数据库连接');
-                postgresConnectionSelect.focus();
-                return;
-            }
-            
-            if (!postgresDatabaseSelect.value) {
-                alert('请选择PostgreSQL数据库');
-                postgresDatabaseSelect.focus();
-                return;
+            if (!isSQLiteTask) {
+                if (!postgresConnectionSelect.value) {
+                    alert('请选择PolarDB-PG数据库连接');
+                    postgresConnectionSelect.focus();
+                    return;
+                }
+                
+                if (!postgresDatabaseSelect.value) {
+                    alert('请选择PostgreSQL数据库');
+                    postgresDatabaseSelect.focus();
+                    return;
+                }
             }
             
             if (!sourceSchemaSelect.value) {
@@ -847,10 +1110,23 @@
                 return;
             }
             
-            if (!targetSchemaSelect.value) {
-                alert('请选择目标Schema');
-                targetSchemaSelect.focus();
-                return;
+            if (!isSQLiteTask) {
+                if (!targetSchemaSelect.value) {
+                    alert('请选择目标Schema');
+                    targetSchemaSelect.focus();
+                    return;
+                }
+            } else {
+                if (!sqliteDirectoryInput || !sqliteDirectoryInput.value.trim()) {
+                    alert('请选择SQLite输出目录');
+                    if (sqliteDirectoryInput) sqliteDirectoryInput.focus();
+                    return;
+                }
+                if (!sqliteFileInput || !sqliteFileInput.value.trim()) {
+                    alert('请输入SQLite文件名');
+                    if (sqliteFileInput) sqliteFileInput.focus();
+                    return;
+                }
             }
             
             if (taskTypeSelect.value !== 'all_tables') {
@@ -872,12 +1148,19 @@
                 name: document.getElementById('task-name').value,
                 task_type: taskTypeSelect.value,
                 oracle_connection: oracleConnectionSelect.value,
-                postgres_connection: postgresConnectionSelect.value,
-                postgres_database: postgresDatabaseSelect.value,
                 source_schema: sourceSchemaSelect.value,
-                target_schema: targetSchemaSelect.value,
                 conflict_strategy: document.getElementById('conflict-strategy').value
             };
+            
+            if (isSQLiteTask) {
+                taskData.sqlite_directory = sqliteDirectoryInput ? sqliteDirectoryInput.value.trim() : '';
+                taskData.sqlite_file_name = sqliteFileInput ? sqliteFileInput.value.trim() : '';
+                taskData.target_schema = 'main';
+            } else {
+                taskData.postgres_connection = postgresConnectionSelect.value;
+                taskData.postgres_database = postgresDatabaseSelect.value;
+                taskData.target_schema = targetSchemaSelect.value;
+            }
             
             // 添加源对象 (如果适用)
             if (taskTypeSelect.value !== 'all_tables') {
