@@ -845,28 +845,21 @@
                         }
                     });
                     
-                    if (!data.objects || data.objects.length === 0) {
+                    const objects = (data.objects || []).map(normalizeObjectEntry);
+                    if (objects.length === 0) {
                         // 无更多数据，隐藏加载更多按钮
                         loadMoreContainer.classList.add('d-none');
                     } else {
                         // 添加新加载的对象
-                        data.objects.forEach(obj => {
-                            const item = document.createElement('div');
-                            item.className = 'list-group-item';
-                            item.innerHTML = `
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" value="${obj}" id="obj-${obj}">
-                                    <label class="form-check-label" for="obj-${obj}">${obj}</label>
-                                </div>
-                            `;
-                            sourceObjectList.appendChild(item);
+                        objects.forEach(obj => {
+                            sourceObjectList.appendChild(createObjectListItem(obj));
                         });
                         
                         // 更新分页状态
-                        currentOffset += data.objects.length;
-                        loadedObjectCount += data.objects.length;
-                        totalObjectCount = data.total;
-                        hasMoreObjects = data.has_more;
+                        currentOffset += objects.length;
+                        loadedObjectCount += objects.length;
+                        totalObjectCount = data.total || loadedObjectCount;
+                        hasMoreObjects = data.has_more ?? false;
                         
                         loadStatus.textContent = `已加载 ${loadedObjectCount}/${totalObjectCount} 条记录`;
                         
