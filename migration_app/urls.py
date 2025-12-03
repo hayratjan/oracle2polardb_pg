@@ -24,6 +24,7 @@ urlpatterns = [
     path('schemas/', dashboard.get_schemas, name='get_schemas'),
     path('database-objects/', dashboard.get_database_objects, name='get_database_objects'),
     path('postgres-databases/', dashboard.get_postgres_databases, name='get_postgres_databases'),
+    path('filesystem/directories/', dashboard.browse_directories, name='browse_directories'),
     
     # 数据库管理
     path('database-info/', dashboard.database_info, name='database_info'),
