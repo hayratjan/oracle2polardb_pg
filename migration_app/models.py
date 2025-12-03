@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+import os
 
 # Create your models here.
 
@@ -53,6 +54,7 @@ class MigrationTask(models.Model):
         ('routine', '例程'),
         ('all_tables', '所有表'),
         ('view_to_table', '视图数据迁移到表'),
+        ('view_to_sqlite', '视图数据迁移到SQLite'),
     ]
     
     STATUS_CHOICES = [
@@ -75,9 +77,15 @@ class MigrationTask(models.Model):
     name = models.CharField(max_length=100, verbose_name="任务名称")
     task_type = models.CharField(max_length=20, choices=TASK_TYPE_CHOICES, verbose_name="任务类型")
     oracle_connection = models.ForeignKey(OracleConnection, on_delete=models.CASCADE, verbose_name="Oracle连接")
-    postgres_connection = models.ForeignKey(PostgresConnection, on_delete=models.CASCADE, verbose_name="PostgreSQL连接")
+    postgres_connection = models.ForeignKey(
+        PostgresConnection,
+        on_delete=models.CASCADE,
+        verbose_name="PostgreSQL连接",
+        null=True,
+        blank=True
+    )
     source_schema = models.CharField(max_length=50, verbose_name="源Schema")
-    target_schema = models.CharField(max_length=50, verbose_name="目标Schema")
+    target_schema = models.CharField(max_length=50, verbose_name="目标Schema", blank=True, null=True)
     source_object = models.CharField(max_length=100, verbose_name="源对象名称", blank=True, null=True)
     source_objects = models.TextField(verbose_name="多个源对象", blank=True, null=True, help_text="用逗号分隔的多个源对象名称")
     is_batch = models.BooleanField(default=False, verbose_name="批量迁移")
@@ -91,9 +99,19 @@ class MigrationTask(models.Model):
     started_at = models.DateTimeField(null=True, blank=True, verbose_name="开始时间")
     completed_at = models.DateTimeField(null=True, blank=True, verbose_name="完成时间")
     view_progress = models.JSONField(verbose_name="视图迁移进度", blank=True, null=True, help_text="存储每个视图的迁移进度")
+    sqlite_directory = models.CharField(max_length=255, blank=True, null=True, verbose_name="SQLite目录")
+    sqlite_file_name = models.CharField(max_length=255, blank=True, null=True, verbose_name="SQLite文件名")
     
     def __str__(self):
         return self.name
+    
+    @property
+    def sqlite_path(self):
+        """返回SQLite完整路径"""
+        if self.sqlite_directory and self.sqlite_file_name:
+            directory = os.path.expanduser(self.sqlite_directory)
+            return os.path.abspath(os.path.join(directory, self.sqlite_file_name))
+        return None
     
     class Meta:
         verbose_name = "迁移任务"
