@@ -12,19 +12,35 @@ def validate_task_data(data):
     errors = []
     
     # 检查必要字段
-    required_fields = ['name', 'task_type', 'oracle_connection', 'postgres_connection', 
-                       'postgres_database', 'source_schema', 'target_schema']
+    required_fields = ['name', 'task_type', 'oracle_connection', 'source_schema']
+    
+    task_type = data.get('task_type')
+    if task_type == 'view_to_sqlite':
+        required_fields.extend(['sqlite_directory', 'sqlite_file_name'])
+    else:
+        required_fields.extend(['postgres_connection', 'postgres_database', 'target_schema'])
     
     for field in required_fields:
         if field not in data or not data[field]:
             errors.append(f"缺少必要字段: {field}")
     
+    # SQLite任务的字段清理和默认值
+    if task_type == 'view_to_sqlite':
+        if data.get('sqlite_directory'):
+            data['sqlite_directory'] = data['sqlite_directory'].strip()
+        if data.get('sqlite_file_name'):
+            file_name = data['sqlite_file_name'].strip()
+            if not file_name.lower().endswith(('.sqlite', '.sqlite3', '.db')):
+                file_name = f"{file_name}.sqlite3"
+            data['sqlite_file_name'] = file_name
+        data['target_schema'] = data.get('target_schema') or 'main'
+    
     # 检查source_object和source_objects字段
     if 'task_type' in data and data['task_type'] != 'all_tables':
-        if data['task_type'] == 'view_to_table':
-            # 对于view_to_table类型，必须提供source_objects
+        if data['task_type'] in ['view_to_table', 'view_to_sqlite']:
+            # 对于多视图迁移类型，必须提供source_objects
             if 'source_objects' not in data or not data['source_objects'] or len(data['source_objects']) == 0:
-                errors.append("对于'view_to_table'类型的任务，必须提供至少一个视图名称")
+                errors.append("对于该任务类型，必须提供至少一个视图名称")
             else:
                 # 确保source_objects是一个数组
                 if isinstance(data['source_objects'], str):
@@ -59,10 +75,12 @@ def create_task_validated(request):
         # 获取所有可用的数据库连接
         oracle_connections = OracleConnection.objects.all()
         postgres_connections = PostgresConnection.objects.all()
+        default_task_type = request.GET.get('task_type', '')
         
         return render(request, 'migration_app/create_task.html', {
             'oracle_connections': oracle_connections,
-            'postgres_connections': postgres_connections
+            'postgres_connections': postgres_connections,
+            'default_task_type': default_task_type
         })
     
     elif request.method == 'POST':
@@ -88,9 +106,14 @@ def create_task_validated(request):
             task.name = validated_data['name']
             task.task_type = validated_data['task_type']
             task.oracle_connection = OracleConnection.objects.get(pk=validated_data['oracle_connection'])
-            task.postgres_connection = PostgresConnection.objects.get(pk=validated_data['postgres_connection'])
+            if task.task_type == 'view_to_sqlite':
+                task.postgres_connection = None
+            else:
+                task.postgres_connection = PostgresConnection.objects.get(pk=validated_data['postgres_connection'])
             task.source_schema = validated_data['source_schema']
-            task.target_schema = validated_data['target_schema']
+            task.target_schema = validated_data.get('target_schema') or ''
+            task.sqlite_directory = validated_data.get('sqlite_directory')
+            task.sqlite_file_name = validated_data.get('sqlite_file_name')
             
             # 设置源对象（如果适用）
             if task.task_type != 'all_tables':
@@ -105,7 +128,10 @@ def create_task_validated(request):
             
             # 初始设置
             task.status = 'pending'
-            task.log = f"目标PostgreSQL数据库: {validated_data['postgres_database']}"
+            if task.task_type == 'view_to_sqlite':
+                task.log = f"SQLite文件: {task.sqlite_path or task.sqlite_file_name}"
+            else:
+                task.log = f"目标PostgreSQL数据库: {validated_data['postgres_database']}"
             task.save()
             
             return JsonResponse({
