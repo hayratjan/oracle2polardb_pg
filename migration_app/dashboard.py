@@ -9,6 +9,9 @@ from django.contrib import messages
 from django.shortcuts import redirect
 from django.utils import timezone
 import psycopg2
+import os
+import sqlite3
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -201,14 +204,14 @@ def start_task(request, task_id):
                 task.conflict_strategy = new_conflict_strategy
                 logger.info(f"更新冲突处理策略为: {new_conflict_strategy}")
             
-            if not postgres_database:
-                # 如果没有提供数据库名，尝试从任务日志中获取
-                if task.log and "目标PostgreSQL数据库:" in task.log:
-                    for line in task.log.split('\n'):
-                        if line.startswith("目标PostgreSQL数据库:"):
-                            postgres_database = line.split(":", 1)[1].strip()
-                            logger.info(f"从任务日志中获取到PostgreSQL数据库: {postgres_database}")
-                            break
+            if task.task_type != 'view_to_sqlite':
+                if not postgres_database:
+                    if task.log and "目标PostgreSQL数据库:" in task.log:
+                        for line in task.log.split('\n'):
+                            if line.startswith("目标PostgreSQL数据库:"):
+                                postgres_database = line.split(":", 1)[1].strip()
+                                logger.info(f"从任务日志中获取到PostgreSQL数据库: {postgres_database}")
+                                break
             
             # 如果是view_to_table类型且source_object为空，尝试从source_objects获取
             if task.task_type == 'view_to_table' and (not task.source_object or task.source_object.strip() == ''):
@@ -224,8 +227,9 @@ def start_task(request, task_id):
             task.cancel_requested = False
             task.progress = 0
             
-            # 如果有数据库名，添加到日志中
-            if postgres_database:
+            if task.task_type == 'view_to_sqlite':
+                task.log = f"SQLite文件: {task.sqlite_path or '未配置'}"
+            elif postgres_database:
                 task.log = f"目标PostgreSQL数据库: {postgres_database}"
             else:
                 task.log = ''
@@ -243,7 +247,7 @@ def start_task(request, task_id):
             from . import views
             
             # 检查任务类型是否有效
-            if task.task_type not in ['table', 'materialized_view', 'view', 'routine', 'all_tables', 'view_to_table']:
+            if task.task_type not in ['table', 'materialized_view', 'view', 'routine', 'all_tables', 'view_to_table', 'view_to_sqlite']:
                 logger.error(f"未知的任务类型: {task.task_type}")
                 return JsonResponse({
                     'status': 'error',
@@ -279,6 +283,9 @@ def start_task(request, task_id):
                     # 不要使用线程池
                     # from migration_app.dashboard import migrate_view_to_table
                     # executor.submit(migrate_view_to_table, task.id, postgres_database)
+                elif task.task_type == 'view_to_sqlite':
+                    logger.info(f"提交视图迁移到SQLite任务: {task.source_schema}")
+                    migrate_view_to_sqlite(task.id)
                 
                 logger.info(f"任务已成功提交执行: 任务ID={task_id}")
             except (RuntimeError, AttributeError) as e:
@@ -312,6 +319,9 @@ def start_task(request, task_id):
                             # 不要使用单独线程
                             # from migration_app.dashboard import migrate_view_to_table
                             # migrate_view_to_table(task.id, postgres_database)
+                        elif task.task_type == 'view_to_sqlite':
+                            logger.info("开始执行视图迁移到SQLite任务")
+                            migrate_view_to_sqlite(task.id)
                     except Exception as e:
                         logger.error(f"任务执行时发生异常: {str(e)}", exc_info=True)
                 
@@ -437,20 +447,26 @@ def task_detailed_info(request, task_id):
             'service_name': task.oracle_connection.service_name,
             'username': task.oracle_connection.username,
         },
-        'postgres_connection': {
-            'id': task.postgres_connection.id,
-            'name': task.postgres_connection.name,
-            'host': task.postgres_connection.host,
-            'port': task.postgres_connection.port,
-            'database': task.postgres_connection.database,
-            'username': task.postgres_connection.username,
-        },
+        'sqlite_directory': task.sqlite_directory,
+        'sqlite_file_name': task.sqlite_file_name,
+        'sqlite_path': task.sqlite_path,
+        'postgres_connection': None,
         'is_batch': task.is_batch,
         'cancel_requested': task.cancel_requested,
         'created_at': task.created_at.isoformat() if task.created_at else None,
         'started_at': task.started_at.isoformat() if task.started_at else None,
         'completed_at': task.completed_at.isoformat() if task.completed_at else None,
     }
+    
+    if task.postgres_connection:
+        info['postgres_connection'] = {
+            'id': task.postgres_connection.id,
+            'name': task.postgres_connection.name,
+            'host': task.postgres_connection.host,
+            'port': task.postgres_connection.port,
+            'database': task.postgres_connection.database,
+            'username': task.postgres_connection.username,
+        }
     
     # 如果有父任务，添加父任务信息
     if task.parent_task:
@@ -630,7 +646,7 @@ def get_database_objects(request):
                 cursor.execute(query, schema=schema)
                 objects = [row[0] for row in cursor.fetchall()]
                 
-            elif object_type == 'view' or object_type == 'view_to_table':
+            elif object_type in ('view', 'view_to_table', 'view_to_sqlite'):
                 # 查询视图
                 query = """
                 SELECT VIEW_NAME 
@@ -748,6 +764,41 @@ def get_postgres_databases(request):
         'status': 'error',
         'message': 'Invalid request method'
     })
+
+@csrf_exempt
+def browse_directories(request):
+    """列出服务器上的目录，便于选择SQLite输出位置"""
+    path = request.GET.get('path') or request.POST.get('path') if request.method == 'POST' else None
+    if not path:
+        path = str(Path.home())
+    
+    try:
+        target = Path(path).expanduser().resolve()
+        
+        if not target.exists() or not target.is_dir():
+            return JsonResponse({'status': 'error', 'message': '目标路径不存在或不是目录'}, status=400)
+        
+        directories = []
+        for child in sorted(target.iterdir()):
+            if child.is_dir():
+                directories.append({
+                    'name': child.name,
+                    'path': str(child),
+                    'is_hidden': child.name.startswith('.')
+                })
+        
+        parent = str(target.parent) if target.parent != target else None
+        
+        return JsonResponse({
+            'status': 'success',
+            'current': str(target),
+            'parent': parent,
+            'directories': directories
+        })
+    except PermissionError:
+        return JsonResponse({'status': 'error', 'message': '没有权限访问该目录'}, status=403)
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
 # 添加缺失的迁移函数
 def migrate_view_to_table(task_id, postgres_database=None):
@@ -1019,7 +1070,8 @@ def migrate_view_to_table(task_id, postgres_database=None):
                     
                     # 创建INSERT语句
                     placeholders = ", ".join(["%s"] * len(column_names))
-                    insert_sql = f"INSERT INTO {task.target_schema}.{view_name.lower()} ({', '.join(['\"' + col + '\"' for col in column_names])}) VALUES ({placeholders})"
+                    quoted_columns = [f'"{col}"' for col in column_names]
+                    insert_sql = f"INSERT INTO {task.target_schema}.{view_name.lower()} ({', '.join(quoted_columns)}) VALUES ({placeholders})"
                     
                     # 分批处理数据
                     total_rows = 0
@@ -1141,4 +1193,231 @@ def migrate_view_to_table(task_id, postgres_database=None):
         from django.db import connection
         connection.close()
     finally:
-        logger.info(f"视图数据迁移到表任务结束: 状态={task.status}") 
+        logger.info(f"视图数据迁移到表任务结束: 状态={task.status}")
+
+def migrate_view_to_sqlite(task_id):
+    """将视图数据导出至SQLite数据库文件"""
+    from . import views
+    from .views import convert_oracle_to_sqlite_type
+    from django.utils import timezone
+    
+    task = get_object_or_404(MigrationTask, pk=task_id)
+    logger.info(f"开始执行视图迁移到SQLite任务: 任务ID={task_id}")
+    
+    sqlite_path = task.sqlite_path
+    if not sqlite_path:
+        error_msg = "未配置SQLite输出路径"
+        logger.error(error_msg)
+        task.status = 'failed'
+        task.log = error_msg
+        task.completed_at = timezone.now()
+        task.save()
+        return
+    
+    # 归一化路径
+    sqlite_directory = os.path.abspath(task.sqlite_directory) if task.sqlite_directory else os.path.dirname(os.path.abspath(sqlite_path))
+    sqlite_path = os.path.join(sqlite_directory, task.sqlite_file_name) if task.sqlite_file_name else os.path.abspath(sqlite_path)
+    
+    task.status = 'running'
+    task.started_at = timezone.now()
+    task.progress = 0
+    task.view_progress = {}
+    task.log = f"SQLite文件: {sqlite_path}"
+    task.save()
+    
+    log = [f"SQLite文件: {sqlite_path}"]
+    
+    oracle_cursor = oracle_conn = sqlite_cursor = sqlite_conn = None
+    
+    try:
+        os.makedirs(sqlite_directory, exist_ok=True)
+    except Exception as e:
+        error_msg = f"创建SQLite目录失败: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        task.status = 'failed'
+        task.log = '\n'.join(log + [error_msg])
+        task.completed_at = timezone.now()
+        task.save()
+        return
+    
+    try:
+        oracle_conn = views.get_oracle_connection(task.oracle_connection.id)
+        oracle_cursor = oracle_conn.cursor()
+        log.append("已连接Oracle数据库")
+    except Exception as e:
+        error_msg = f"连接Oracle数据库失败: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        task.status = 'failed'
+        task.log = '\n'.join(log + [error_msg])
+        task.completed_at = timezone.now()
+        task.save()
+        return
+    
+    try:
+        sqlite_conn = sqlite3.connect(sqlite_path)
+        sqlite_cursor = sqlite_conn.cursor()
+        log.append("已连接SQLite数据库")
+    except Exception as e:
+        error_msg = f"连接SQLite数据库失败: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        oracle_cursor.close()
+        oracle_conn.close()
+        task.status = 'failed'
+        task.log = '\n'.join(log + [error_msg])
+        task.completed_at = timezone.now()
+        task.save()
+        return
+    
+    try:
+        views_to_migrate = []
+        if task.source_objects and task.source_objects.strip():
+            views_to_migrate = [v.strip() for v in task.source_objects.split(',') if v.strip()]
+        elif task.source_object:
+            views_to_migrate = [task.source_object.strip()]
+        
+        if not views_to_migrate:
+            raise ValueError("未指定需要迁移的视图")
+        
+        total_views = len(views_to_migrate)
+        success, failed = [], []
+        
+        for index, view_name in enumerate(views_to_migrate):
+            task.refresh_from_db()
+            if task.cancel_requested:
+                log.append("任务被请求取消")
+                task.status = 'canceled'
+                break
+            
+            current_progress = (index / total_views) * 100
+            task.progress = current_progress
+            task.save()
+            
+            view_log = [f"开始处理视图 {view_name} ({index+1}/{total_views})"]
+            logger.info(view_log[0])
+            
+            try:
+                oracle_cursor.execute("""
+                    SELECT TEXT FROM ALL_VIEWS 
+                    WHERE OWNER = :schema AND VIEW_NAME = :view_name
+                """, schema=task.source_schema, view_name=view_name)
+                definition = oracle_cursor.fetchone()
+                if not definition:
+                    raise ValueError(f"视图 {task.source_schema}.{view_name} 不存在")
+                
+                oracle_cursor.execute("""
+                    SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE
+                    FROM ALL_TAB_COLUMNS
+                    WHERE OWNER = :schema AND TABLE_NAME = :view_name
+                    ORDER BY COLUMN_ID
+                """, schema=task.source_schema, view_name=view_name)
+                columns = oracle_cursor.fetchall()
+                if not columns:
+                    raise ValueError(f"视图 {view_name} 没有列定义")
+                
+                column_defs = []
+                for column in columns:
+                    column_name, data_type, data_length, data_precision, data_scale, nullable = column
+                    sqlite_type = convert_oracle_to_sqlite_type(data_type, data_length, data_precision, data_scale)
+                    not_null = "" if nullable == 'Y' else " NOT NULL"
+                    column_defs.append(f'"{column_name}" {sqlite_type}{not_null}')
+                
+                create_table_sql = f'CREATE TABLE IF NOT EXISTS "{view_name}" (\n    ' + ",\n    ".join(column_defs) + "\n)"
+                
+                sqlite_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (view_name,))
+                table_exists = sqlite_cursor.fetchone() is not None
+                
+                if table_exists:
+                    if task.conflict_strategy == 'error':
+                        raise ValueError(f'SQLite表 "{view_name}" 已存在')
+                    elif task.conflict_strategy == 'replace':
+                        sqlite_cursor.execute(f'DROP TABLE IF EXISTS "{view_name}"')
+                        sqlite_conn.commit()
+                        table_exists = False
+                        view_log.append("已删除已存在的表")
+                    elif task.conflict_strategy == 'skip':
+                        view_log.append("表已存在，跳过")
+                        success.append(view_name)
+                        continue
+                    elif task.conflict_strategy == 'truncate':
+                        sqlite_cursor.execute(f'DELETE FROM "{view_name}"')
+                        sqlite_conn.commit()
+                        view_log.append("已清空目标表")
+                    elif task.conflict_strategy == 'append':
+                        view_log.append("将追加数据到现有表")
+                
+                if not table_exists or task.conflict_strategy == 'replace' or task.conflict_strategy == 'error':
+                    sqlite_cursor.execute(create_table_sql)
+                    sqlite_conn.commit()
+                    view_log.append("已创建SQLite表结构")
+                
+                oracle_query = f"SELECT * FROM {task.source_schema}.{view_name}"
+                oracle_cursor.arraysize = 5000
+                oracle_cursor.execute(oracle_query)
+                column_names = [col[0] for col in oracle_cursor.description]
+                placeholders = ", ".join(["?"] * len(column_names))
+                quoted_columns = ", ".join([f'"{col}"' for col in column_names])
+                insert_sql = f'INSERT INTO "{view_name}" ({quoted_columns}) VALUES ({placeholders})'
+                
+                batch_total = 0
+                while True:
+                    rows = oracle_cursor.fetchmany()
+                    if not rows:
+                        break
+                    sqlite_cursor.executemany(insert_sql, rows)
+                    sqlite_conn.commit()
+                    batch_total += len(rows)
+                
+                view_log.append(f"已写入 {batch_total} 行数据")
+                success.append(view_name)
+                
+            except Exception as view_err:
+                error_msg = f"视图 {view_name} 迁移失败: {view_err}"
+                logger.error(error_msg, exc_info=True)
+                view_log.append(error_msg)
+                failed.append(view_name)
+            
+            current_progress = task.view_progress if isinstance(task.view_progress, dict) else {}
+            current_progress[view_name] = {
+                'progress': 100 if view_name in success else 0,
+                'log': view_log
+            }
+            task.view_progress = current_progress
+            task.save()
+        
+        if task.status != 'canceled':
+            if failed and success:
+                task.status = 'partial'
+                log.append(f"部分成功: 成功 {len(success)} 个，失败 {len(failed)} 个")
+            elif failed and not success:
+                task.status = 'failed'
+                log.append("所有视图迁移失败")
+            else:
+                task.status = 'completed'
+                log.append("所有视图迁移完成")
+        
+        if success:
+            log.append(f"成功: {', '.join(success)}")
+        if failed:
+            log.append(f"失败: {', '.join(failed)}")
+        
+    except Exception as e:
+        error_msg = f"执行SQLite迁移任务失败: {e}"
+        logger.error(error_msg, exc_info=True)
+        log.append(error_msg)
+        task.status = 'failed'
+    finally:
+        try:
+            oracle_cursor.close()
+            oracle_conn.close()
+        except Exception:
+            pass
+        try:
+            sqlite_cursor.close()
+            sqlite_conn.close()
+        except Exception:
+            pass
+        
+        task.completed_at = timezone.now()
+        task.log = '\n'.join(log)
+        task.save()
+        logger.info(f"视图迁移到SQLite任务结束: 任务ID={task_id}, 状态={task.status}")
