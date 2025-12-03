@@ -635,6 +635,46 @@ def get_database_objects(request):
             
             objects = []
             
+            if object_type == 'view_to_sqlite':
+                # 同时查询表和视图
+                cursor.execute("""
+                SELECT TABLE_NAME 
+                FROM ALL_TABLES 
+                WHERE OWNER = :schema 
+                ORDER BY TABLE_NAME
+                """, schema=schema)
+                table_rows = cursor.fetchall()
+                
+                cursor.execute("""
+                SELECT VIEW_NAME 
+                FROM ALL_VIEWS 
+                WHERE OWNER = :schema 
+                ORDER BY VIEW_NAME
+                """, schema=schema)
+                view_rows = cursor.fetchall()
+                
+                table_objects = [{'name': row[0], 'object_type': 'TABLE'} for row in table_rows]
+                view_objects = [{'name': row[0], 'object_type': 'VIEW'} for row in view_rows]
+                objects = table_objects + view_objects
+                
+                if search_term:
+                    objects = [
+                        obj for obj in objects 
+                        if search_term.lower() in (obj['name'] or '').lower()
+                    ]
+                
+                objects.sort(key=lambda obj: (obj['object_type'], obj['name']))
+                
+                cursor.close()
+                connection.close()
+                
+                return JsonResponse({
+                    'status': 'success',
+                    'objects': objects,
+                    'total': len(objects),
+                    'has_more': False
+                })
+            
             if object_type == 'table':
                 # 查询表
                 query = """
@@ -646,7 +686,7 @@ def get_database_objects(request):
                 cursor.execute(query, schema=schema)
                 objects = [row[0] for row in cursor.fetchall()]
                 
-            elif object_type in ('view', 'view_to_table', 'view_to_sqlite'):
+            elif object_type in ('view', 'view_to_table'):
                 # 查询视图
                 query = """
                 SELECT VIEW_NAME 
