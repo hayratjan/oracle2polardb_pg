@@ -15,6 +15,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+SQLITE_ALLOWED_SUFFIXES = ('.sqlite', '.sqlite3', '.db')
+
 def dashboard(request):
     """
     数据库迁移管理仪表盘
@@ -808,32 +810,76 @@ def get_postgres_databases(request):
 @csrf_exempt
 def browse_directories(request):
     """列出服务器上的目录，便于选择SQLite输出位置"""
-    path = request.GET.get('path') or request.POST.get('path') if request.method == 'POST' else None
-    if not path:
-        path = str(Path.home())
+    raw_path = request.GET.get('path')
+    if request.method == 'POST':
+        raw_path = raw_path or request.POST.get('path')
+    raw_path = (raw_path or '').strip()
+    explicit_request = bool(raw_path)
+    base_path = Path.home().resolve()
+    
+    if not raw_path:
+        raw_path = str(base_path)
     
     try:
-        target = Path(path).expanduser().resolve()
-        
-        if not target.exists() or not target.is_dir():
+        target = Path(raw_path).expanduser().resolve()
+    except Exception as resolve_err:
+        return JsonResponse({'status': 'error', 'message': f'路径解析失败: {resolve_err}'}, status=400)
+    
+    try:
+        if explicit_request and (not target.exists() or not target.is_dir()):
             return JsonResponse({'status': 'error', 'message': '目标路径不存在或不是目录'}, status=400)
+        if not target.exists() or not target.is_dir():
+            target = base_path
+        
+        # 限制在用户主目录范围内，避免意外曝光其它路径
+        if target != base_path:
+            try:
+                target.relative_to(base_path)
+            except ValueError:
+                return JsonResponse({'status': 'error', 'message': '不允许访问该目录'}, status=403)
+        
+        if not os.access(target, os.R_OK | os.X_OK):
+            return JsonResponse({'status': 'error', 'message': '没有权限访问该目录'}, status=403)
         
         directories = []
-        for child in sorted(target.iterdir()):
+        files = []
+        for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
             if child.is_dir():
+                accessible = os.access(child, os.R_OK | os.X_OK)
                 directories.append({
                     'name': child.name,
                     'path': str(child),
-                    'is_hidden': child.name.startswith('.')
+                    'is_hidden': child.name.startswith('.'),
+                    'accessible': accessible
+                })
+            elif child.is_file() and child.suffix.lower() in SQLITE_ALLOWED_SUFFIXES:
+                readable = os.access(child, os.R_OK)
+                file_size = None
+                modified = None
+                try:
+                    stat = child.stat()
+                    file_size = stat.st_size
+                    modified = stat.st_mtime
+                except Exception:
+                    pass
+                files.append({
+                    'name': child.name,
+                    'path': str(child),
+                    'size': file_size,
+                    'modified': modified,
+                    'readable': readable
                 })
         
         parent = str(target.parent) if target.parent != target else None
+        if parent and not parent.startswith(str(base_path)):
+            parent = None
         
         return JsonResponse({
             'status': 'success',
             'current': str(target),
             'parent': parent,
-            'directories': directories
+            'directories': directories,
+            'files': files
         })
     except PermissionError:
         return JsonResponse({'status': 'error', 'message': '没有权限访问该目录'}, status=403)
@@ -1399,11 +1445,24 @@ def migrate_view_to_sqlite(task_id):
                 insert_sql = f'INSERT INTO "{object_name}" ({quoted_columns}) VALUES ({placeholders})'
                 
                 batch_total = 0
+                conflict_insert_sql = None
+                conflict_notice_logged = False
                 while True:
                     rows = oracle_cursor.fetchmany()
                     if not rows:
                         break
-                    sqlite_cursor.executemany(insert_sql, rows)
+                    try:
+                        sqlite_cursor.executemany(insert_sql, rows)
+                    except sqlite3.IntegrityError as integrity_err:
+                        if 'UNIQUE constraint failed' in str(integrity_err):
+                            if conflict_insert_sql is None:
+                                conflict_insert_sql = insert_sql.replace('INSERT INTO', 'INSERT OR REPLACE INTO', 1)
+                            sqlite_cursor.executemany(conflict_insert_sql, rows)
+                            if not conflict_notice_logged:
+                                obj_log.append("检测到唯一键冲突，已自动使用INSERT OR REPLACE覆盖SQLite中已有记录")
+                                conflict_notice_logged = True
+                        else:
+                            raise
                     sqlite_conn.commit()
                     batch_total += len(rows)
                 

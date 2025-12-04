@@ -13,7 +13,7 @@
 <div class="alert alert-info d-flex align-items-center mb-4" role="alert">
     <i class="fas fa-magic me-2 fs-5"></i>
     <div>
-        新增“视图迁移至SQLite”任务，可一键选择本地目录生成轻量级数据文件，同时优化了表单布局与交互提示。
+        新增“视图/表写入SQLite”任务：通过目录+文件选择器指定已有SQLite库，Oracle 11g查询结果将直接插入目标库中。
     </div>
 </div>
 <div class="card">
@@ -176,23 +176,24 @@
                         </div>
                         <div class="card-body">
                             <p class="text-muted small mb-4">
-                                将从Oracle视图中抽取的数据写入一个本地SQLite数据库文件。可通过下方目录选择器快速定位保存位置。
+                                Oracle 11g中的表或视图数据会直接插入到指定的SQLite数据库文件中，可选择已有文件或输入新的文件名。
                             </p>
                             <div class="row g-4">
                                 <div class="col-md-6">
-                                    <label class="form-label">输出目录</label>
+                                    <label class="form-label">SQLite文件目录</label>
                                     <div class="input-group">
                                         <input type="text" class="form-control" id="sqlite-directory" name="sqlite_directory" placeholder="/Users/you/exports/sqlite" autocomplete="off">
                                         <button type="button" class="btn btn-outline-secondary" id="open-directory-browser">
                                             <i class="fas fa-folder-open me-1"></i> 浏览
                                         </button>
                                     </div>
-                                    <div class="form-text">选择一个有写入权限的文件夹。</div>
+                                    <div class="form-text">输入或选择SQLite文件所在的目录。</div>
                                 </div>
                                 <div class="col-md-6">
                                     <label class="form-label">SQLite文件名</label>
                                     <input type="text" class="form-control" id="sqlite-file-name" name="sqlite_file_name" placeholder="oracle_views.sqlite3" autocomplete="off">
-                                    <div class="form-text">无需包含路径，仅需文件名。</div>
+                                    <div class="form-text">无需包含路径，选择现有文件会自动填充。</div>
+                                    <div class="text-danger small d-none" id="sqlite-file-feedback"></div>
                                 </div>
                             </div>
                             <div class="alert alert-secondary mt-4 mb-0 d-flex align-items-center" id="sqlite-preview">
@@ -202,6 +203,9 @@
                                     <div class="fw-bold" id="sqlite-preview-path">请选择目录和文件名</div>
                                 </div>
                             </div>
+                            <p class="text-muted small mt-3 mb-0">
+                                使用右上角的“浏览”按钮可在服务器上导航并选择现有的SQLite数据库文件。
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -221,7 +225,7 @@
 
 <!-- 目录浏览器 Modal -->
 <div class="modal fade" id="directoryBrowserModal" tabindex="-1" aria-labelledby="directoryBrowserLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="directoryBrowserLabel"><i class="fas fa-folder-open me-2 text-primary"></i>选择输出目录</h5>
@@ -237,15 +241,32 @@
                         <i class="fas fa-level-up-alt me-1"></i> 返回上级
                     </button>
                 </div>
-                <div class="list-group" id="directory-list" style="max-height: 360px; overflow-y: auto;">
-                    <div class="list-group-item text-muted">
-                        <span class="spinner-border spinner-border-sm me-2"></span> 正在加载目录...
+                <div class="alert alert-warning d-none mb-3" id="directory-feedback" role="alert"></div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h6 class="mb-0"><i class="fas fa-folder me-2 text-warning"></i>文件夹</h6>
+                        </div>
+                        <div class="list-group" id="directory-list" style="max-height: 320px; overflow-y: auto;">
+                            <div class="list-group-item text-muted">
+                                <span class="spinner-border spinner-border-sm me-2"></span> 正在加载目录...
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h6 class="mb-0"><i class="fas fa-database me-2 text-success"></i>SQLite文件</h6>
+                            <span class="text-muted small">仅显示.sqlite/.sqlite3/.db</span>
+                        </div>
+                        <div class="list-group" id="directory-file-list" style="max-height: 320px; overflow-y: auto;">
+                            <div class="list-group-item text-muted">暂无可用文件</div>
+                        </div>
                     </div>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" id="directory-choose-btn" disabled>使用该目录</button>
+                <button type="button" class="btn btn-primary" id="directory-select-file-btn" disabled>使用选中文件</button>
             </div>
         </div>
     </div>
@@ -276,16 +297,22 @@
         const sqliteDirectoryInput = document.getElementById('sqlite-directory');
         const sqliteFileInput = document.getElementById('sqlite-file-name');
         const sqlitePreviewPath = document.getElementById('sqlite-preview-path');
+        const sqliteFileFeedback = document.getElementById('sqlite-file-feedback');
         const openDirectoryBrowserBtn = document.getElementById('open-directory-browser');
         const directoryModalElement = document.getElementById('directoryBrowserModal');
         const directoryList = document.getElementById('directory-list');
+        const directoryFileList = document.getElementById('directory-file-list');
         const directoryCurrentPath = document.getElementById('directory-current-path');
-        const directoryChooseBtn = document.getElementById('directory-choose-btn');
+        const directorySelectFileBtn = document.getElementById('directory-select-file-btn');
         const directoryGoParentBtn = document.getElementById('directory-go-parent');
+        const directoryFeedback = document.getElementById('directory-feedback');
         const taskNameInput = document.getElementById('task-name');
         const directoryModal = (window.bootstrap && bootstrap.Modal && directoryModalElement) ? new bootstrap.Modal(directoryModalElement) : null;
         const browseDirectoryUrl = window.location.origin + '{% url "migration_app:browse_directories" %}';
         let currentDirectoryPath = '';
+        let selectedFilePath = '';
+        let selectedFileName = '';
+        const allowedSqliteExtensions = ['.sqlite', '.sqlite3', '.db'];
         const csrfToken = document.querySelector('input[name="csrfmiddlewaretoken"]') ? 
                           document.querySelector('input[name="csrfmiddlewaretoken"]').value : '';
         
@@ -317,6 +344,83 @@
         }
         
         // 异步请求函数
+        function hasValidSqliteExtension(fileName = '') {
+            const lower = fileName.toLowerCase();
+            return allowedSqliteExtensions.some(ext => lower.endsWith(ext));
+        }
+
+        function ensureSqliteFileName(value = '') {
+            const trimmed = value.trim();
+            if (!trimmed) return '';
+            if (hasValidSqliteExtension(trimmed)) {
+                return trimmed;
+            }
+            if (!trimmed.includes('.')) {
+                return `${trimmed}.sqlite3`;
+            }
+            return trimmed;
+        }
+
+        function showSqliteFileError(message = '') {
+            if (!sqliteFileFeedback) return;
+            if (message) {
+                sqliteFileFeedback.textContent = message;
+                sqliteFileFeedback.classList.remove('d-none');
+                if (sqliteFileInput) sqliteFileInput.classList.add('is-invalid');
+            } else {
+                sqliteFileFeedback.textContent = '';
+                sqliteFileFeedback.classList.add('d-none');
+                if (sqliteFileInput) sqliteFileInput.classList.remove('is-invalid');
+            }
+        }
+
+        function validateSqliteFileName(showMessage = false) {
+            if (!sqliteFileInput) return true;
+            const normalized = ensureSqliteFileName(sqliteFileInput.value || '');
+            if (normalized !== sqliteFileInput.value) {
+                sqliteFileInput.value = normalized;
+                updateSQLitePreview();
+            }
+            if (!normalized) {
+                if (showMessage) {
+                    showSqliteFileError('请输入SQLite文件名');
+                } else {
+                    showSqliteFileError('');
+                }
+                return false;
+            }
+            if (!hasValidSqliteExtension(normalized)) {
+                if (showMessage) {
+                    showSqliteFileError('仅允许 .sqlite/.sqlite3/.db 结尾的文件名');
+                }
+                return false;
+            }
+            showSqliteFileError('');
+            return true;
+        }
+
+        function showDirectoryFeedback(message, type = 'warning') {
+            if (!directoryFeedback) return;
+            directoryFeedback.textContent = message;
+            directoryFeedback.className = `alert alert-${type} mb-3`;
+            directoryFeedback.classList.remove('d-none');
+        }
+
+        function clearDirectoryFeedback() {
+            if (!directoryFeedback) return;
+            directoryFeedback.textContent = '';
+            directoryFeedback.className = 'alert alert-warning d-none mb-3';
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === null || bytes === undefined) return '-';
+            if (bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(1024));
+            const value = bytes / Math.pow(1024, i);
+            return `${value.toFixed(value < 10 ? 1 : 0)} ${units[i]}`;
+        }
+
         async function fetchData(url, requestData) {
             try {
                 // 确保URL正确
@@ -390,20 +494,37 @@
             const safeName = rawName.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'oracle_views';
             sqliteFileInput.value = `${safeName}.sqlite3`;
             updateSQLitePreview();
+            validateSqliteFileName(false);
         }
 
         async function loadDirectory(path = '') {
             if (!directoryList) return;
+            clearDirectoryFeedback();
             directoryList.innerHTML = '<div class="list-group-item text-muted"><span class="spinner-border spinner-border-sm me-2"></span> 加载中...</div>';
-            if (directoryChooseBtn) directoryChooseBtn.disabled = true;
+            if (directoryFileList) {
+                directoryFileList.innerHTML = '<div class="list-group-item text-muted"><span class="spinner-border spinner-border-sm me-2"></span> 加载中...</div>';
+            }
+            if (directorySelectFileBtn) directorySelectFileBtn.disabled = true;
+            selectedFilePath = '';
+            selectedFileName = '';
             try {
                 const query = path ? `?path=${encodeURIComponent(path)}` : '';
                 const response = await fetch(`${browseDirectoryUrl}${query}`, {
                     headers: {'X-Requested-With': 'XMLHttpRequest'}
                 });
-                const data = await response.json();
-                if (data.status !== 'success') {
-                    throw new Error(data.message || '目录加载失败');
+                const bodyText = await response.text();
+                let data;
+                try {
+                    data = JSON.parse(bodyText);
+                } catch (parseError) {
+                    const err = new Error('目录数据解析失败');
+                    err.status = response.status;
+                    throw err;
+                }
+                if (!response.ok || data.status !== 'success') {
+                    const err = new Error(data && data.message ? data.message : '目录加载失败');
+                    err.status = response.status;
+                    throw err;
                 }
                 currentDirectoryPath = data.current;
                 if (directoryCurrentPath) {
@@ -414,24 +535,73 @@
                     directoryGoParentBtn.disabled = !data.parent;
                 }
                 directoryList.innerHTML = '';
-                if (!data.directories.length) {
+                const sortedDirs = (data.directories || []).slice().sort((a, b) => {
+                    const hiddenDiff = (a.is_hidden ? 1 : 0) - (b.is_hidden ? 1 : 0);
+                    if (hiddenDiff !== 0) return hiddenDiff;
+                    return a.name.localeCompare(b.name);
+                });
+                if (!sortedDirs.length) {
                     directoryList.innerHTML = '<div class="list-group-item text-muted">此目录下没有可用子目录</div>';
                 } else {
-                    data.directories.forEach(dir => {
+                    sortedDirs.forEach(dir => {
                         const button = document.createElement('button');
                         button.type = 'button';
                         button.className = 'list-group-item list-group-item-action directory-entry d-flex align-items-center';
                         if (dir.is_hidden) {
                             button.classList.add('text-muted');
                         }
+                        const accessible = dir.accessible !== false;
                         button.dataset.path = dir.path;
-                        button.innerHTML = `<i class="fas fa-folder me-2 text-warning"></i>${dir.name}`;
+                        button.dataset.accessible = accessible ? 'true' : 'false';
+                        const iconClass = accessible ? 'fa-folder text-warning' : 'fa-lock text-danger';
+                        const suffix = accessible ? '' : '<span class="ms-auto text-muted small">无权限</span>';
+                        if (!accessible) {
+                            button.classList.add('opacity-75');
+                            button.title = '没有权限访问该目录';
+                        }
+                        button.innerHTML = `<i class="fas ${iconClass} me-2"></i>${dir.name}${suffix}`;
                         directoryList.appendChild(button);
                     });
                 }
-                if (directoryChooseBtn) directoryChooseBtn.disabled = false;
+
+                if (directoryFileList) {
+                    directoryFileList.innerHTML = '';
+                    const sortedFiles = (data.files || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+                    if (!sortedFiles.length) {
+                        directoryFileList.innerHTML = '<div class="list-group-item text-muted">此目录下没有SQLite文件</div>';
+                    } else {
+                        sortedFiles.forEach(file => {
+                            const button = document.createElement('button');
+                            button.type = 'button';
+                            button.className = 'list-group-item list-group-item-action file-entry d-flex justify-content-between align-items-center';
+                            button.dataset.path = file.path;
+                            button.dataset.name = file.name;
+                            const readable = file.readable !== false;
+                            button.dataset.readable = readable ? 'true' : 'false';
+                            if (!readable) {
+                                button.classList.add('opacity-75');
+                                button.title = '没有权限读取该文件';
+                            }
+                            button.innerHTML = `
+                                <span><i class="fas ${readable ? 'fa-database text-success' : 'fa-ban text-muted'} me-2"></i>${file.name}</span>
+                                <small class="${readable ? 'text-muted' : 'text-danger'}">${readable ? formatFileSize(file.size) : '无读取权限'}</small>
+                            `;
+                            directoryFileList.appendChild(button);
+                        });
+                    }
+                }
+                if (directorySelectFileBtn) directorySelectFileBtn.disabled = true;
             } catch (error) {
-                directoryList.innerHTML = `<div class="list-group-item text-danger">加载失败：${error.message}</div>`;
+                const message = error && error.message ? error.message : '目录加载失败';
+                if (error && error.status === 403) {
+                    showDirectoryFeedback(message, 'warning');
+                } else {
+                    showDirectoryFeedback(message, 'danger');
+                }
+                directoryList.innerHTML = `<div class="list-group-item text-danger">加载失败：${message}</div>`;
+                if (directoryFileList) {
+                    directoryFileList.innerHTML = `<div class="list-group-item text-danger">加载失败：${message}</div>`;
+                }
             }
         }
 
@@ -750,10 +920,18 @@
         }
 
         if (sqliteDirectoryInput) {
-            sqliteDirectoryInput.addEventListener('input', updateSQLitePreview);
+            sqliteDirectoryInput.addEventListener('input', () => {
+                updateSQLitePreview();
+            });
         }
         if (sqliteFileInput) {
-            sqliteFileInput.addEventListener('input', updateSQLitePreview);
+            sqliteFileInput.addEventListener('input', () => {
+                updateSQLitePreview();
+                validateSqliteFileName(false);
+            });
+            sqliteFileInput.addEventListener('blur', () => {
+                validateSqliteFileName(true);
+            });
         }
         if (openDirectoryBrowserBtn && directoryModal) {
             openDirectoryBrowserBtn.addEventListener('click', () => {
@@ -766,10 +944,36 @@
             directoryList.addEventListener('click', (event) => {
                 const entry = event.target.closest('.directory-entry');
                 if (entry) {
+                    if (entry.dataset.accessible === 'false') {
+                        showDirectoryFeedback('没有权限访问该目录', 'warning');
+                        return;
+                    }
+                    clearDirectoryFeedback();
                     loadDirectory(entry.dataset.path);
                 }
             });
         }
+        if (directoryFileList) {
+            directoryFileList.addEventListener('click', (event) => {
+                const entry = event.target.closest('.file-entry');
+                if (entry) {
+                    if (entry.dataset.readable === 'false') {
+                        showDirectoryFeedback('没有权限读取该文件', 'warning');
+                        return;
+                    }
+                    if (!hasValidSqliteExtension(entry.dataset.name || '')) {
+                        showDirectoryFeedback('只能选择扩展名为 .sqlite/.sqlite3/.db 的文件', 'warning');
+                        return;
+                    }
+                    directoryFileList.querySelectorAll('.file-entry').forEach(el => el.classList.remove('active'));
+                    entry.classList.add('active');
+                    selectedFilePath = entry.dataset.path;
+                    selectedFileName = entry.dataset.name;
+                    if (directorySelectFileBtn) directorySelectFileBtn.disabled = false;
+                }
+            });
+        }
+
         if (directoryGoParentBtn) {
             directoryGoParentBtn.addEventListener('click', () => {
                 const parent = directoryGoParentBtn.dataset.parent;
@@ -778,12 +982,21 @@
                 }
             });
         }
-        if (directoryChooseBtn) {
-            directoryChooseBtn.addEventListener('click', () => {
-                if (currentDirectoryPath && sqliteDirectoryInput) {
-                    sqliteDirectoryInput.value = currentDirectoryPath;
-                    updateSQLitePreview();
+        if (directorySelectFileBtn) {
+            directorySelectFileBtn.addEventListener('click', () => {
+                if (!selectedFilePath || !selectedFileName) return;
+                if (!hasValidSqliteExtension(selectedFileName)) {
+                    showDirectoryFeedback('只能选择扩展名为 .sqlite/.sqlite3/.db 的文件', 'warning');
+                    return;
                 }
+                clearDirectoryFeedback();
+                const normalizedPath = selectedFilePath.replace(/\\/g, '/');
+                const separatorIndex = normalizedPath.lastIndexOf('/');
+                const parentPath = separatorIndex >= 0 ? normalizedPath.slice(0, separatorIndex) : normalizedPath;
+                if (sqliteDirectoryInput) sqliteDirectoryInput.value = parentPath;
+                if (sqliteFileInput) sqliteFileInput.value = selectedFileName;
+                updateSQLitePreview();
+                validateSqliteFileName(false);
                 if (directoryModal) {
                     directoryModal.hide();
                 }
@@ -1117,6 +1330,10 @@
                 }
                 if (!sqliteFileInput || !sqliteFileInput.value.trim()) {
                     alert('请输入SQLite文件名');
+                    if (sqliteFileInput) sqliteFileInput.focus();
+                    return;
+                }
+                if (!validateSqliteFileName(true)) {
                     if (sqliteFileInput) sqliteFileInput.focus();
                     return;
                 }

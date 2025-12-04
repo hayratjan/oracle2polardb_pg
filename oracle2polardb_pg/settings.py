@@ -18,7 +18,7 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Initialize Oracle client
-# cx_Oracle.init_oracle_client(lib_dir=r"D:\Program Files\instantclient_11_2")
+cx_Oracle.init_oracle_client(lib_dir=r"/Users/xiaohaige/Downloads/instantclient_23_3")
 
 
 # Quick-start development settings - unsuitable for production
