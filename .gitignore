@@ -19,3 +19,5 @@ __pycache__/
 *.pyc
 *.pyo
 migration_app/migrations/*
+static/*
+.DS_Store
