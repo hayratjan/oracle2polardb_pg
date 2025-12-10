@@ -1136,8 +1136,13 @@ def migrate_view_to_table(task_id, postgres_database=None):
                             # 不创建表，只导入数据
                     
                     # 如果不是追加或清空数据，需要创建表
-                    if not table_exists or (task.conflict_strategy not in ['append', 'truncate']):
-                        logger.info(f"执行创建表: {task.target_schema}.{view_name}")
+                    # error_msg = f"迁移策略:{task.conflict_strategy}\n"
+                    # logger.error(error_msg, exc_info=True)
+                    # view_log.append(error_msg)
+                    # failed_views.append(view_name)
+                    
+                    if not table_exists:
+                        logger.info(f"创建目标表: {task.target_schema}.{view_name}")
                         pg_cursor.execute(create_table_sql)
                         pg_conn.commit()
                         view_log.append(f"成功创建PostgreSQL表 {task.target_schema}.{view_name}")

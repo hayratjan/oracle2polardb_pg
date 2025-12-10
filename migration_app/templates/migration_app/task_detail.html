@@ -123,6 +123,26 @@
                     <p class="mb-0 text-muted">未配置目标连接</p>
                     {% endif %}
                 </div>
+                {% if task.target_object %}
+                <div class="mb-3">
+                    <h5 class="mb-1">目标对象名称</h5>
+                    <p class="mb-0">{{ task.target_object }}</p>
+                </div>
+                {% endif %}
+                {% if task.selected_fields %}
+                <div class="mb-3">
+                    <h5 class="mb-1">字段筛选</h5>
+                    <p class="mb-0">
+                        {% for field in task.selected_fields|split:"\n" %}
+                        {% if field %}<span class="badge bg-secondary me-1 mb-1">{{ field }}</span>{% endif %}
+                        {% endfor %}
+                    </p>
+                </div>
+                {% endif %}
+                <div class="mb-3">
+                    <h5 class="mb-1">标识符大小写</h5>
+                    <p class="mb-0">{{ task.get_identifier_case_display }}</p>
+                </div>
                 <div class="mb-3">
                     <h5 class="mb-1">冲突处理策略</h5>
                     <p class="mb-0">

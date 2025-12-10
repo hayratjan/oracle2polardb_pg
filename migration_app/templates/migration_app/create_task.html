@@ -117,6 +117,23 @@
                             <div class="fw-bold">已选择的对象：</div>
                             <div id="selected-objects-list" class="mt-1"></div>
                         </div>
+                        <div class="card mt-3 d-none" id="view-options-container">
+                            <div class="card-body">
+                                <h6 class="card-title text-primary mb-3">
+                                    <i class="fas fa-sliders-h me-1"></i> 视图迁移选项
+                                </h6>
+                                <div class="mb-3">
+                                    <label for="target-object-name" class="form-label">目标表名（可选）</label>
+                                    <input type="text" class="form-control" id="target-object-name" placeholder="默认：自动使用源对象名的小写形式">
+                                    <div class="form-text">留空将自动使用所选视图名称并转换为小写。</div>
+                                </div>
+                                <div>
+                                    <label for="selected-fields" class="form-label">字段筛选（可选）</label>
+                                    <textarea class="form-control" id="selected-fields" rows="3" placeholder="如：VOU_ID, SET_YEAR, ACCT_SET_CODE"></textarea>
+                                    <div class="form-text">使用逗号或换行分隔字段名，留空表示迁移全部字段。</div>
+                                </div>
+                            </div>
+                        </div>
                         <div class="form-text">
                             选择Schema后会自动加载对象列表（带有"表/视图"标识）。<br>
                             对于"所有表"类型的任务，无需选择源对象。<br>
@@ -163,6 +180,17 @@
                         </select>
                         <div class="form-text">
                             当目标Schema中已存在同名对象时的处理方式。
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="identifier-case" class="form-label">标识符大小写</label>
+                        <select class="form-select" id="identifier-case" name="identifier_case">
+                            <option value="lower" selected>全部小写（推荐）</option>
+                            <option value="upper">全部大写</option>
+                            <option value="preserve">保持与Oracle一致</option>
+                        </select>
+                        <div class="form-text">
+                            控制迁移到PolarDB-PG后的表名和字段名大小写。选择“保持一致”将原样保留。
                         </div>
                     </div>
                 </div>
@@ -286,6 +314,10 @@
         const sourceObjectSearch = document.getElementById('source-object-search');
         const sourceObjectSearchBtn = document.getElementById('source-object-search-btn');
         const selectedObjectsList = document.getElementById('selected-objects-list');
+        const identifierCaseSelect = document.getElementById('identifier-case');
+        const viewOptionsContainer = document.getElementById('view-options-container');
+        const targetObjectInput = document.getElementById('target-object-name');
+        const selectedFieldsInput = document.getElementById('selected-fields');
         const loadMoreContainer = document.getElementById('load-more-container');
         const loadMoreBtn = document.getElementById('load-more-btn');
         const loadStatus = document.getElementById('load-status');
@@ -467,6 +499,23 @@
             if (sqliteFileInput) sqliteFileInput.required = isSQLiteTask;
             if (isSQLiteTask) {
                 updateSQLitePreview();
+            }
+        }
+
+        function toggleViewOptions() {
+            if (!viewOptionsContainer) return;
+            const shouldShow = taskTypeSelect.value === 'view';
+            viewOptionsContainer.classList.toggle('d-none', !shouldShow);
+            if (shouldShow) {
+                autoFillTargetObject();
+            }
+        }
+
+        function autoFillTargetObject() {
+            if (!targetObjectInput || targetObjectInput.value.trim()) return;
+            const selectedCheckbox = sourceObjectList.querySelector('.form-check-input:checked');
+            if (selectedCheckbox && selectedCheckbox.value) {
+                targetObjectInput.value = selectedCheckbox.value.toLowerCase();
             }
         }
 
@@ -722,6 +771,7 @@
         // 当任务类型变化时，如果已选择了Schema，自动获取对象列表
         taskTypeSelect.addEventListener('change', function() {
             toggleTaskTypeSections();
+            toggleViewOptions();
             if (this.value === 'view_to_sqlite') {
                 autoFillSqliteFileName();
             }
@@ -1006,6 +1056,7 @@
             taskNameInput.addEventListener('blur', autoFillSqliteFileName);
         }
         toggleTaskTypeSections();
+        toggleViewOptions();
         
         // 绑定加载更多按钮事件
         loadMoreBtn.addEventListener('click', function() {
@@ -1241,6 +1292,7 @@
         sourceObjectList.addEventListener('change', function(e) {
             if (e.target.matches('.form-check-input')) {
                 updateSelectedObjects();
+                autoFillTargetObject();
             }
         });
 
@@ -1359,8 +1411,16 @@
                 task_type: taskTypeSelect.value,
                 oracle_connection: oracleConnectionSelect.value,
                 source_schema: sourceSchemaSelect.value,
-                conflict_strategy: document.getElementById('conflict-strategy').value
+                conflict_strategy: document.getElementById('conflict-strategy').value,
+                identifier_case: identifierCaseSelect ? identifierCaseSelect.value : 'lower'
             };
+
+            if (targetObjectInput && targetObjectInput.value.trim()) {
+                taskData.target_object = targetObjectInput.value.trim();
+            }
+            if (selectedFieldsInput && selectedFieldsInput.value.trim()) {
+                taskData.selected_fields = selectedFieldsInput.value.trim();
+            }
             
             if (isSQLiteTask) {
                 taskData.sqlite_directory = sqliteDirectoryInput ? sqliteDirectoryInput.value.trim() : '';

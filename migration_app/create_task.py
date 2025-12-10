@@ -35,6 +35,30 @@ def validate_task_data(data):
             data['sqlite_file_name'] = file_name
         data['target_schema'] = data.get('target_schema') or 'main'
     
+    # 清理目标对象名称
+    if data.get('target_object'):
+        data['target_object'] = data['target_object'].strip()
+        if not data['target_object']:
+            data['target_object'] = None
+    
+    # 规范字段过滤配置
+    selected_fields = data.get('selected_fields')
+    if selected_fields:
+        if isinstance(selected_fields, list):
+            tokens = selected_fields
+        else:
+            normalized = str(selected_fields).replace('；', ',').replace(';', ',').replace('\n', ',')
+            tokens = normalized.split(',')
+        cleaned = [field.strip() for field in tokens if field and field.strip()]
+        data['selected_fields'] = '\n'.join(cleaned) if cleaned else None
+    
+    # 验证标识符大小写策略
+    valid_identifier_cases = ['lower', 'upper', 'preserve']
+    identifier_case = data.get('identifier_case') or 'lower'
+    if identifier_case not in valid_identifier_cases:
+        errors.append(f"无效的标识符大小写策略: {identifier_case}")
+    data['identifier_case'] = identifier_case
+    
     # 检查source_object和source_objects字段
     if 'task_type' in data and data['task_type'] != 'all_tables':
         if data['task_type'] in ['view_to_table', 'view_to_sqlite']:
@@ -112,8 +136,11 @@ def create_task_validated(request):
                 task.postgres_connection = PostgresConnection.objects.get(pk=validated_data['postgres_connection'])
             task.source_schema = validated_data['source_schema']
             task.target_schema = validated_data.get('target_schema') or ''
+            task.target_object = validated_data.get('target_object') or None
             task.sqlite_directory = validated_data.get('sqlite_directory')
             task.sqlite_file_name = validated_data.get('sqlite_file_name')
+            task.selected_fields = validated_data.get('selected_fields')
+            task.identifier_case = validated_data.get('identifier_case') or 'lower'
             
             # 设置源对象（如果适用）
             if task.task_type != 'all_tables':

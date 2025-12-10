@@ -73,6 +73,11 @@ class MigrationTask(models.Model):
         ('append', '追加数据（仅适用于表）'),
         ('truncate', '清空表并重新加载数据'),
     ]
+    IDENTIFIER_CASE_CHOICES = [
+        ('lower', '全部小写'),
+        ('upper', '全部大写'),
+        ('preserve', '保持原样'),
+    ]
     
     name = models.CharField(max_length=100, verbose_name="任务名称")
     task_type = models.CharField(max_length=20, choices=TASK_TYPE_CHOICES, verbose_name="任务类型")
@@ -86,8 +91,11 @@ class MigrationTask(models.Model):
     )
     source_schema = models.CharField(max_length=50, verbose_name="源Schema")
     target_schema = models.CharField(max_length=50, verbose_name="目标Schema", blank=True, null=True)
+    target_object = models.CharField(max_length=100, blank=True, null=True, verbose_name="目标对象名称")
     source_object = models.CharField(max_length=100, verbose_name="源对象名称", blank=True, null=True)
     source_objects = models.TextField(verbose_name="多个源对象", blank=True, null=True, help_text="用逗号分隔的多个源对象名称")
+    selected_fields = models.TextField(blank=True, null=True, verbose_name="字段过滤", help_text="逗号或换行分隔的字段名，可选")
+    identifier_case = models.CharField(max_length=10, choices=IDENTIFIER_CASE_CHOICES, default='lower', verbose_name="标识符大小写策略")
     is_batch = models.BooleanField(default=False, verbose_name="批量迁移")
     parent_task = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='subtasks', verbose_name="父任务")
     conflict_strategy = models.CharField(max_length=20, choices=CONFLICT_STRATEGY_CHOICES, default='error', verbose_name="冲突处理策略")

@@ -15,7 +15,7 @@ class PostgresConnectionAdmin(admin.ModelAdmin):
 
 @admin.register(MigrationTask)
 class MigrationTaskAdmin(admin.ModelAdmin):
-    list_display = ('name', 'task_type', 'source_schema', 'target_schema', 'source_object', 'status', 'created_at')
-    list_filter = ('task_type', 'status', 'created_at')
+    list_display = ('name', 'task_type', 'source_schema', 'target_schema', 'source_object', 'identifier_case', 'status', 'created_at')
+    list_filter = ('task_type', 'identifier_case', 'status', 'created_at')
     search_fields = ('name', 'source_schema', 'target_schema', 'source_object')
     readonly_fields = ('log', 'created_at', 'started_at', 'completed_at')
