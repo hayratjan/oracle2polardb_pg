@@ -46,10 +46,41 @@ def task_list(request):
     """
     显示所有迁移任务
     """
+    from django.core.paginator import Paginator
+    
+    # 获取查询参数
+    search = request.GET.get('search', '').strip()
+    status_filter = request.GET.get('status', '')
+    
+    # 构建查询
     tasks = MigrationTask.objects.all().order_by('-created_at')
     
+    # 搜索过滤
+    if search:
+        tasks = tasks.filter(
+            models.Q(name__icontains=search) |
+            models.Q(oracle_connection__name__icontains=search) |
+            models.Q(postgres_connection__name__icontains=search) |
+            models.Q(source_schema__icontains=search) |
+            models.Q(target_schema__icontains=search)
+        )
+    
+    # 状态过滤
+    if status_filter and status_filter != 'all':
+        tasks = tasks.filter(status=status_filter)
+    
+    # 分页
+    paginator = Paginator(tasks, 20)  # 每页显示20条
+    page_number = request.GET.get('page', 1)
+    try:
+        page_obj = paginator.page(page_number)
+    except:
+        page_obj = paginator.page(1)
+    
     return render(request, 'migration_app/task_list.html', {
-        'tasks': tasks
+        'tasks': page_obj,
+        'search': search,
+        'status_filter': status_filter
     })
 
 def task_detail(request, task_id):
@@ -375,27 +406,30 @@ def cancel_task(request, task_id):
             logger.info(f"任务信息: {task.name}, 当前状态: {task.status}")
             
             if task.status == 'running':
-                # 设置取消标志
+                # 标记取消并立即更新状态，前端可以立刻看到“已取消”
                 task.cancel_requested = True
+                task.status = 'canceled'
+                task.completed_at = timezone.now()
+                log_message = "任务已被用户请求取消"
+                task.log = (task.log or "") + ("\n" if task.log else "") + log_message
                 task.save()
-                message = "任务已标记为取消，将在当前操作完成后终止"
-                logger.info(f"已取消任务 {task_id}")
+                message = "任务已取消"
+                logger.info(f"任务 {task_id} 已标记为取消")
             else:
                 message = f"无法取消处于 {task.status} 状态的任务"
                 logger.warning(message)
             
             # 如果是GET请求，重定向到任务详情页
             if request.method == 'GET':
-                if task.status == 'running':
+                if task.status == 'canceled':
                     messages.success(request, message)
                 else:
                     messages.warning(request, message)
                 return redirect('migration_app:task_detail', task_id=task_id)
             # 如果是POST请求，返回JSON响应
             else:
-                status = 'success' if task.status == 'canceled' else 'warning'
                 return JsonResponse({
-                    'status': status,
+                    'status': 'success' if task.status == 'canceled' else 'warning',
                     'message': message
                 })
             
@@ -421,6 +455,31 @@ def cancel_task(request, task_id):
             'status': 'error',
             'message': 'Invalid request method'
         }, status=405)
+
+@csrf_exempt
+def delete_task(request, task_id):
+    """删除迁移任务（仅允许删除非运行中的任务）"""
+    logger.info(f"收到删除任务请求: 任务ID={task_id}, 方法={request.method}")
+    
+    if request.method in ['POST', 'DELETE']:
+        try:
+            task = get_object_or_404(MigrationTask, pk=task_id)
+            
+            if task.status == 'running':
+                message = "正在运行的任务无法删除，请先取消任务"
+                logger.warning(message)
+                return JsonResponse({'status': 'error', 'message': message}, status=400)
+            
+            task.delete()
+            logger.info(f"任务 {task_id} 已删除")
+            return JsonResponse({'status': 'success'})
+        except Exception as e:
+            error_message = f"删除任务失败: {str(e)}"
+            logger.error(error_message, exc_info=True)
+            return JsonResponse({'status': 'error', 'message': error_message}, status=500)
+    
+    logger.warning(f"非法的请求方法: {request.method}")
+    return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=405)
 
 def task_detailed_info(request, task_id):
     """获取任务的详细信息"""

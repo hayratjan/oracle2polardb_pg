@@ -121,6 +121,29 @@ class MigrationTask(models.Model):
             return os.path.abspath(os.path.join(directory, self.sqlite_file_name))
         return None
     
+    @property
+    def source_db(self):
+        """返回源数据库显示名称"""
+        if self.oracle_connection:
+            return f"{self.oracle_connection.name} ({self.source_schema})"
+        return f"Oracle ({self.source_schema})"
+    
+    @property
+    def target_db(self):
+        """返回目标数据库显示名称"""
+        if self.task_type == 'view_to_sqlite':
+            if self.sqlite_file_name:
+                return f"SQLite ({self.sqlite_file_name})"
+            return "SQLite"
+        if self.postgres_connection:
+            target_info = f"{self.postgres_connection.name}"
+            if self.target_schema:
+                target_info += f" ({self.target_schema})"
+            return target_info
+        if self.target_schema:
+            return f"PostgreSQL ({self.target_schema})"
+        return "PostgreSQL"
+    
     class Meta:
         verbose_name = "迁移任务"
         verbose_name_plural = "迁移任务"

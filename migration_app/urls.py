@@ -16,6 +16,7 @@ urlpatterns = [
     path('task/<int:task_id>/status/', dashboard.task_status, name='task_status'),
     path('task/<int:task_id>/start/', dashboard.start_task, name='start_task'),
     path('task/<int:task_id>/cancel/', dashboard.cancel_task, name='cancel_task'),
+    path('task/<int:task_id>/delete/', dashboard.delete_task, name='delete_task'),
     path('task/<int:task_id>/info/', dashboard.task_detailed_info, name='task_detailed_info'),
     path('task/<int:task_id>/switch_database/', dashboard.switch_postgres_database, name='switch_postgres_database'),
     path('tasks/', dashboard.task_list, name='task_list'),

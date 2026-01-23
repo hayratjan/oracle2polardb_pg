@@ -9,6 +9,48 @@
 <li class="breadcrumb-item active" aria-current="page">创建任务</li>
 {% endblock %}
 
+{% block extra_css %}
+<style>
+    /* 确保模态框正确显示在最上层 */
+    .modal-backdrop {
+        z-index: 1050 !important;
+    }
+    
+    .modal {
+        z-index: 1055 !important;
+    }
+    
+    .modal-dialog {
+        z-index: 1056 !important;
+    }
+    
+    /* 确保模态框内容可见 */
+    .modal.show {
+        display: block !important;
+    }
+    
+    .modal.show .modal-dialog {
+        transform: none !important;
+    }
+    
+    /* 确保模态框内容不被遮挡 */
+    .modal-content {
+        z-index: 1057 !important;
+        position: relative;
+    }
+    
+    /* 确保侧边栏不会遮挡模态框 */
+    .sidebar {
+        z-index: 100 !important;
+    }
+    
+    /* 确保导航栏不会遮挡模态框 */
+    .navbar {
+        z-index: 1000 !important;
+    }
+</style>
+{% endblock %}
+
 {% block dashboard_content %}
 <div class="alert alert-info d-flex align-items-center mb-4" role="alert">
     <i class="fas fa-magic me-2 fs-5"></i>
@@ -91,6 +133,14 @@
                             <input type="text" class="form-control" id="source-object-search" placeholder="输入关键词搜索...">
                             <button class="btn btn-outline-secondary" type="button" id="source-object-search-btn">
                                 <i class="fas fa-search"></i> 搜索
+                            </button>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <button type="button" class="btn btn-sm btn-outline-primary" id="select-all-objects-btn">
+                                <i class="fas fa-check-double me-1"></i> 全选
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="deselect-all-objects-btn">
+                                <i class="fas fa-times me-1"></i> 取消全选
                             </button>
                         </div>
                         <div class="input-group">
@@ -1287,6 +1337,26 @@
                 selectedObjectsList.appendChild(badge);
             });
         }
+        
+        // 全选所有可见的对象
+        document.getElementById('select-all-objects-btn').addEventListener('click', function() {
+            const visibleCheckboxes = sourceObjectList.querySelectorAll('.form-check-input:not([style*="display: none"])');
+            visibleCheckboxes.forEach(checkbox => {
+                checkbox.checked = true;
+            });
+            updateSelectedObjects();
+            autoFillTargetObject();
+        });
+        
+        // 取消全选
+        document.getElementById('deselect-all-objects-btn').addEventListener('click', function() {
+            const checkboxes = sourceObjectList.querySelectorAll('.form-check-input');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            updateSelectedObjects();
+            autoFillTargetObject();
+        });
         
         // 监听源对象选择变化
         sourceObjectList.addEventListener('change', function(e) {

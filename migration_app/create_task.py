@@ -81,7 +81,7 @@ def validate_task_data(data):
                     errors.append("对于非'all_tables'类型的任务，需要提供源对象名")
     
     # 检查冲突策略
-    valid_strategies = ['error', 'replace', 'skip', 'append']
+    valid_strategies = ['error', 'replace', 'skip', 'append', 'truncate']
     if 'conflict_strategy' in data and data['conflict_strategy'] not in valid_strategies:
         errors.append(f"无效的冲突策略: {data['conflict_strategy']}")
     

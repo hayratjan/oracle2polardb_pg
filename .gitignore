@@ -21,3 +21,5 @@ __pycache__/
 migration_app/migrations/*
 static/*
 .DS_Store
+.vscode/launch.json
+.cursorignore

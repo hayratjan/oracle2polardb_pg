@@ -76,10 +76,26 @@
         </div>
     </div>
     <div class="card-body">
+        <div class="d-flex justify-content-between mb-3">
+            <div>
+                <button type="button" class="btn btn-sm btn-outline-success me-2" onclick="bulkStartTasks()">
+                    <i class="fas fa-play"></i> 批量运行
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-warning me-2" onclick="bulkCancelTasks()">
+                    <i class="fas fa-stop"></i> 批量取消
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-danger" onclick="bulkDeleteTasks()">
+                    <i class="fas fa-trash"></i> 批量删除
+                </button>
+            </div>
+        </div>
         <div class="table-responsive">
             <table class="table table-hover table-striped">
                 <thead class="table-light">
                     <tr>
+                        <th>
+                            <input type="checkbox" id="select-all-tasks">
+                        </th>
                         <th>ID</th>
                         <th>任务名称</th>
                         <th>源数据库</th>
@@ -93,6 +109,9 @@
                 <tbody>
                     {% for task in tasks %}
                     <tr>
+                        <td>
+                            <input type="checkbox" class="task-checkbox" value="{{ task.id }}">
+                        </td>
                         <td>{{ task.id }}</td>
                         <td>{{ task.name }}</td>
                         <td>{{ task.source_db }}</td>
@@ -134,12 +153,17 @@
                                     <i class="fas fa-play"></i> 重试
                                 </a>
                                 {% endif %}
+                                {% if task.status != 'running' %}
+                                <a href="javascript:void(0)" onclick="confirmDeleteTask({{ task.id }})" class="btn btn-outline-danger">
+                                    <i class="fas fa-trash"></i> 删除
+                                </a>
+                                {% endif %}
                             </div>
                         </td>
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="8" class="text-center">暂无迁移任务，请先<a href="{% url 'migration_app:create_task' %}">创建任务</a></td>
+                        <td colspan="9" class="text-center">暂无迁移任务，请先<a href="{% url 'migration_app:create_task' %}">创建任务</a></td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -245,6 +269,17 @@
                 alert('启动任务请求失败');
             });
         });
+
+        // 全选/取消全选
+        const selectAllCheckbox = document.getElementById('select-all-tasks');
+        if (selectAllCheckbox) {
+            selectAllCheckbox.addEventListener('change', function() {
+                const checked = this.checked;
+                document.querySelectorAll('.task-checkbox').forEach(cb => {
+                    cb.checked = checked;
+                });
+            });
+        }
     });
     
     // 显示任务启动模态框
@@ -277,7 +312,7 @@
                 hideLoader();
                 
                 if (data.status === 'success') {
-                    alert('任务已标记为取消，请等待系统处理');
+                    alert(data.message || '任务已取消');
                     // 刷新页面以显示更新
                     location.reload();
                 } else {
@@ -292,6 +327,133 @@
                 alert('取消任务请求失败');
             });
         }
+    }
+
+    // 删除任务
+    function confirmDeleteTask(taskId) {
+        if (!confirm('确定要删除该任务吗？此操作不可恢复。')) {
+            return;
+        }
+        // 显示加载动画
+        showLoader();
+        fetch(`{% url "migration_app:delete_task" 0 %}`.replace('0', taskId), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token }}'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            hideLoader();
+            if (data.status === 'success') {
+                location.reload();
+            } else {
+                alert('删除任务失败: ' + (data.message || '未知错误'));
+            }
+        })
+        .catch(error => {
+            hideLoader();
+            console.error('删除任务请求失败:', error);
+            alert('删除任务请求失败');
+        });
+    }
+
+    // 获取选中的任务ID列表
+    function getSelectedTaskIds() {
+        const ids = [];
+        document.querySelectorAll('.task-checkbox:checked').forEach(cb => {
+            ids.push(cb.value);
+        });
+        return ids;
+    }
+
+    // 批量运行任务（使用默认冲突策略）
+    function bulkStartTasks() {
+        const ids = getSelectedTaskIds();
+        if (ids.length === 0) {
+            alert('请先选择至少一个任务');
+            return;
+        }
+        if (!confirm('确定要启动选中的任务吗？')) {
+            return;
+        }
+        showLoader();
+        const requests = ids.map(id =>
+            fetch(`{% url "migration_app:start_task" 0 %}`.replace('0', id), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: JSON.stringify({})
+            }).then(r => r.json()).catch(err => ({status: 'error', message: String(err)}))
+        );
+        Promise.all(requests).then(() => {
+            hideLoader();
+            location.reload();
+        }).catch(() => {
+            hideLoader();
+            alert('批量启动任务时发生错误');
+        });
+    }
+
+    // 批量取消任务
+    function bulkCancelTasks() {
+        const ids = getSelectedTaskIds();
+        if (ids.length === 0) {
+            alert('请先选择至少一个任务');
+            return;
+        }
+        if (!confirm('确定要取消选中的任务吗？')) {
+            return;
+        }
+        showLoader();
+        const requests = ids.map(id =>
+            fetch(`{% url "migration_app:cancel_task" 0 %}`.replace('0', id), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            }).then(r => r.json()).catch(err => ({status: 'error', message: String(err)}))
+        );
+        Promise.all(requests).then(() => {
+            hideLoader();
+            location.reload();
+        }).catch(() => {
+            hideLoader();
+            alert('批量取消任务时发生错误');
+        });
+    }
+
+    // 批量删除任务
+    function bulkDeleteTasks() {
+        const ids = getSelectedTaskIds();
+        if (ids.length === 0) {
+            alert('请先选择至少一个任务');
+            return;
+        }
+        if (!confirm('确定要删除选中的任务吗？此操作不可恢复。')) {
+            return;
+        }
+        showLoader();
+        const requests = ids.map(id =>
+            fetch(`{% url "migration_app:delete_task" 0 %}`.replace('0', id), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            }).then(r => r.json()).catch(err => ({status: 'error', message: String(err)}))
+        );
+        Promise.all(requests).then(() => {
+            hideLoader();
+            location.reload();
+        }).catch(() => {
+            hideLoader();
+            alert('批量删除任务时发生错误');
+        });
     }
 </script>
 {% endblock %} 
