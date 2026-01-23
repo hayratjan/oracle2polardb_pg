@@ -1,4 +1,6 @@
 django
 django-simpleui
+djangorestframework
+django-cors-headers
 cx-Oracle
 psycopg2-binary
