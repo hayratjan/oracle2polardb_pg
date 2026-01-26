@@ -474,7 +474,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   font-weight: 700;
-  color: #2d3748;
+  color: var(--text);
 }
 
 .page-header .text-muted {
@@ -484,12 +484,12 @@ onUnmounted(() => {
 .card {
   border: none;
   border-radius: 1rem;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 10px 40px var(--shadow);
   overflow: hidden;
 }
 
 .card-header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--gradient);
   color: white;
   font-weight: 600;
   border: none;
@@ -526,12 +526,12 @@ onUnmounted(() => {
 }
 
 .info-value {
-  color: #2d3748;
+  color: var(--text);
   font-size: 1rem;
   padding: 0.5rem 0.75rem;
-  background: #f7fafc;
+  background: var(--background);
   border-radius: 0.5rem;
-  border-left: 3px solid #667eea;
+  border-left: 3px solid var(--primary);
 }
 
 .status-badge {
@@ -576,7 +576,7 @@ onUnmounted(() => {
   flex-grow: 1;
   height: 1.5rem;
   border-radius: 0.75rem;
-  background: #e9ecef;
+  background: var(--border);
   overflow: hidden;
 }
 
@@ -588,7 +588,7 @@ onUnmounted(() => {
 
 .progress-text {
   font-weight: 600;
-  color: #667eea;
+  color: var(--primary);
   min-width: 60px;
   text-align: right;
 }
@@ -600,7 +600,7 @@ onUnmounted(() => {
 }
 
 .log-container {
-  background: #1e1e1e;
+  background: var(--background);
   border-radius: 0.5rem;
   padding: 1rem;
   max-height: 400px;
@@ -608,7 +608,7 @@ onUnmounted(() => {
 }
 
 .log-content {
-  color: #d4d4d4;
+  color: var(--text);
   font-family: 'Courier New', monospace;
   font-size: 0.85rem;
   line-height: 1.6;
@@ -620,20 +620,20 @@ onUnmounted(() => {
 .form-control,
 .form-select {
   border-radius: 0.5rem;
-  border: 2px solid #e9ecef;
+  border: 2px solid var(--input-border);
   padding: 0.75rem 1rem;
   transition: all 0.3s ease;
 }
 
 .form-control:focus,
 .form-select:focus {
-  border-color: #667eea;
-  box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 0.2rem var(--shadow);
 }
 
 .form-label {
   font-weight: 600;
-  color: #4a5568;
+  color: var(--text);
   margin-bottom: 0.5rem;
 }
 

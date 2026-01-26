@@ -34,6 +34,67 @@ Oracle到PolarDB迁移工具是一个专业的数据库迁移解决方案，旨�
 - Python 3.6+
 - Oracle客户端库
 - PostgreSQL客户端库
+- Node.js 18+
+- pnpm (推荐) 或 npm
+
+## 前端开发
+
+本项目使用Vue 3 + TypeScript + Vite构建前端界面。
+
+### 安装依赖
+
+**重要：请使用pnpm而不是npm来管理前端依赖**
+
+```bash
+cd frontend
+pnpm install
+```
+
+### 开发模式
+
+```bash
+cd frontend
+pnpm dev
+```
+
+### 构建生产版本
+
+```bash
+cd frontend
+pnpm build
+```
+
+### 为什么使用pnpm？
+
+pnpm比npm更快、更节省磁盘空间，并且能更好地处理依赖关系。本项目统一使用pnpm作为包管理工具。
+
+---
+
+# 后端开发
+
+本项目使用Django 3.2 + Python 3.8构建后端服务。
+
+### 安装依赖
+
+```bash
+uv pip install -r requirements.txt
+```
+
+### 数据库迁移
+
+```bash
+uv run manage.py migrate
+```
+
+### 运行开发服务器
+
+```bash
+uv run manage.py runserver
+```
+
+### 为什么使用Django？
+
+Django是一个功能强大、快速开发的Web框架，非常适合构建RESTful API服务。本项目选择Django作为后端框架，以提供稳定、可靠的服务。
 
 ---
 

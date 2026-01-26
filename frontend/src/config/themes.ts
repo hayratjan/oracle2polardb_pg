@@ -16,6 +16,17 @@ export interface Theme {
   info: string
   gradient: string
   gradientSecondary: string
+  shadow: string
+  shadowLight: string
+  overlay: string
+  divider: string
+  inputBackground: string
+  inputBorder: string
+  cardBorder: string
+  tableHeader: string
+  tableRowHover: string
+  link: string
+  linkHover: string
 }
 
 export const themes: Record<string, Theme> = {
@@ -37,6 +48,17 @@ export const themes: Record<string, Theme> = {
     info: '#4299e1',
     gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     gradientSecondary: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+    shadow: 'rgba(0, 0, 0, 0.1)',
+    shadowLight: 'rgba(0, 0, 0, 0.05)',
+    overlay: 'rgba(0, 0, 0, 0.5)',
+    divider: '#edf2f7',
+    inputBackground: '#ffffff',
+    inputBorder: '#e2e8f0',
+    cardBorder: '#e2e8f0',
+    tableHeader: '#667eea',
+    tableRowHover: 'rgba(102, 126, 234, 0.05)',
+    link: '#667eea',
+    linkHover: '#5a67d8',
   },
   ocean: {
     name: 'ocean',
@@ -56,6 +78,17 @@ export const themes: Record<string, Theme> = {
     info: '#0ea5e9',
     gradient: 'linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%)',
     gradientSecondary: 'linear-gradient(135deg, #00d4ff 0%, #0ea5e9 100%)',
+    shadow: 'rgba(0, 0, 0, 0.1)',
+    shadowLight: 'rgba(0, 0, 0, 0.05)',
+    overlay: 'rgba(0, 0, 0, 0.5)',
+    divider: '#e0f2fe',
+    inputBackground: '#ffffff',
+    inputBorder: '#cbd5e1',
+    cardBorder: '#cbd5e1',
+    tableHeader: '#0ea5e9',
+    tableRowHover: 'rgba(14, 165, 233, 0.05)',
+    link: '#0ea5e9',
+    linkHover: '#0284c7',
   },
   forest: {
     name: 'forest',
@@ -75,6 +108,17 @@ export const themes: Record<string, Theme> = {
     info: '#0ea5e9',
     gradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
     gradientSecondary: 'linear-gradient(135deg, #34d399 0%, #10b981 100%)',
+    shadow: 'rgba(0, 0, 0, 0.1)',
+    shadowLight: 'rgba(0, 0, 0, 0.05)',
+    overlay: 'rgba(0, 0, 0, 0.5)',
+    divider: '#d1fae5',
+    inputBackground: '#ffffff',
+    inputBorder: '#d1fae5',
+    cardBorder: '#d1fae5',
+    tableHeader: '#10b981',
+    tableRowHover: 'rgba(16, 185, 129, 0.05)',
+    link: '#10b981',
+    linkHover: '#059669',
   },
   sunset: {
     name: 'sunset',
@@ -94,6 +138,17 @@ export const themes: Record<string, Theme> = {
     info: '#0ea5e9',
     gradient: 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
     gradientSecondary: 'linear-gradient(135deg, #fb923c 0%, #f97316 100%)',
+    shadow: 'rgba(0, 0, 0, 0.1)',
+    shadowLight: 'rgba(0, 0, 0, 0.05)',
+    overlay: 'rgba(0, 0, 0, 0.5)',
+    divider: '#ffedd5',
+    inputBackground: '#ffffff',
+    inputBorder: '#fed7aa',
+    cardBorder: '#fed7aa',
+    tableHeader: '#f97316',
+    tableRowHover: 'rgba(249, 115, 22, 0.05)',
+    link: '#f97316',
+    linkHover: '#ea580c',
   },
   purple: {
     name: 'purple',
@@ -113,6 +168,17 @@ export const themes: Record<string, Theme> = {
     info: '#0ea5e9',
     gradient: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)',
     gradientSecondary: 'linear-gradient(135deg, #c084fc 0%, #8b5cf6 100%)',
+    shadow: 'rgba(0, 0, 0, 0.1)',
+    shadowLight: 'rgba(0, 0, 0, 0.05)',
+    overlay: 'rgba(0, 0, 0, 0.5)',
+    divider: '#f3e8ff',
+    inputBackground: '#ffffff',
+    inputBorder: '#e9d5ff',
+    cardBorder: '#e9d5ff',
+    tableHeader: '#8b5cf6',
+    tableRowHover: 'rgba(139, 92, 246, 0.05)',
+    link: '#8b5cf6',
+    linkHover: '#7c3aed',
   },
   dark: {
     name: 'dark',
@@ -132,6 +198,17 @@ export const themes: Record<string, Theme> = {
     info: '#3b82f6',
     gradient: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
     gradientSecondary: 'linear-gradient(135deg, #818cf8 0%, #6366f1 100%)',
+    shadow: 'rgba(0, 0, 0, 0.3)',
+    shadowLight: 'rgba(0, 0, 0, 0.15)',
+    overlay: 'rgba(0, 0, 0, 0.7)',
+    divider: '#374151',
+    inputBackground: '#374151',
+    inputBorder: '#4b5563',
+    cardBorder: '#4b5563',
+    tableHeader: '#6366f1',
+    tableRowHover: 'rgba(99, 102, 241, 0.1)',
+    link: '#6366f1',
+    linkHover: '#4f46e5',
   },
   rose: {
     name: 'rose',
@@ -151,6 +228,17 @@ export const themes: Record<string, Theme> = {
     info: '#0ea5e9',
     gradient: 'linear-gradient(135deg, #e11d48 0%, #be123c 100%)',
     gradientSecondary: 'linear-gradient(135deg, #fb7185 0%, #e11d48 100%)',
+    shadow: 'rgba(0, 0, 0, 0.1)',
+    shadowLight: 'rgba(0, 0, 0, 0.05)',
+    overlay: 'rgba(0, 0, 0, 0.5)',
+    divider: '#ffe4e6',
+    inputBackground: '#ffffff',
+    inputBorder: '#fecdd3',
+    cardBorder: '#fecdd3',
+    tableHeader: '#e11d48',
+    tableRowHover: 'rgba(225, 29, 72, 0.05)',
+    link: '#e11d48',
+    linkHover: '#be123c',
   },
 }
 

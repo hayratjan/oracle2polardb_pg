@@ -479,7 +479,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   font-weight: 700;
-  color: #2d3748;
+  color: var(--text);
 }
 
 .page-header .text-muted {
@@ -489,12 +489,12 @@ onMounted(() => {
 .card {
   border: none;
   border-radius: 1rem;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 10px 40px var(--shadow);
   overflow: hidden;
 }
 
 .card-header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--gradient);
   color: white;
   font-weight: 600;
   border: none;
@@ -512,12 +512,12 @@ onMounted(() => {
 
 .list-group-item {
   border: none;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--border);
   transition: all 0.3s ease;
 }
 
 .list-group-item:hover {
-  background-color: #f7fafc;
+  background-color: var(--background);
 }
 
 .list-group-item:last-child {
@@ -542,20 +542,20 @@ onMounted(() => {
 .form-control,
 .form-select {
   border-radius: 0.5rem;
-  border: 2px solid #e9ecef;
+  border: 2px solid var(--input-border);
   padding: 0.75rem 1rem;
   transition: all 0.3s ease;
 }
 
 .form-control:focus,
 .form-select:focus {
-  border-color: #667eea;
-  box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 0.2rem var(--shadow);
 }
 
 .form-label {
   font-weight: 600;
-  color: #4a5568;
+  color: var(--text);
   margin-bottom: 0.5rem;
 }
 
@@ -565,7 +565,7 @@ onMounted(() => {
 }
 
 .modal-header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--gradient);
   color: white;
   border: none;
 }
@@ -581,8 +581,7 @@ onMounted(() => {
 
 h6 {
   font-weight: 600;
-  color: #2d3748;
-  font-size: 0.95rem;
+  color: var(--text);
 }
 
 .text-muted small {
