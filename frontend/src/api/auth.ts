@@ -19,6 +19,15 @@ export interface LogoutResponse {
   message: string
 }
 
+export interface CheckAuthResponse {
+  status: string
+  authenticated: boolean
+  user?: {
+    username: string
+    email: string
+  }
+}
+
 export const authApi = {
   login: async (data: LoginRequest): Promise<LoginResponse> => {
     const response = await apiClient.post<LoginResponse>('/api/login/', data)
@@ -27,6 +36,11 @@ export const authApi = {
 
   logout: async (): Promise<LogoutResponse> => {
     const response = await apiClient.post<LogoutResponse>('/api/logout/')
+    return response.data
+  },
+
+  checkAuth: async (): Promise<CheckAuthResponse> => {
+    const response = await apiClient.get<CheckAuthResponse>('/api/check-auth/')
     return response.data
   }
 }

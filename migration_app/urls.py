@@ -19,6 +19,7 @@ urlpatterns = [
     # REST API 端点
     path('login/', api.LoginAPIView.as_view(), name='api_login'),
     path('logout/', api.LogoutAPIView.as_view(), name='api_logout'),
+    path('check-auth/', api.CheckAuthAPIView.as_view(), name='api_check_auth'),
     path('schemas/', api.SchemasAPIView.as_view(), name='api_schemas'),
     path('database-objects/', api.DatabaseObjectsAPIView.as_view(), name='api_database_objects'),
     path('postgres-databases/', api.PostgresDatabasesAPIView.as_view(), name='api_postgres_databases'),

@@ -50,6 +50,12 @@
             <li class="nav-item ms-2">
               <ThemeSwitcher />
             </li>
+            <li class="nav-item ms-2">
+              <button class="btn btn-outline-light btn-sm" @click="handleLogout">
+                <i class="bi bi-box-arrow-right me-1"></i>
+                退出登录
+              </button>
+            </li>
           </ul>
         </div>
       </div>
@@ -78,11 +84,24 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
+import { authApi } from '@/api/auth'
 
 const route = useRoute()
+const router = useRouter()
 const isLoginPage = computed(() => route.path === '/login' || route.path === '/login/')
+
+const handleLogout = async () => {
+  try {
+    await authApi.logout()
+    localStorage.removeItem('rememberUser')
+    router.push('/login')
+  } catch (error) {
+    console.error('登出失败:', error)
+    router.push('/login')
+  }
+}
 </script>
 
 <style>

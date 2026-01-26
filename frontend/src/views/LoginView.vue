@@ -196,7 +196,8 @@ const handleLogin = async () => {
         localStorage.removeItem('rememberUser')
       }
       
-      router.push('/')
+      await new Promise(resolve => setTimeout(resolve, 500))
+      await router.push('/')
     } else {
       errorMessage.value = response.message || '登录失败，请重试'
     }
@@ -450,6 +451,12 @@ onUnmounted(() => {
 
 .btn-lg:active {
   transform: translateY(0);
+}
+
+.btn-lg:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .login-footer {

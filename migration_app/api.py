@@ -77,6 +77,7 @@ class LoginAPIView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class LogoutAPIView(APIView):
     def post(self, request):
         try:
@@ -89,6 +90,31 @@ class LogoutAPIView(APIView):
             return Response({
                 'status': 'error',
                 'message': f'登出失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class CheckAuthAPIView(APIView):
+    def get(self, request):
+        try:
+            if request.user.is_authenticated:
+                return Response({
+                    'status': 'success',
+                    'authenticated': True,
+                    'user': {
+                        'username': request.user.username,
+                        'email': request.user.email if hasattr(request.user, 'email') else ''
+                    }
+                })
+            else:
+                return Response({
+                    'status': 'success',
+                    'authenticated': False
+                })
+        except Exception as e:
+            return Response({
+                'status': 'error',
+                'message': f'检查认证状态失败: {str(e)}'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
