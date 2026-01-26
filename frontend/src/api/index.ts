@@ -112,7 +112,9 @@ export const databaseApi = {
 
 export const configApi = {
   getMigrationSettings: () => apiClient.get('/api/config/migration/'),
+  saveMigrationSettings: (data: any) => apiClient.post('/api/config/migration/', data),
   getSystemSettings: () => apiClient.get('/api/config/system/'),
+  saveSystemSettings: (data: any) => apiClient.post('/api/config/system/', data),
 }
 
 export const logsApi = {

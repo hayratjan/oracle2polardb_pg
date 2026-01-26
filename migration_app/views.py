@@ -1039,6 +1039,61 @@ def delete_oracle_connection(request):
             return JsonResponse({'status': 'error', 'message': str(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
+@csrf_exempt
+def edit_oracle_connection(request):
+    """编辑Oracle数据库连接"""
+    if request.method == 'POST':
+        try:
+            # 支持JSON和表单数据
+            if request.content_type and 'application/json' in request.content_type:
+                try:
+                    data = json.loads(request.body)
+                    connection_id = data.get('connection_id')
+                    name = data.get('name')
+                    host = data.get('host')
+                    port = data.get('port')
+                    service_name = data.get('service_name')
+                    username = data.get('username')
+                    password = data.get('password')
+                except json.JSONDecodeError:
+                    return JsonResponse({'status': 'error', 'message': '无效的JSON数据'})
+            else:
+                connection_id = request.POST.get('connection_id')
+                name = request.POST.get('name')
+                host = request.POST.get('host')
+                port = request.POST.get('port')
+                service_name = request.POST.get('service_name')
+                username = request.POST.get('username')
+                password = request.POST.get('password')
+            
+            if not connection_id:
+                return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
+            
+            try:
+                connection = OracleConnection.objects.get(id=connection_id)
+            except (OracleConnection.DoesNotExist, ValueError):
+                return JsonResponse({'status': 'error', 'message': f'找不到ID为 {connection_id} 的连接'})
+            
+            if not all([name, host, port, service_name, username]):
+                return JsonResponse({'status': 'error', 'message': '请填写所有必填字段'})
+            
+            # 更新连接信息
+            connection.name = name
+            connection.host = host
+            connection.port = port
+            connection.service_name = service_name
+            connection.username = username
+            
+            # 如果提供了新密码，则更新密码
+            if password:
+                connection.password = password
+            
+            connection.save()
+            return JsonResponse({'status': 'success', 'message': '连接更新成功'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)})
+    return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
+
 # PolarDB-PG数据库连接管理
 
 def pg_database_management(request):
@@ -1092,16 +1147,28 @@ def add_pg_connection(request):
             return JsonResponse({'status': 'error', 'message': str(e)})
     return JsonResponse({'status': 'error', 'message': 'Invalid request method'})
 
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
 def test_pg_connection(request):
     if request.method == 'POST':
         try:
-            connection_id = request.POST.get('connection_id')
+            # 支持JSON和表单数据
+            if request.content_type and 'application/json' in request.content_type:
+                try:
+                    data = json.loads(request.body)
+                    connection_id = data.get('connection_id')
+                except json.JSONDecodeError:
+                    return JsonResponse({'status': 'error', 'message': '无效的JSON数据'})
+            else:
+                connection_id = request.POST.get('connection_id')
+            
             if not connection_id:
                 return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
             
             try:
                 connection = PostgresConnection.objects.get(id=connection_id)
-            except PostgresConnection.DoesNotExist:
+            except (PostgresConnection.DoesNotExist, ValueError):
                 return JsonResponse({'status': 'error', 'message': f'找不到ID为 {connection_id} 的连接'})
             
             # 更新连接状态为测试中
@@ -1149,29 +1216,50 @@ def delete_pg_connection(request):
             return JsonResponse({'status': 'error', 'message': str(e)})
     return JsonResponse({'status': 'error', 'message': 'Invalid request method'})
 
+@csrf_exempt
 def edit_pg_connection(request):
     if request.method == 'POST':
         try:
-            connection_id = request.POST.get('connection_id')
+            # 支持JSON和表单数据
+            if request.content_type and 'application/json' in request.content_type:
+                try:
+                    data = json.loads(request.body)
+                    connection_id = data.get('connection_id')
+                    name = data.get('name')
+                    host = data.get('host')
+                    port = data.get('port')
+                    database = data.get('database')
+                    username = data.get('username')
+                    password = data.get('password')
+                except json.JSONDecodeError:
+                    return JsonResponse({'status': 'error', 'message': '无效的JSON数据'})
+            else:
+                connection_id = request.POST.get('connection_id')
+                name = request.POST.get('name')
+                host = request.POST.get('host')
+                port = request.POST.get('port')
+                database = request.POST.get('database')
+                username = request.POST.get('username')
+                password = request.POST.get('password')
+            
             if not connection_id:
                 return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
             
             try:
                 connection = PostgresConnection.objects.get(id=connection_id)
-            except PostgresConnection.DoesNotExist:
+            except (PostgresConnection.DoesNotExist, ValueError):
                 return JsonResponse({'status': 'error', 'message': f'找不到ID为 {connection_id} 的连接'})
             
             # 更新连接信息
-            connection.name = request.POST.get('name')
-            connection.host = request.POST.get('host')
-            connection.port = request.POST.get('port')
-            connection.database = request.POST.get('database')
-            connection.username = request.POST.get('username')
+            connection.name = name
+            connection.host = host
+            connection.port = port
+            connection.database = database
+            connection.username = username
             
             # 如果提供了新密码，则更新密码
-            new_password = request.POST.get('password')
-            if new_password:
-                connection.password = new_password
+            if password:
+                connection.password = password
             
             connection.save()
             return JsonResponse({'status': 'success'})

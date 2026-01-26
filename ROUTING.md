@@ -57,6 +57,11 @@ http://localhost:8000/
 
 ### 应用路由配置 (`migration_app/urls.py`)
 
+**重要说明**: 
+- 主 `urls.py` 中已经配置了 `path('api/', include('migration_app.urls'))`
+- 因此在 `migration_app/urls.py` 中不需要再加 `api/` 前缀
+- router注册时使用相对路径，如 `r'oracle-connections'` 而不是 `r'api/oracle-connections'`
+
 所有API路由统一使用 `/api/` 前缀，确保前后端分离清晰。
 
 #### REST API ViewSets (自动生成的路由)

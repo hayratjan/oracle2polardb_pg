@@ -14,6 +14,9 @@
     /* 确保模态框正确显示在最上层 */
     .modal-backdrop {
         z-index: 1050 !important;
+        /* 优化遮罩层效果 */
+        background-color: rgba(0, 0, 0, 0.3) !important;
+        backdrop-filter: blur(2px) !important;
     }
     
     .modal {
@@ -22,6 +25,9 @@
     
     .modal-dialog {
         z-index: 1056 !important;
+        /* 优化模态框显示 */
+        max-width: 90vw;
+        max-height: 90vh;
     }
     
     /* 确保模态框内容可见 */
@@ -37,6 +43,9 @@
     .modal-content {
         z-index: 1057 !important;
         position: relative;
+        /* 优化模态框内容高度 */
+        max-height: 85vh;
+        overflow-y: auto;
     }
     
     /* 确保侧边栏不会遮挡模态框 */
@@ -164,8 +173,19 @@
                             <span id="load-status" class="d-block text-muted mt-1 small"></span>
                         </div>
                         <div id="selected-objects" class="mt-2">
-                            <div class="fw-bold">已选择的对象：</div>
-                            <div id="selected-objects-list" class="mt-1"></div>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div class="fw-bold">已选择的对象：</div>
+                                <div>
+                                    <button type="button" class="btn btn-sm btn-outline-primary" id="toggle-selected-objects">
+                                        <i class="fas fa-chevron-down me-1" id="toggle-selected-objects-icon"></i>
+                                        <span id="toggle-selected-objects-text">展开</span>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" id="clear-selected-objects">
+                                        <i class="fas fa-times me-1"></i> 清空
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="selected-objects-list" class="mt-1" style="max-height: 200px; overflow-y: auto; display: none;"></div>
                         </div>
                         <div class="card mt-3 d-none" id="view-options-container">
                             <div class="card-body">
@@ -389,7 +409,53 @@
         const directoryGoParentBtn = document.getElementById('directory-go-parent');
         const directoryFeedback = document.getElementById('directory-feedback');
         const taskNameInput = document.getElementById('task-name');
+        
+        // 调试：检查Bootstrap和模态框元素
+        console.log('Bootstrap available:', window.bootstrap);
+        console.log('Bootstrap.Modal available:', window.bootstrap && bootstrap.Modal);
+        console.log('Modal element:', directoryModalElement);
+        
         const directoryModal = (window.bootstrap && bootstrap.Modal && directoryModalElement) ? new bootstrap.Modal(directoryModalElement) : null;
+        console.log('Modal instance:', directoryModal);
+        
+        // 手动控制模态框显示和关闭
+        const showDirectoryModal = () => {
+            if (directoryModalElement) {
+                directoryModalElement.classList.add('show');
+                directoryModalElement.style.display = 'block';
+                
+                // 添加背景遮罩
+                let backdrop = document.querySelector('.modal-backdrop');
+                if (!backdrop) {
+                    backdrop = document.createElement('div');
+                    backdrop.className = 'modal-backdrop fade show';
+                    document.body.appendChild(backdrop);
+                }
+                backdrop.style.display = 'block';
+                
+                // 禁用页面滚动
+                document.body.style.overflow = 'hidden';
+                document.body.style.paddingRight = '0px';
+            }
+        };
+        
+        const closeDirectoryModal = () => {
+            if (directoryModalElement) {
+                directoryModalElement.classList.remove('show');
+                directoryModalElement.style.display = 'none';
+                
+                // 移除背景遮罩
+                const backdrop = document.querySelector('.modal-backdrop');
+                if (backdrop) {
+                    backdrop.style.display = 'none';
+                    backdrop.remove();
+                }
+                
+                // 恢复页面滚动
+                document.body.style.overflow = '';
+                document.body.style.paddingRight = '';
+            }
+        };
         const browseDirectoryUrl = window.location.origin + '{% url "migration_app:browse_directories" %}';
         let currentDirectoryPath = '';
         let selectedFilePath = '';
@@ -828,6 +894,12 @@
             // 清空已选择的对象显示
             selectedObjectsList.innerHTML = '<span class="text-muted">未选择任何对象</span>';
             
+            // 隐藏展开/折叠和清空按钮
+            const toggleBtn = document.getElementById('toggle-selected-objects');
+            const clearBtn = document.getElementById('clear-selected-objects');
+            if (toggleBtn) toggleBtn.style.display = 'none';
+            if (clearBtn) clearBtn.style.display = 'none';
+            
             // 如果是全部表类型，清空并禁用源对象选择
             if (this.value === 'all_tables') {
                 sourceObjectList.innerHTML = '<div class="list-group-item text-muted">对于"所有表"类型的任务，无需选择源对象</div>';
@@ -1033,13 +1105,26 @@
                 validateSqliteFileName(true);
             });
         }
-        if (openDirectoryBrowserBtn && directoryModal) {
+        if (openDirectoryBrowserBtn) {
             openDirectoryBrowserBtn.addEventListener('click', () => {
                 const initialPath = sqliteDirectoryInput ? sqliteDirectoryInput.value.trim() : '';
                 loadDirectory(initialPath);
-                directoryModal.show();
+                showDirectoryModal();
             });
         }
+        
+        // 监听关闭按钮
+        const closeButtons = directoryModalElement ? directoryModalElement.querySelectorAll('[data-bs-dismiss="modal"]') : [];
+        closeButtons.forEach(btn => {
+            btn.addEventListener('click', closeDirectoryModal);
+        });
+        
+        // 监听点击遮罩层关闭
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal-backdrop')) {
+                closeDirectoryModal();
+            }
+        });
         if (directoryList) {
             directoryList.addEventListener('click', (event) => {
                 const entry = event.target.closest('.directory-entry');
@@ -1097,9 +1182,7 @@
                 if (sqliteFileInput) sqliteFileInput.value = selectedFileName;
                 updateSQLitePreview();
                 validateSqliteFileName(false);
-                if (directoryModal) {
-                    directoryModal.hide();
-                }
+                closeDirectoryModal();
             });
         }
         if (taskNameInput) {
@@ -1325,18 +1408,78 @@
             const selectedCheckboxes = sourceObjectList.querySelectorAll('.form-check-input:checked');
             selectedObjectsList.innerHTML = '';
             
+            const toggleBtn = document.getElementById('toggle-selected-objects');
+            const clearBtn = document.getElementById('clear-selected-objects');
+            
             if (selectedCheckboxes.length === 0) {
                 selectedObjectsList.innerHTML = '<span class="text-muted">未选择任何对象</span>';
+                if (toggleBtn) toggleBtn.style.display = 'none';
+                if (clearBtn) clearBtn.style.display = 'none';
                 return;
             }
+            
+            // 显示按钮
+            if (toggleBtn) toggleBtn.style.display = 'inline-block';
+            if (clearBtn) clearBtn.style.display = 'inline-block';
+            
+            // 显示选择数量
+            const countBadge = document.createElement('span');
+            countBadge.className = 'badge bg-info me-2';
+            countBadge.textContent = `已选择 ${selectedCheckboxes.length} 个对象`;
+            selectedObjectsList.appendChild(countBadge);
+            
+            // 添加所有对象（默认隐藏）
+            const objectsContainer = document.createElement('div');
+            objectsContainer.className = 'mt-2';
+            objectsContainer.style.display = 'none';
             
             selectedCheckboxes.forEach(checkbox => {
                 const badge = document.createElement('span');
                 badge.className = 'badge bg-primary me-1 mb-1';
-                badge.innerHTML = `${checkbox.value} <i class="fas fa-check ms-1"></i>`;
-                selectedObjectsList.appendChild(badge);
+                badge.style.cursor = 'pointer';
+                badge.title = '点击移除';
+                badge.innerHTML = `${checkbox.value} <i class="fas fa-times ms-1"></i>`;
+                badge.addEventListener('click', function() {
+                    checkbox.checked = false;
+                    updateSelectedObjects();
+                    autoFillTargetObject();
+                });
+                objectsContainer.appendChild(badge);
             });
+            
+            selectedObjectsList.appendChild(objectsContainer);
         }
+        
+        // 展开/折叠已选择对象列表
+        let isExpanded = false;
+        document.getElementById('toggle-selected-objects').addEventListener('click', function() {
+            isExpanded = !isExpanded;
+            const icon = document.getElementById('toggle-selected-objects-icon');
+            const text = document.getElementById('toggle-selected-objects-text');
+            const objectsContainer = selectedObjectsList.querySelector('div');
+            
+            if (isExpanded) {
+                icon.classList.remove('fa-chevron-up');
+                icon.classList.add('fa-chevron-down');
+                text.textContent = '展开';
+                if (objectsContainer) objectsContainer.style.display = 'none';
+            } else {
+                icon.classList.remove('fa-chevron-down');
+                icon.classList.add('fa-chevron-up');
+                text.textContent = '折叠';
+                if (objectsContainer) objectsContainer.style.display = 'block';
+            }
+        });
+        
+        // 清空所有选择
+        document.getElementById('clear-selected-objects').addEventListener('click', function() {
+            const allCheckboxes = sourceObjectList.querySelectorAll('.form-check-input');
+            allCheckboxes.forEach(checkbox => {
+                checkbox.checked = false;
+            });
+            updateSelectedObjects();
+            autoFillTargetObject();
+        });
         
         // 全选所有可见的对象
         document.getElementById('select-all-objects-btn').addEventListener('click', function() {

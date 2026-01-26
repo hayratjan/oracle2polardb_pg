@@ -118,11 +118,11 @@ def create_task_validated(request):
             # 验证数据
             validation = validate_task_data(data)
             if not validation['is_valid']:
-                return JsonResponse({
+                return {
                     'status': 'error',
                     'message': '任务数据验证失败',
                     'errors': validation['errors']
-                }, status=400)
+                }
             
             # 创建任务对象
             validated_data = validation['data']
@@ -161,19 +161,19 @@ def create_task_validated(request):
                 task.log = f"目标PostgreSQL数据库: {validated_data['postgres_database']}"
             task.save()
             
-            return JsonResponse({
+            return {
                 'status': 'success',
                 'message': '任务创建成功',
                 'task_id': task.id
-            })
+            }
             
         except Exception as e:
-            return JsonResponse({
+            return {
                 'status': 'error',
                 'message': f'创建任务失败: {str(e)}'
-            }, status=500)
+            }
     
-    return JsonResponse({
+    return {
         'status': 'error',
         'message': 'Invalid request method'
-    }, status=405) 
+    } 
