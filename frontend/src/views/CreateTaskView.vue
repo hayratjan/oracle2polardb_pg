@@ -477,7 +477,7 @@ watch(() => form.value.task_type, () => {
   display: flex;
   align-items: center;
   font-weight: 700;
-  color: #2d3748;
+  color: var(--text);
 }
 
 .page-header .text-muted {
@@ -486,14 +486,14 @@ watch(() => form.value.task_type, () => {
 
 .form-label {
   font-weight: 600;
-  color: #4a5568;
+  color: var(--text);
   margin-bottom: 0.5rem;
 }
 
 .form-control,
 .form-select {
   border-radius: 0.5rem;
-  border: 2px solid #e9ecef;
+  border: 2px solid var(--input-border);
   padding: 0.75rem 1rem;
   transition: all 0.3s ease;
   font-size: 0.95rem;
@@ -501,28 +501,28 @@ watch(() => form.value.task_type, () => {
 
 .form-control:focus,
 .form-select:focus {
-  border-color: #667eea;
-  box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 0.2rem var(--shadow);
 }
 
 .form-control::placeholder {
-  color: #a0aec0;
+  color: var(--text-muted);
 }
 
 hr {
-  border-color: #e2e8f0;
+  border-color: var(--border);
   margin: 2rem 0;
 }
 
 h5 {
   font-weight: 600;
-  color: #2d3748;
+  color: var(--text);
   margin-bottom: 1rem;
 }
 
 .form-check-input:checked {
-  background-color: #667eea;
-  border-color: #667eea;
+  background-color: var(--primary);
+  border-color: var(--primary);
 }
 
 .form-check-label {
@@ -533,12 +533,12 @@ h5 {
 .card {
   border: none;
   border-radius: 1rem;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 10px 40px var(--shadow);
   overflow: hidden;
 }
 
 .card-header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--gradient);
   color: white;
   font-weight: 600;
   border: none;
@@ -551,7 +551,7 @@ h5 {
 
 .list-unstyled li {
   padding: 0.75rem 0;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--border);
 }
 
 .list-unstyled li:last-child {
@@ -559,7 +559,7 @@ h5 {
 }
 
 .list-unstyled strong {
-  color: #667eea;
+  color: var(--primary);
   font-weight: 600;
 }
 
@@ -574,10 +574,10 @@ h5 {
 }
 
 .source-objects-container {
-  border: 2px solid #e9ecef;
+  border: 2px solid var(--input-border);
   border-radius: 0.5rem;
   padding: 1rem;
-  background-color: #f8f9fa;
+  background-color: var(--background);
 }
 
 .source-objects-controls {
@@ -589,42 +589,42 @@ h5 {
 
 .selected-count {
   font-size: 0.875rem;
-  color: #6c757d;
+  color: var(--text-muted);
   margin-left: auto;
 }
 
 .search-box input {
   border-radius: 0.375rem;
-  border: 1px solid #ced4da;
+  border: 1px solid var(--input-border);
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
   transition: all 0.3s ease;
 }
 
 .search-box input:focus {
-  border-color: #667eea;
-  box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 0.2rem var(--shadow);
 }
 
 .source-objects-list {
   max-height: 400px;
   overflow-y: auto;
   padding: 0.5rem;
-  background-color: white;
+  background-color: var(--surface);
   border-radius: 0.375rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
   padding: 30px;
 }
 
 .source-objects-list .form-check {
   padding: 0.625rem 0.75rem;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--divider);
   margin-bottom: 0;
   transition: background-color 0.2s ease;
 }
 
 .source-objects-list .form-check:hover {
-  background-color: #f8f9fa;
+  background-color: var(--background);
 }
 
 .source-objects-list .form-check:last-child {

@@ -13,6 +13,10 @@
         </div>
         
         <form @submit.prevent="handleLogin" class="login-form">
+          <div v-if="errorMessage" class="alert alert-danger" role="alert">
+            <i class="bi bi-exclamation-triangle me-2"></i>{{ errorMessage }}
+          </div>
+          
           <div class="form-group">
             <label class="form-label">
               <i class="bi bi-person me-2"></i>用户名
@@ -47,8 +51,14 @@
             <a href="#" class="forgot-password">忘记密码？</a>
           </div>
           
-          <button type="submit" class="btn btn-primary btn-block btn-lg">
-            <i class="bi bi-box-arrow-in-right me-2"></i>登录
+          <button 
+            type="submit" 
+            class="btn btn-primary btn-block btn-lg"
+            :disabled="isLoading"
+          >
+            <i v-if="isLoading" class="bi bi-arrow-repeat me-2 spin"></i>
+            <i v-else class="bi bi-box-arrow-in-right me-2"></i>
+            {{ isLoading ? '登录中...' : '登录' }}
           </button>
         </form>
         
@@ -66,6 +76,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { authApi } from '@/api/auth'
 
 const router = useRouter()
 
@@ -77,6 +88,9 @@ const formData = ref({
   password: '',
   remember: false
 })
+
+const isLoading = ref(false)
+const errorMessage = ref('')
 
 interface Particle {
   x: number
@@ -165,12 +179,48 @@ const handleResize = () => {
   initParticles()
 }
 
-const handleLogin = () => {
-  console.log('登录信息:', formData.value)
-  router.push('/')
+const handleLogin = async () => {
+  try {
+    isLoading.value = true
+    errorMessage.value = ''
+    
+    const response = await authApi.login({
+      username: formData.value.username,
+      password: formData.value.password
+    })
+    
+    if (response.status === 'success') {
+      if (formData.value.remember) {
+        localStorage.setItem('rememberUser', formData.value.username)
+      } else {
+        localStorage.removeItem('rememberUser')
+      }
+      
+      router.push('/')
+    } else {
+      errorMessage.value = response.message || '登录失败，请重试'
+    }
+  } catch (error: any) {
+    console.error('登录错误:', error)
+    if (error.response?.data?.message) {
+      errorMessage.value = error.response.data.message
+    } else if (error.message) {
+      errorMessage.value = error.message
+    } else {
+      errorMessage.value = '登录失败，请检查网络连接后重试'
+    }
+  } finally {
+    isLoading.value = false
+  }
 }
 
 onMounted(() => {
+  const rememberedUser = localStorage.getItem('rememberUser')
+  if (rememberedUser) {
+    formData.value.username = rememberedUser
+    formData.value.remember = true
+  }
+  
   initParticles()
   drawParticles()
   window.addEventListener('resize', handleResize)
@@ -193,6 +243,34 @@ onUnmounted(() => {
   justify-content: center;
   background: var(--gradient);
   overflow: hidden;
+}
+
+.alert {
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+}
+
+.alert-danger {
+  background: rgba(245, 101, 101, 0.1);
+  border: 1px solid rgba(245, 101, 101, 0.3);
+  color: var(--danger, #f56565);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .particle-background {

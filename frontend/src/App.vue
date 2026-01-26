@@ -1,6 +1,6 @@
 <template>
   <div id="app">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-gradient">
+    <nav v-if="!isLoginPage" class="navbar navbar-expand-lg navbar-dark">
       <div class="container-fluid">
         <a class="navbar-brand d-flex align-items-center" href="/">
           <img src="@/assets/logo.svg" alt="Logo" width="25" height="25" style="margin: 8px;" />
@@ -55,13 +55,13 @@
       </div>
     </nav>
     
-    <div class="container-fluid main-content">
+    <div :class="['container-fluid', 'main-content', { 'login-page': isLoginPage }]">
       <div class="content-wrapper">
         <router-view />
       </div>
     </div>
     
-    <footer class="footer mt-auto">
+    <footer v-if="!isLoginPage" class="footer mt-auto">
       <div class="container">
         <div class="row">
           <div class="col-md-6 text-center text-md-start">
@@ -77,7 +77,12 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
+
+const route = useRoute()
+const isLoginPage = computed(() => route.path === '/login' || route.path === '/login/')
 </script>
 
 <style>
@@ -89,13 +94,10 @@ import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
   background-attachment: fixed;
 }
 
-.bg-gradient {
-  background: var(--gradient) !important;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
-
 .navbar {
   background: var(--gradient) !important;
+  transition: background 0.3s ease;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 .navbar-dark .navbar-brand {
@@ -150,6 +152,10 @@ import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
   padding: 2rem 1rem;
 }
 
+.main-content.login-page {
+  padding: 0;
+}
+
 .content-wrapper {
   max-width: 1400px;
   margin: 0 auto;
@@ -161,6 +167,7 @@ import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
   padding: 1.5rem 0;
   margin-top: 3rem;
   backdrop-filter: blur(10px);
+  transition: background 0.3s ease;
 }
 
 .footer p {
@@ -188,6 +195,7 @@ import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
   font-weight: 600;
   border: none;
   padding: 1rem 1.5rem;
+  transition: background 0.3s ease;
 }
 
 .card-body {
@@ -209,6 +217,7 @@ import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
 
 .btn-primary {
   background: var(--gradient);
+  transition: background 0.3s ease;
 }
 
 .btn-success {
@@ -235,6 +244,7 @@ import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
 .table thead {
   background: var(--gradient);
   color: white;
+  transition: background 0.3s ease;
 }
 
 .table thead th {

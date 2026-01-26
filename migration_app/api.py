@@ -3,6 +3,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
+from django.contrib.auth import authenticate, login, logout
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 from .models import OracleConnection, PostgresConnection, MigrationTask
 from .serializers import (
     OracleConnectionSerializer, 
@@ -34,6 +37,59 @@ class PostgresConnectionViewSet(viewsets.ModelViewSet):
             return Response(result)
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class LoginAPIView(APIView):
+    def post(self, request):
+        try:
+            username = request.data.get('username')
+            password = request.data.get('password')
+            
+            if not username or not password:
+                return Response({
+                    'status': 'error',
+                    'message': '用户名和密码不能为空'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            user = authenticate(request, username=username, password=password)
+            
+            if user is not None:
+                login(request, user)
+                return Response({
+                    'status': 'success',
+                    'message': '登录成功',
+                    'user': {
+                        'username': user.username,
+                        'email': user.email if hasattr(user, 'email') else ''
+                    }
+                })
+            else:
+                return Response({
+                    'status': 'error',
+                    'message': '用户名或密码错误'
+                }, status=status.HTTP_401_UNAUTHORIZED)
+                
+        except Exception as e:
+            return Response({
+                'status': 'error',
+                'message': f'登录失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class LogoutAPIView(APIView):
+    def post(self, request):
+        try:
+            logout(request)
+            return Response({
+                'status': 'success',
+                'message': '登出成功'
+            })
+        except Exception as e:
+            return Response({
+                'status': 'error',
+                'message': f'登出失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class MigrationTaskViewSet(viewsets.ModelViewSet):

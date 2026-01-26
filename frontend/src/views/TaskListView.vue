@@ -440,17 +440,17 @@ onMounted(() => {
 }
 
 .empty-state svg {
-  color: #cbd5e0;
+  color: var(--border);
   margin-bottom: 1.5rem;
 }
 
 .empty-state h4 {
-  color: #4a5568;
+  color: var(--text);
   font-weight: 600;
 }
 
 .empty-state p {
-  color: #718096;
+  color: var(--text-muted);
   font-size: 1.1rem;
 }
 
@@ -463,7 +463,7 @@ onMounted(() => {
   padding: 1rem;
   font-weight: 600;
   color: white;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--gradient);
   font-size: 0.875rem;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -472,7 +472,7 @@ onMounted(() => {
 .table tbody td {
   padding: 1rem;
   vertical-align: middle;
-  border-color: #e2e8f0;
+  border-color: var(--border);
 }
 
 .table tbody tr {
@@ -480,9 +480,9 @@ onMounted(() => {
 }
 
 .table tbody tr:hover {
-  background-color: rgba(102, 126, 234, 0.05);
+  background-color: var(--table-row-hover);
   transform: scale(1.01);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 4px 12px var(--shadow-light);
 }
 
 .table tbody tr:hover .task-name-link {
