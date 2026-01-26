@@ -64,6 +64,9 @@
                 系统配置
               </router-link>
             </li>
+            <li class="nav-item ms-2">
+              <ThemeSwitcher />
+            </li>
           </ul>
         </div>
       </div>
@@ -91,6 +94,7 @@
 </template>
 
 <script setup lang="ts">
+import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
 </script>
 
 <style>

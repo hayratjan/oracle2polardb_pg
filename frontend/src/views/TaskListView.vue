@@ -13,7 +13,7 @@
           </h1>
           <p class="text-muted mb-0">管理和监控数据库迁移任务</p>
         </div>
-        <router-link to="/task/create" class="btn btn-lg btn-primary">
+        <router-link to="/task/create" class="btn btn-sm btn-primary">
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-plus-circle me-2" viewBox="0 0 16 16">
             <path d="M8 4a.5.5 0 01.5.5v3h3a.5.5 0 010 1h-3v3a.5.5 0 01-1 0v-3h-3a.5.5 0 010-1h3v-3A.5.5 0 018 4z"/>
           </svg>
@@ -126,25 +126,25 @@
                   </td>
                   <td>
                     <div class="btn-group btn-group-sm">
-                      <router-link :to="`/task/${task.id}`" class="btn btn-info" title="详情">
+                      <router-link :to="`/task/${task.id}`" class="btn btn-sm btn-info" title="详情">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-eye" viewBox="0 0 16 16">
                           <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 011.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0114.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 011.172 8z"/>
                           <path d="M8 5.5a2.5 2.5 0 110 5 2.5 2.5 0 010-5zM4.5 8a3.5 3.5 0 117 0 3.5 3.5 0 01-7 0z"/>
                         </svg>
                       </router-link>
-                      <button v-if="task.status === 'pending'" @click="startTask(task.id)" 
-                              class="btn btn-success" title="开始">
+                      <button v-if="task.status === 'pending' && task.id" @click="startTask(task.id)" 
+                              class="btn btn-sm btn-success" title="开始">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-play-fill" viewBox="0 0 16 16">
                           <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 010 1.393z"/>
                         </svg>
                       </button>
-                      <button v-if="task.status === 'running'" @click="cancelTask(task.id)" 
-                              class="btn btn-warning" title="取消">
+                      <button v-if="task.status === 'running' && task.id" @click="cancelTask(task.id)" 
+                              class="btn btn-sm btn-warning" title="取消">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-x-circle-fill" viewBox="0 0 16 16">
                           <path d="M16 8A8 8 0 110 8a8 8 0 0116 0zM5.354 4.646a.5.5 0 10-.708.708L7.293 8l-2.647 2.646a.5.5 0 00.708.708L8 8.707l2.646 2.647a.5.5 0 00.708-.708L8.707 8l2.647-2.646a.5.5 0 00-.708-.708L8 7.293 5.354 4.646z"/>
                         </svg>
                       </button>
-                      <button @click="deleteTask(task.id)" class="btn btn-danger" title="删除">
+                      <button v-if="task.id" @click="deleteTask(task.id)" class="btn btn-sm btn-danger" title="删除">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-trash" viewBox="0 0 16 16">
                           <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
                           <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H6a1 1 0 011-1h2a1 1 0 011 1h3.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
@@ -163,7 +163,7 @@
           </svg>
           <h4 class="mb-3">暂无任务</h4>
           <p class="text-muted mb-4">还没有创建任何迁移任务</p>
-          <router-link to="/task/create" class="btn btn-primary btn-lg">
+          <router-link to="/task/create" class="btn btn-primary btn-sm">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-plus-circle me-2" viewBox="0 0 16 16">
               <path d="M8 4a.5.5 0 01.5.5v3h3a.5.5 0 010 1h-3v3a.5.5 0 01-1 0v-3h-3a.5.5 0 010-1h3v-3A.5.5 0 018 4z"/>
             </svg>

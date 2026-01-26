@@ -67,6 +67,7 @@ export const oracleConnectionApi = {
   test: (id: number) => apiClient.post(`/api/oracle/test-connection/`, { connection_id: id }),
   save: (data: OracleConnection) => apiClient.post('/api/oracle/save-connection/', data),
   deleteConnection: (id: number) => apiClient.post('/api/oracle/delete-connection/', { connection_id: id }),
+  edit: (id: number, data: OracleConnection) => apiClient.post(`/api/oracle/edit-connection/`, { connection_id: id, ...data }),
 }
 
 export const postgresConnectionApi = {

@@ -23,7 +23,7 @@
                     </svg>
                     任务名称
                   </label>
-                  <input v-model="form.name" type="text" class="form-control" required placeholder="输入任务名称">
+                  <input v-model="form.name" type="text" class="form-control-sm" required placeholder="输入任务名称">
                 </div>
                 
                 <div class="col-md-6">
@@ -33,7 +33,7 @@
                     </svg>
                     任务类型
                   </label>
-                  <select v-model="form.task_type" class="form-select" required>
+                  <select v-model="form.task_type" class="form-select-sm" required>
                     <option value="table">表</option>
                     <option value="materialized_view">物化视图</option>
                     <option value="view">视图</option>
@@ -57,7 +57,7 @@
               <div class="row g-3">
                 <div class="col-md-6">
                   <label class="form-label">Oracle连接</label>
-                  <select v-model="form.oracle_connection" class="form-select" required @change="loadSchemas">
+                  <select v-model="form.oracle_connection" class="form-select-sm" required @change="loadSchemas">
                     <option value="">请选择</option>
                     <option v-for="conn in oracleConnections" :key="conn.id" :value="conn.id">
                       {{ conn.name }} ({{ conn.host }}:{{ conn.port }})
@@ -67,7 +67,7 @@
                 
                 <div class="col-md-6">
                   <label class="form-label">源Schema</label>
-                  <select v-model="form.source_schema" class="form-select" required>
+                  <select v-model="form.source_schema" class="form-select-sm" required>
                     <option value="">请选择</option>
                     <option v-for="schema in schemas" :key="schema" :value="schema">{{ schema }}</option>
                   </select>
@@ -103,7 +103,7 @@
                       </span>
                     </div>
                     <div class="search-box mb-2">
-                      <input v-model="searchTerm" type="text" class="form-control" placeholder="搜索对象名称..." :disabled="sourceObjects.length === 0">
+                      <input v-model="searchTerm" type="text" class="form-control-sm" placeholder="搜索对象名称..." :disabled="sourceObjects.length === 0">
                     </div>
                     <div v-if="loadingObjects" class="text-center py-3">
                       <div class="spinner-border spinner-border-sm text-primary" role="status">
@@ -145,7 +145,7 @@
               <div class="row g-3">
                 <div class="col-md-6">
                   <label class="form-label">PostgreSQL连接</label>
-                  <select v-model="form.postgres_connection" class="form-select" required @change="loadPgSchemas">
+                  <select v-model="form.postgres_connection" class="form-select-sm" required @change="loadPgSchemas">
                     <option value="">请选择</option>
                     <option v-for="conn in postgresConnections" :key="conn.id" :value="conn.id">
                       {{ conn.name }} ({{ conn.host }}:{{ conn.port }})
@@ -155,7 +155,7 @@
                 
                 <div class="col-md-6">
                   <label class="form-label">目标Schema</label>
-                  <select v-model="form.target_schema" class="form-select">
+                  <select v-model="form.target_schema" class="form-select-sm">
                     <option value="">请选择</option>
                     <option value="public">public (默认)</option>
                     <option v-for="schema in pgSchemas" :key="schema" :value="schema">{{ schema }}</option>
@@ -166,12 +166,12 @@
               <div class="row g-3 mt-3">
                 <div class="col-md-6">
                   <label class="form-label">目标对象名称</label>
-                  <input v-model="form.target_object" type="text" class="form-control" placeholder="可选">
+                  <input v-model="form.target_object" type="text" class="form-control-sm" placeholder="可选">
                 </div>
                 
                 <div class="col-md-6">
                   <label class="form-label">字段过滤</label>
-                  <textarea v-model="form.selected_fields" class="form-control" rows="1"
+                  <textarea v-model="form.selected_fields" class="form-control-sm" rows="1"
                             placeholder="逗号或换行分隔的字段名"></textarea>
                 </div>
               </div>
@@ -189,7 +189,7 @@
               <div class="row g-3">
                 <div class="col-md-6">
                   <label class="form-label">标识符大小写策略</label>
-                  <select v-model="form.identifier_case" class="form-select">
+                  <select v-model="form.identifier_case" class="form-select-sm">
                     <option value="lower">全部小写</option>
                     <option value="upper">全部大写</option>
                     <option value="preserve">保持原样</option>
@@ -198,7 +198,7 @@
                 
                 <div class="col-md-6">
                   <label class="form-label">冲突处理策略</label>
-                  <select v-model="form.conflict_strategy" class="form-select">
+                  <select v-model="form.conflict_strategy" class="form-select-sm">
                     <option value="error">遇到冲突时报错</option>
                     <option value="replace">删除并替换已存在对象</option>
                     <option value="skip">跳过已存在对象</option>
@@ -216,13 +216,13 @@
               <div v-if="form.task_type.includes('sqlite')" class="row g-3 mt-3">
                 <div class="col-md-6">
                   <label class="form-label">SQLite目录</label>
-                  <input v-model="form.sqlite_directory" type="text" class="form-control" 
+                  <input v-model="form.sqlite_directory" type="text" class="form-control-sm" 
                          placeholder="SQLite文件保存目录">
                 </div>
                 
                 <div class="col-md-6">
                   <label class="form-label">SQLite文件名</label>
-                  <input v-model="form.sqlite_file_name" type="text" class="form-control" 
+                  <input v-model="form.sqlite_file_name" type="text" class="form-control-sm" 
                          placeholder="SQLite文件名">
                 </div>
               </div>
@@ -230,14 +230,14 @@
               <hr class="my-4">
               
               <div class="d-flex gap-2">
-                <button type="submit" class="btn btn-lg btn-primary flex-grow-1" :disabled="loading">
+                <button type="submit" class="btn btn-sm btn-primary flex-grow-1" :disabled="loading">
                   <span v-if="loading" class="spinner-border spinner-border-sm me-2"></span>
                   <svg v-if="!loading" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-rocket-takeoff me-2" viewBox="0 0 16 16">
                     <path d="M9.752 6.193c.599.6 1.73.437 2.182-.33.47-.779.492-2.055.04-2.73-.47-.795-1.673-.908-2.228-.52-.527.367-.74.89-.299 1.432l.333 1.51c.024.11.034.219.028.327-.004.1-.014.197-.032.292l.266.136c.143.074.288.144.435.21.149.067.297.13.445.188zM12.418 8.48c.718.007 1.336.402 1.632 1.04.3.646.234 1.39-.18 1.977-.438.62-1.187.92-1.914.79-.725-.13-1.32-.648-1.541-1.343-.22-.694.03-1.45.632-1.896.523-.383 1.07-.457 1.371-.568zm-4.144 1.352c.66.007 1.226.368 1.498.954.275.594.215 1.278-.163 1.819-.403.568-1.09.845-1.758.724-.664-.12-1.208-.593-1.413-1.229-.201-.635.027-1.327.58-1.739.48-.351.986-.42 1.256-.529zM7.08 5.813c.6.006 1.115.335 1.36.868.25.54.195 1.162-.148 1.656-.366.516-.99.77-1.6.662-.604-.108-1.098-.538-1.284-1.116-.183-.576.025-1.203.527-1.583.435-.319.894-.381 1.145-.487zM5.353 3.326c.532.005.99.297 1.206.77.22.478.173 1.03-.131 1.466-.324.458-.878.683-1.419.587-.536-.096-.973-.477-1.139-.99-.163-.51.022-1.067.468-1.404.386-.283.793-.338 1.015-.429zM3.647.9c.464.005.864.259 1.053.67.193.418.151.9-.115 1.282-.283.4-.768.597-1.242.513-.468-.084-.85-.418-.996-.865-.142-.444.02-.933.409-1.228.337-.247.693-.295.891-.372zM2.08 6.78c.432.004.804.242.981.626.18.389.14.836-.107 1.19-.264.373-.718.557-1.158.48-.436-.078-.79-.386-.925-.795-.133-.406.018-.863.383-1.138.314-.23.648-.273.826-.343zM.715 10.923c.4.004.745.224.908.58.167.361.13.774-.1 1.103-.244.346-.664.517-1.073.445-.404-.072-.732-.358-.857-.737-.123-.376.017-.8.355-1.055.291-.214.6-.253.767-.318zm1.896 3.63c.37.003.69.207.84.538.154.335.12.718-.092 1.022-.226.32-.615.48-.993.412-.374-.067-.678-.332-.794-.683-.114-.347.016-.742.329-.978.27-.199.556-.234.71-.296zm2.98 2.917c.34.003.634.19.772.494.141.308.11.66-.084.938-.208.293-.565.44-.912.378-.344-.062-.624-.305-.73-.626-.105-.318.015-.68.302-.898.248-.182.51-.214.652-.27zm3.058 2.02c.31.003.578.173.704.45.13.281.101.601-.077.855-.19.27-.516.403-.832.345-.313-.056-.568-.278-.665-.57-.096-.29.014-.62.275-.819.226-.166.464-.195.595-.246zm3.012.913c.28.002.524.156.639.408.117.255.09.546-.07.776-.173.244-.468.365-.754.312-.283-.05-.514-.252-.603-.517-.087-.263.013-.563.25-.743.204-.15.42-.177.538-.223zm2.858-.288c.25.002.47.14.575.366.105.228.082.49-.063.697-.156.22-.421.33-.676.282-.254-.045-.461-.226-.541-.464-.078-.236.012-.505.224-.667.183-.135.377-.159.481-.2zm2.557-1.345c.22.002.414.123.507.321.093.201.072.431-.055.613-.138.194-.371.29-.598.247-.224-.04-.407-.2-.479-.408-.07-.208.01-.443.197-.587.16-.119.332-.14.428-.176zm2.12-2.12c.19.002.362.106.445.277.082.173.064.376-.048.537-.122.17-.326.254-.525.216-.196-.035-.357-.176-.42-.357-.062-.18.009-.388.173-.514.14-.104.291-.123.375-.155zm1.577-2.645c.17.001.317.094.393.246.073.152.057.33-.043.473-.108.15-.29.226-.46.193-.17-.032-.31-.16-.366-.324-.055-.163.008-.35.152-.463.124-.092.258-.108.324-.136zm.95-2.99c.148.001.277.082.344.214.064.132.05.289-.038.413-.095.132-.255.198-.404.168-.148-.028-.27-.14-.319-.283-.048-.142.007-.306.133-.405.108-.08.226-.094.284-.118zm.268-3.094c.127.001.238.07.296.184.055.113.043.248-.033.353-.081.113-.218.17-.346.144-.127-.024-.231-.12-.274-.243-.041-.122.006-.262.114-.347.092-.068.193-.08.242-.101zm-.378-2.99c.107.001.2.06.25.155.047.095.037.21-.028.299-.068.096-.187.145-.296.121-.109-.02-.198-.103-.235-.206-.035-.103.005-.222.097-.295.078-.058.165-.068.208-.087zm-.976-2.635c.087.001.163.049.203.126.038.077.03.171-.023.244-.055.078-.151.118-.24.099-.088-.017-.16-.083-.191-.167-.028-.084.004-.18.079-.239.063-.047.133-.055.172-.07zm-1.438-2.09c.067.001.125.038.156.097.03.059.023.131-.018.188-.043.06-.117.091-.186.076-.068-.013-.123-.064-.148-.129-.022-.065.003-.139.061-.184.049-.036.103-.043.135-.056zm-1.75-1.458c.047.001.088.027.11.068.021.041.016.091-.012.131-.03.042-.082.064-.13.053-.048-.009-.086-.045-.104-.09-.016-.045.002-.097.043-.127.034-.025.072-.03.094-.038zm-1.926-.765c.027.001.05.015.063.039.012.024.009.052-.007.075-.017.024-.047.037-.075.03-.028-.005-.05-.026-.06-.046-.009-.026.001-.056.025-.072.02-.014.041-.017.054-.022z"/>
                   </svg>
                   {{ loading ? '创建中...' : '创建任务' }}
                 </button>
-                <router-link to="/tasks" class="btn btn-lg btn-outline-secondary">取消</router-link>
+                <router-link to="/tasks" class="btn btn-sm btn-outline-secondary">取消</router-link>
               </div>
             </form>
           </div>
@@ -528,18 +528,6 @@ h5 {
 .form-check-label {
   font-weight: 500;
   color: #4a5568;
-}
-
-.btn-lg {
-  padding: 0.75rem 1.5rem;
-  font-weight: 600;
-  border-radius: 0.5rem;
-  transition: all 0.3s ease;
-}
-
-.btn-lg:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
 }
 
 .card {

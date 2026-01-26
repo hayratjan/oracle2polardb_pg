@@ -979,7 +979,15 @@ def test_oracle_connection(request):
     """测试Oracle数据库连接"""
     if request.method == 'POST':
         try:
-            connection_id = request.POST.get('connection_id')
+            if request.content_type and 'application/json' in request.content_type:
+                try:
+                    data = json.loads(request.body)
+                    connection_id = data.get('connection_id')
+                except json.JSONDecodeError:
+                    return JsonResponse({'status': 'error', 'message': '无效的JSON数据'})
+            else:
+                connection_id = request.POST.get('connection_id')
+            
             if not connection_id:
                 return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
             

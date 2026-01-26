@@ -79,10 +79,10 @@
                     </svg>
                     批量大小
                   </label>
-                  <input v-model.number="migrationSettings.batch_size" type="number" class="form-control" min="1">
+                  <input v-model.number="migrationSettings.batch_size" type="number" class="form-control-sm" min="1">
                 </div>
                 
-                <button type="submit" class="btn btn-primary w-100" :disabled="saving">
+                <button type="submit" class="btn btn-sm btn-primary w-100" :disabled="saving">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check-lg me-2" viewBox="0 0 16 16">
                     <path d="M12.736 3.97a.733.733 0 011.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 01-1.065.02L3.217 8.384a.757.757 0 010-1.06.733.733 0 011.047 0l3.052 3.093 5.4-6.425a.247.247 0 01.02-.022z"/>
                   </svg>
@@ -171,10 +171,10 @@
                     最大重试次数
                   </label>
                   <input v-model.number="systemSettings.max_retry_count" type="number" 
-                           class="form-control" min="0">
+                           class="form-control-sm" min="0">
                 </div>
                 
-                <button type="submit" class="btn btn-primary w-100" :disabled="saving">
+                <button type="submit" class="btn btn-sm btn-primary w-100" :disabled="saving">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-check-lg me-2" viewBox="0 0 16 16">
                     <path d="M12.736 3.97a.733.733 0 011.047 0c.286.289.29.756.01 1.05L7.88 12.01a.733.733 0 01-1.065.02L3.217 8.384a.757.757 0 010-1.06.733.733 0 011.047 0l3.052 3.093 5.4-6.425a.247.247 0 01.02-.022z"/>
                   </svg>

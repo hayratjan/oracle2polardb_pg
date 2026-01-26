@@ -12,7 +12,7 @@
           </h1>
           <p class="text-muted mb-0">查看和管理迁移任务的详细信息</p>
         </div>
-        <router-link to="/tasks" class="btn btn-outline-secondary">
+        <router-link to="/tasks" class="btn btn-sm btn-outline-secondary">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-arrow-left me-1" viewBox="0 0 16 16">
             <path fill-rule="evenodd" d="M15 8a.5.5 0 01-.5.5H2.707l3.147 3.146a.5.5 0 01-.708.708l-4-4a.5.5 0 010-.708l4-4a.5.5 0 11.708.708L2.707 7.5H14.5A.5.5 0 0115 8z"/>
           </svg>
@@ -189,28 +189,28 @@
               
               <div class="action-buttons mt-4">
                 <button v-if="task.status === 'pending'" @click="startTask" 
-                        class="btn btn-lg btn-success flex-grow-1">
+                        class="btn btn-sm btn-success flex-grow-1">
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-play-fill me-2" viewBox="0 0 16 16">
                     <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 010 1.393z"/>
                   </svg>
                   开始任务
                 </button>
                 <button v-if="task.status === 'running'" @click="cancelTask" 
-                        class="btn btn-lg btn-warning flex-grow-1">
+                        class="btn btn-sm btn-warning flex-grow-1">
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-x-circle me-2" viewBox="0 0 16 16">
                     <path d="M8 15A7 7 0 118 1a7 7 0 010 14zm0 1A8 8 0 108 0a8 8 0 000 16z"/>
                     <path d="M4.646 4.646a.5.5 0 01.708 0L8 7.293l2.646-2.647a.5.5 0 01.708.708L8.707 8l2.647 2.646a.5.5 0 01-.708.708L8 8.707l-2.646 2.647a.5.5 0 01-.708-.708L7.293 8 4.646 5.354a.5.5 0 010-.708z"/>
                   </svg>
                   取消任务
                 </button>
-                <button @click="refreshStatus" class="btn btn-lg btn-outline-info">
+                <button @click="refreshStatus" class="btn btn-sm btn-outline-info">
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-arrow-clockwise me-2" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 3a5 5 0 104.546 2.914.5.5 0 01.908-.417A6 6 0 118 2v1z"/>
                     <path d="M8 4.466V.534a.25.25 0 01.41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 018 4.466z"/>
                   </svg>
                   刷新状态
                 </button>
-                <button @click="deleteTask" class="btn btn-lg btn-outline-danger">
+                <button @click="deleteTask" class="btn btn-sm btn-outline-danger">
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-trash me-2" viewBox="0 0 16 16">
                     <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
                     <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H6a1 1 0 011-1h2a1 1 0 011 1h3.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
@@ -258,11 +258,11 @@
                   </svg>
                   切换目标数据库
                 </label>
-                <select v-model="selectedDatabase" class="form-select mb-3">
+                <select v-model="selectedDatabase" class="form-select-sm mb-3">
                   <option value="">请选择数据库</option>
                   <option v-for="db in databases" :key="db" :value="db">{{ db }}</option>
                 </select>
-                <button @click="switchDatabase" class="btn btn-primary w-100">
+                <button @click="switchDatabase" class="btn btn-sm btn-primary w-100">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-arrow-repeat me-1" viewBox="0 0 16 16">
                     <path d="M11.534 7h3.932a.25.25 0 01.192.41l-1.966 2.36a.25.25 0 01-.384 0l-1.966-2.36a.25.25 0 01.192-.41h3.932a.5.5 0 000-1H11.534a1.5 1.5 0 00-1.5 1.5v3.932a.25.25 0 01-.41.192l-2.36-1.966a.25.25 0 010-.384l2.36-1.966a.25.25 0 01.41.192V8.5a.5.5 0 001 0v-3.932a1.5 1.5 0 00-1.5-1.5zM1 4.5a1.5 1.5 0 011.5-1.5h3.932a.25.25 0 01.192.41l-1.966 2.36a.25.25 0 01-.384 0l-1.966-2.36a.25.25 0 01.192-.41H2.5a.5.5 0 000-1h3.932a1.5 1.5 0 001.5 1.5v3.932a.25.25 0 01-.41.192l-2.36-1.966a.25.25 0 010-.384l2.36-1.966a.25.25 0 01.41.192V8.5a.5.5 0 001 0v-3.932a1.5 1.5 0 00-1.5-1.5z"/>
                   </svg>
@@ -597,18 +597,6 @@ onUnmounted(() => {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
-}
-
-.btn-lg {
-  padding: 0.75rem 1.5rem;
-  font-weight: 600;
-  border-radius: 0.5rem;
-  transition: all 0.3s ease;
-}
-
-.btn-lg:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
 }
 
 .log-container {

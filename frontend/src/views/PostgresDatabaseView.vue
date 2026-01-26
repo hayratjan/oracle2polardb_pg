@@ -22,7 +22,7 @@
               PostgreSQL连接
             </h5>
             <button @click="showCreateModal = true" class="btn btn-primary btn-sm">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-plus-lg me-1" viewBox="0 0 16 16">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                 <path d="M8 0a1 1 0 011 1v6h6a1 1 0 110 2H9v6a1 1 0 11-2 0V9H1a1 1 0 110-2h6V1a1 1 0 011-1z"/>
               </svg>
               添加连接
@@ -55,21 +55,21 @@
                         {{ getStatusText(conn.status) }}
                       </span>
                     </div>
-                    <div v-if="conn.id" class="btn-group btn-group-sm">
-                      <button @click="testConnection(conn.id)" class="btn btn-outline-info" title="测试连接">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-check-circle" viewBox="0 0 16 16">
+                    <div v-if="conn.id" class="btn-group">
+                      <button @click="testConnection(conn.id)" class="btn btn-outline-info btn-xs" title="测试连接">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
                           <path d="M8 15A7 7 0 118 1a7 7 0 010 14zm0 1A8 8 0 108 0a8 8 0 000 16z"/>
                           <path d="M10.97 4.97a.235.235 0 00-.02.022L7.477 9.417 5.384 7.323a.75.75 0 00-1.06 1.06L6.97 11.03a.75.75 0 001.079-.02l3.992-4.99a.75.75 0 00-1.071-1.05z"/>
                         </svg>
                       </button>
-                      <button @click="openEditModal(conn)" class="btn btn-outline-success" title="编辑连接">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-pencil" viewBox="0 0 16 16">
+                      <button @click="openEditModal(conn)" class="btn btn-outline-success btn-xs" title="编辑连接">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
                           <path d="M12.146.146a.5.5 0 01.708 0l3 3a.5.5 0 010 .708l-10 10a.5.5 0 01-.168.11l-5 2a.5.5 0 01-.63-.062l-2-2a.5.5 0 01.366-.437l3-3a.5.5 0 01.708 0l3 3a.5.5 0 01-.708.708L12.146.146z"/>
                           <path d="M11.207 2.5L13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 01.5.5v.5h.5a.5.5 0 01.5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 015 12.5V12h-.5a.5.5 0 01-.5-.5V11h-.5a.5.5 0 01-.468-.325z"/>
                         </svg>
                       </button>
-                      <button @click="deleteConnection(conn.id)" class="btn btn-outline-danger" title="删除连接">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-trash" viewBox="0 0 16 16">
+                      <button @click="deleteConnection(conn.id)" class="btn btn-outline-danger btn-xs" title="删除连接">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
                           <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
                           <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H6a1 1 0 011-1h2a1 1 0 011 1h3.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
                         </svg>
@@ -84,7 +84,7 @@
                 <path d="M1.5 0h11.586a1.5 1.5 0 011.06.44l1.415 1.414A1.5 1.5 0 0116 2.914V14.5a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 010 14.5v-11A1.5 1.5 0 011.5 2zM1 1.5v1a.5.5 0 00.5.5h13a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-13a.5.5 0 00-.5.5zm0 4v9a.5.5 0 00.5.5h13a.5.5 0 00.5-.5v-9a.5.5 0 00-.5-.5h-13a.5.5 0 00-.5.5zM2 7a1 1 0 011-1h10a1 1 0 011 1v2a1 1 0 01-1 1H3a1 1 0 01-1-1V7zm0 5a1 1 0 011-1h6a1 1 0 011 1v1a1 1 0 01-1 1H3a1 1 0 01-1-1v-1z"/>
               </svg>
               <p class="text-muted mb-3">暂无连接</p>
-              <button @click="showCreateModal = true" class="btn btn-primary">
+              <button @click="showCreateModal = true" class="btn btn-sm btn-primary">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-plus-lg me-1" viewBox="0 0 16 16">
                   <path d="M8 0a1 1 0 011 1v6h6a1 1 0 110 2H9v6a1 1 0 11-2 0V9H1a1 1 0 110-2h6V1a1 1 0 011-1z"/>
                 </svg>
@@ -109,7 +109,7 @@
             <div v-if="selectedConnection">
               <div class="mb-4">
                 <label class="form-label">选择连接</label>
-                <select v-model="selectedConnection" class="form-select" @change="loadDatabaseInfo">
+                <select v-model="selectedConnection" class="form-select-sm" @change="loadDatabaseInfo">
                   <option value="">请选择</option>
                   <option v-for="conn in connections" :key="conn.id" :value="conn.id">
                     {{ conn.name }}
@@ -176,33 +176,36 @@
             <form @submit.prevent="createConnection">
               <div class="mb-3">
                 <label class="form-label">连接名称</label>
-                <input v-model="newConnection.name" type="text" class="form-control" required placeholder="输入连接名称">
+                <input v-model="newConnection.name" type="text" class="form-control-sm" required placeholder="输入连接名称">
               </div>
               <div class="mb-3">
                 <label class="form-label">主机</label>
-                <input v-model="newConnection.host" type="text" class="form-control" required placeholder="例如: localhost">
+                <input v-model="newConnection.host" type="text" class="form-control-sm" required placeholder="例如: localhost">
               </div>
               <div class="mb-3">
                 <label class="form-label">端口</label>
-                <input v-model.number="newConnection.port" type="number" class="form-control" required placeholder="默认: 5432">
+                <input v-model.number="newConnection.port" type="number" class="form-control-sm" required placeholder="默认: 5432">
               </div>
               <div class="mb-3">
                 <label class="form-label">数据库名</label>
-                <input v-model="newConnection.database" type="text" class="form-control" required placeholder="例如: postgres">
+                <input v-model="newConnection.database" type="text" class="form-control-sm" required placeholder="例如: postgres">
               </div>
               <div class="mb-3">
                 <label class="form-label">用户名</label>
-                <input v-model="newConnection.username" type="text" class="form-control" required placeholder="数据库用户名">
+                <input v-model="newConnection.username" type="text" class="form-control-sm" required placeholder="数据库用户名">
               </div>
               <div class="mb-3">
                 <label class="form-label">密码</label>
-                <input v-model="newConnection.password" type="password" class="form-control" required placeholder="数据库密码">
+                <input v-model="newConnection.password" type="password" class="form-control-sm" required placeholder="数据库密码">
               </div>
-              <button type="submit" class="btn btn-primary w-100" :disabled="creating">
+              <button type="submit" class="btn btn-sm btn-primary w-100" :disabled="creating">
                 <span v-if="creating" class="spinner-border spinner-border-sm me-2"></span>
                 {{ creating ? '创建中...' : '创建连接' }}
               </button>
             </form>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-ghost" @click="showCreateModal = false">取消</button>
           </div>
         </div>
       </div>
@@ -213,7 +216,7 @@
         <div class="modal-content">
           <div class="modal-header">
             <h5 class="modal-title">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" class="bi bi-pencil-square me-2" viewBox="0 0 16 16">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 16 16">
                 <path d="M15.502 1.94a.5.5 0 010 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 01.707 0l1.293 1.293zm-1.75 2.456l-2-2L4.939 9.21a.5.5 0 00-.121.196l-.805 2.414a.25.25 0 00.316.316l2.414-.805a.5.5 0 00.196-.12l6.813-6.814z"/>
                 <path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 002.5 15h11a1.5 1.5 0 001.5-1.5v-6a.5.5 0 00-1 0v6a.5.5 0 01-.5.5h-11a.5.5 0 01-.5-.5v-11a.5.5 0 01.5-.5H9a.5.5 0 000 1h.5v11a1.5 1.5 0 001.5 1.5v-11z"/>
               </svg>
@@ -226,33 +229,42 @@
               <input type="hidden" v-model="editedConnection.id">
               <div class="mb-3">
                 <label class="form-label">连接名称</label>
-                <input v-model="editedConnection.name" type="text" class="form-control" required placeholder="输入连接名称">
+                <input v-model="editedConnection.name" type="text" class="form-control-sm" required placeholder="输入连接名称">
               </div>
               <div class="mb-3">
                 <label class="form-label">主机</label>
-                <input v-model="editedConnection.host" type="text" class="form-control" required placeholder="例如: localhost">
+                <input v-model="editedConnection.host" type="text" class="form-control-sm" required placeholder="例如: localhost">
               </div>
               <div class="mb-3">
                 <label class="form-label">端口</label>
-                <input v-model.number="editedConnection.port" type="number" class="form-control" required placeholder="默认: 5432">
+                <input v-model.number="editedConnection.port" type="number" class="form-control-sm" required placeholder="默认: 5432">
               </div>
               <div class="mb-3">
                 <label class="form-label">数据库名</label>
-                <input v-model="editedConnection.database" type="text" class="form-control" required placeholder="例如: postgres">
+                <input v-model="editedConnection.database" type="text" class="form-control-sm" required placeholder="例如: postgres">
               </div>
               <div class="mb-3">
                 <label class="form-label">用户名</label>
-                <input v-model="editedConnection.username" type="text" class="form-control" required placeholder="数据库用户名">
+                <input v-model="editedConnection.username" type="text" class="form-control-sm" required placeholder="数据库用户名">
               </div>
               <div class="mb-3">
                 <label class="form-label">密码</label>
-                <input v-model="editedConnection.password" type="password" class="form-control" placeholder="留空表示不修改密码">
+                <input v-model="editedConnection.password" type="password" class="form-control-sm" placeholder="留空表示不修改密码">
               </div>
-              <button type="submit" class="btn btn-success w-100" :disabled="updating">
-                <span v-if="updating" class="spinner-border spinner-border-sm me-2"></span>
-                {{ updating ? '更新中...' : '更新连接' }}
-              </button>
+              <div class="d-flex gap-2">
+                <button type="button" class="btn btn-sm btn-outline-info flex-fill" @click="testEditedConnection" :disabled="testing">
+                  <span v-if="testing" class="spinner-border spinner-border-sm me-2"></span>
+                  {{ testing ? '测试中...' : '测试连接' }}
+                </button>
+                <button type="submit" class="btn btn-sm btn-success flex-fill" :disabled="updating">
+                  <span v-if="updating" class="spinner-border spinner-border-sm me-2"></span>
+                  {{ updating ? '更新中...' : '更新连接' }}
+                </button>
+              </div>
             </form>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-ghost" @click="showEditModal = false">取消</button>
           </div>
         </div>
       </div>
@@ -268,6 +280,7 @@ import type { PostgresConnection } from '@/api'
 const loading = ref(false)
 const creating = ref(false)
 const updating = ref(false)
+const testing = ref(false)
 const connections = ref<PostgresConnection[]>([])
 const selectedConnection = ref<number | null>(null)
 const showCreateModal = ref(false)
@@ -402,6 +415,24 @@ const testConnection = async (id: number) => {
   } catch (error) {
     console.error('Failed to test connection:', error)
     alert('连接测试失败')
+  }
+}
+
+const testEditedConnection = async () => {
+  if (!editedConnection.value.id) return
+  testing.value = true
+  try {
+    const res = await postgresConnectionApi.test(editedConnection.value.id)
+    if (res.data.status === 'success') {
+      alert('连接测试成功')
+    } else {
+      alert('连接测试失败: ' + res.data.message)
+    }
+  } catch (error) {
+    console.error('Failed to test connection:', error)
+    alert('连接测试失败')
+  } finally {
+    testing.value = false
   }
 }
 
