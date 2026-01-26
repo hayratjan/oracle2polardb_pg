@@ -319,7 +319,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   font-weight: 700;
-  color: #2d3748;
+  color: var(--text);
 }
 
 .page-header .text-muted {
@@ -329,12 +329,12 @@ onMounted(() => {
 .task-name-link {
   text-decoration: none;
   font-weight: 600;
-  color: #667eea;
+  color: var(--primary);
   transition: all 0.3s ease;
 }
 
 .task-name-link:hover {
-  color: #764ba2;
+  color: var(--secondary);
   transform: translateX(3px);
 }
 
@@ -383,14 +383,14 @@ onMounted(() => {
   align-items: center;
   padding: 0.25rem 0.5rem;
   border-radius: 0.375rem;
-  background-color: rgba(102, 126, 234, 0.1);
-  color: #667eea;
+  background-color: var(--table-row-hover);
+  color: var(--primary);
   font-weight: 500;
 }
 
 .target-db {
-  background-color: rgba(118, 75, 162, 0.1);
-  color: #764ba2;
+  background-color: var(--table-row-hover);
+  color: var(--secondary);
 }
 
 .progress-wrapper {
@@ -404,7 +404,7 @@ onMounted(() => {
   flex: 1;
   height: 0.625rem;
   border-radius: 0.5rem;
-  background-color: #e9ecef;
+  background-color: var(--border);
   overflow: hidden;
 }
 
@@ -416,7 +416,7 @@ onMounted(() => {
 .progress-text {
   font-size: 0.875rem;
   font-weight: 600;
-  color: #667eea;
+  color: var(--primary);
   min-width: 45px;
   text-align: right;
 }
