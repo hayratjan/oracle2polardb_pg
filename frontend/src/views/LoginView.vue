@@ -76,7 +76,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { authApi } from '@/api/auth'
+import { authApi, tokenManager } from '@/api/auth'
 
 const router = useRouter()
 
@@ -180,6 +180,15 @@ const handleResize = () => {
 }
 
 const handleLogin = async () => {
+  if (isLoading.value) {
+    return
+  }
+
+  if (!formData.value.username || !formData.value.password) {
+    errorMessage.value = '请输入用户名和密码'
+    return
+  }
+
   try {
     isLoading.value = true
     errorMessage.value = ''
@@ -189,7 +198,9 @@ const handleLogin = async () => {
       password: formData.value.password
     })
     
-    if (response.status === 'success') {
+    if (response.status === 'success' && response.access && response.refresh) {
+      tokenManager.setTokens(response.access, response.refresh)
+      
       if (formData.value.remember) {
         localStorage.setItem('rememberUser', formData.value.username)
       } else {

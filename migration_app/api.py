@@ -1,7 +1,8 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import authenticate, login, logout
 from django.views.decorators.csrf import csrf_exempt
@@ -41,6 +42,8 @@ class PostgresConnectionViewSet(viewsets.ModelViewSet):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginAPIView(APIView):
+    permission_classes = [permissions.AllowAny]
+    
     def post(self, request):
         try:
             username = request.data.get('username')
@@ -56,9 +59,12 @@ class LoginAPIView(APIView):
             
             if user is not None:
                 login(request, user)
+                refresh = RefreshToken.for_user(user)
                 return Response({
                     'status': 'success',
                     'message': '登录成功',
+                    'access': str(refresh.access_token),
+                    'refresh': str(refresh),
                     'user': {
                         'username': user.username,
                         'email': user.email if hasattr(user, 'email') else ''
@@ -79,8 +85,18 @@ class LoginAPIView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LogoutAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    
     def post(self, request):
         try:
+            refresh_token = request.data.get('refresh')
+            if refresh_token:
+                try:
+                    token = RefreshToken(refresh_token)
+                    token.blacklist()
+                except Exception as e:
+                    print(f'Blacklist token error: {e}')
+            
             logout(request)
             return Response({
                 'status': 'success',
@@ -95,6 +111,8 @@ class LogoutAPIView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class CheckAuthAPIView(APIView):
+    permission_classes = [permissions.AllowAny]
+    
     def get(self, request):
         try:
             if request.user.is_authenticated:

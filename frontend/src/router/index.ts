@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
-import { authApi } from '@/api/auth'
+import { authApi, tokenManager } from '@/api/auth'
 
 const routes: Array<RouteRecordRaw> = [
   {
@@ -49,11 +49,17 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach(async (to, _from, next) => {
+router.beforeEach(async (to, from, next) => {
   const isLoginPage = to.path === '/login' || to.path === '/login/'
   
   if (isLoginPage) {
     next()
+    return
+  }
+  
+  if (!tokenManager.isAuthenticated()) {
+    console.log('未找到JWT token，重定向到登录页面')
+    next('/login')
     return
   }
   
@@ -62,10 +68,14 @@ router.beforeEach(async (to, _from, next) => {
     if (response.authenticated) {
       next()
     } else {
+      console.log('用户未登录，重定向到登录页面')
+      tokenManager.clearTokens()
       next('/login')
     }
   } catch (error) {
     console.error('检查登录状态失败:', error)
+    console.log('检查登录状态失败，重定向到登录页面')
+    tokenManager.clearTokens()
     next('/login')
   }
 })

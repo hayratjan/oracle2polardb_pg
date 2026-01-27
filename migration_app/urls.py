@@ -1,5 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
 from . import dashboard
 from . import create_task
@@ -15,6 +16,9 @@ router.register(r'tasks', api.MigrationTaskViewSet, basename='task')
 urlpatterns = [
     # REST API 路由 - 不需要加 /api/ 前缀，因为主urls.py已经加了
     path('', include(router.urls)),
+    
+    # JWT Token 端点
+    path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     
     # REST API 端点
     path('login/', api.LoginAPIView.as_view(), name='api_login'),
