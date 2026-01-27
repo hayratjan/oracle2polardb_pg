@@ -18,18 +18,7 @@
           </div>
           <div class="col-lg-4 d-none d-lg-block">
             <div class="hero-image">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" class="floating">
-                <defs>
-                  <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
-                    <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
-                  </linearGradient>
-                </defs>
-                <circle cx="200" cy="200" r="150" fill="url(#grad1)" opacity="0.2"/>
-                <circle cx="200" cy="200" r="100" fill="url(#grad1)" opacity="0.4"/>
-                <circle cx="200" cy="200" r="50" fill="url(#grad1)" opacity="0.6"/>
-                <path d="M150 200 L200 150 L250 200 L200 250 Z" fill="white" opacity="0.8"/>
-              </svg>
+              <i class="bi bi-gem floating" style="font-size: 200px; color: #667eea;"></i>
             </div>
           </div>
         </div>
@@ -280,9 +269,8 @@ onMounted(async () => {
   justify-content: center;
 }
 
-.hero-image svg {
-  width: 100%;
-  height: 100%;
+.hero-image i {
+  filter: drop-shadow(0 20px 40px rgba(102, 126, 234, 0.4));
 }
 
 .floating {

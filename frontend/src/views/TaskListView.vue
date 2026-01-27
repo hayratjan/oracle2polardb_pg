@@ -4,19 +4,13 @@
       <div class="d-flex justify-content-between align-items-center">
         <div>
           <h1 class="mb-1">
-            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" class="bi bi-list-task me-2" viewBox="0 0 16 16">
-              <path fill-rule="evenodd" d="M2 2.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1a.5.5 0 00.5-.5V3a.5.5 0 00-.5-.5H2zM3 3H2v1h1V3z"/>
-              <path d="M5 3.5a.5.5 0 01.5-.5h9a.5.5 0 010 1h-9a.5.5 0 01-.5-.5zM5.5 7a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1zM6 8H5v1h1V8z"/>
-              <path d="M8 7.5a.5.5 0 01.5-.5h9a.5.5 0 010 1h-9a.5.5 0 01-.5-.5zm.5 4a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1zM9 13H8v1h1v-1z"/>
-            </svg>
+            <i class="bi bi-list-task me-2" style="font-size: 32px;"></i>
             迁移任务
           </h1>
           <p class="text-muted mb-0">管理和监控数据库迁移任务</p>
         </div>
         <router-link to="/task/create" class="btn btn-sm btn-primary">
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-plus-circle me-2" viewBox="0 0 16 16">
-            <path d="M8 4a.5.5 0 01.5.5v3h3a.5.5 0 010 1h-3v3a.5.5 0 01-1 0v-3h-3a.5.5 0 010-1h3v-3A.5.5 0 018 4z"/>
-          </svg>
+          <i class="bi bi-plus-circle me-2"></i>
           创建任务
         </router-link>
       </div>
@@ -34,40 +28,27 @@
               <thead>
                 <tr>
                   <th>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-file-text me-1" viewBox="0 0 16 16">
-                      <path d="M5 4a.5.5 0 00-.496.438l-.5 4A.5.5 0 004.5 9h3.5v2.5a.5.5 0 00.5.5H9v1h-1a.5.5 0 000 1h1a.5.5 0 00.5-.5V9h.5a.5.5 0 00.496-.438l.5-4A.5.5 0 0011 4H5zM4 14a1 1 0 011-1h6a1 1 0 011 1v1H4v-1z"/>
-                    </svg>
+                    <i class="bi bi-file-text me-1"></i>
                     任务名称
                   </th>
                   <th>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-tag me-1" viewBox="0 0 16 16">
-                      <path d="M6 4.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM4.5 6a1.5 1.5 0 100 3 1.5 1.5 0 000-3zM6 8.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM4.5 10a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"/>
-                    </svg>
+                    <i class="bi bi-tag me-1"></i>
                     类型
                   </th>
                   <th>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-arrow-left-right me-1" viewBox="0 0 16 16">
-                      <path fill-rule="evenodd" d="M1 11.5a.5.5 0 00.5.5h11.793l-3.147 3.146a.5.5 0 00.708.708l4-4a.5.5 0 000-.708l-4-4a.5.5 0 00-.708.708L13.293 11H1.5a.5.5 0 00-.5.5zm14-7a.5.5 0 00-.5-.5H2.707l3.147-3.146a.5.5 0 10-.708-.708l-4 4a.5.5 0 000 .708l4 4a.5.5 0 00.708-.708L2.707 4H14.5a.5.5 0 00.5-.5z"/>
-                    </svg>
+                    <i class="bi bi-arrow-left-right me-1"></i>
                     迁移路径
                   </th>
                   <th>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-info-circle me-1" viewBox="0 0 16 16">
-                      <path d="M8 16A8 8 0 108 0a8 8 0 000 16zm.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 110-2 1 1 0 010 2z"/>
-                    </svg>
+                    <i class="bi bi-info-circle me-1"></i>
                     状态
                   </th>
                   <th>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-speedometer2 me-1" viewBox="0 0 16 16">
-                      <path d="M8 4a.5.5 0 01.5.5V6a.5.5 0 01-1 0V4.5A.5.5 0 018 4zM3.732 5.732a.5.5 0 01.707 0l.915.914a.5.5 0 11-.708.708l-.914-.915a.5.5 0 010-.707zM2 10a.5.5 0 01.5-.5h1.586a.5.5 0 010 1H2.5A.5.5 0 012 10zm9.5 0a.5.5 0 01.5-.5h1.5a.5.5 0 010 1H12a.5.5 0 01-.5-.5zm.754-4.246a.389.389 0 00-.527-.02L9.447 8.316a.5.5 0 00-.063.625l.8 1.6a.5.5 0 00.866.5l1.6-.8a.5.5 0 00.063-.625l-.8-1.6a.5.5 0 00-.466-.316z"/>
-                      <path fill-rule="evenodd" d="M13.5 8a5.5 5.5 0 11-11 0 5.5 5.5 0 0111 0zM8 4a4 4 0 100 8 4 4 0 000-8z"/>
-                    </svg>
+                    <i class="bi bi-speedometer2 me-1"></i>
                     进度
                   </th>
                   <th>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-calendar3 me-1" viewBox="0 0 16 16">
-                      <path d="M14 0H2a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2V2a2 2 0 00-2-2zM1 3.857C1 3.384 1.448 3 2 3h12c.552 0 1 .384 1 .857v10.286c0 .473-.448.857-1 .857H2c-.552 0-1-.384-1-.857V3.857z"/>
-                    </svg>
+                    <i class="bi bi-calendar3 me-1"></i>
                     创建时间
                   </th>
                   <th>操作</th>
@@ -88,18 +69,12 @@
                   <td>
                     <div class="migration-path">
                       <div class="source-db">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-database me-1" viewBox="0 0 16 16">
-                          <path d="M4.318 6.318a4.5 4.5 0 000 6.364L7.318 15.4a1.5 1.5 0 002.122 0l2.999-2.999a4.5 4.5 0 000-6.364L9.55 4.55a1.5 1.5 0 00-2.122 0L4.318 6.318zM5.732 7.732l2.999-2.999a.5.5 0 01.707 0l2.999 2.999a3.5 3.5 0 010 4.95l-2.999 2.999a.5.5 0 01-.707 0L5.732 12.682a3.5 3.5 0 010-4.95z"/>
-                        </svg>
+                        <i class="bi bi-database me-1" style="font-size: 12px;"></i>
                         {{ task.source_db }}
                       </div>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-arrow-right mx-2" viewBox="0 0 16 16">
-                        <path fill-rule="evenodd" d="M1 8a.5.5 0 01.5-.5h11.793l-3.147-3.146a.5.5 0 01.708-.708l4 4a.5.5 0 010 .708l-4 4a.5.5 0 01-.708-.708L13.293 8.5H1.5A.5.5 0 011 8z"/>
-                      </svg>
+                      <i class="bi bi-arrow-right mx-2" style="font-size: 16px;"></i>
                       <div class="target-db">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" class="bi bi-server me-1" viewBox="0 0 16 16">
-                          <path d="M1.5 0h11.586a1.5 1.5 0 011.06.44l1.415 1.414A1.5 1.5 0 0116 2.914V14.5a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 010 14.5v-11A1.5 1.5 0 011.5 2zM1 1.5v1a.5.5 0 00.5.5h13a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-13a.5.5 0 00-.5.5zm0 4v9a.5.5 0 00.5.5h13a.5.5 0 00.5-.5v-9a.5.5 0 00-.5-.5h-13a.5.5 0 00-.5.5zM2 7a1 1 0 011-1h10a1 1 0 011 1v2a1 1 0 01-1 1H3a1 1 0 01-1-1V7zm0 5a1 1 0 011-1h6a1 1 0 011 1v1a1 1 0 01-1 1H3a1 1 0 01-1-1v-1z"/>
-                        </svg>
+                        <i class="bi bi-server me-1" style="font-size: 12px;"></i>
                         {{ task.target_db }}
                       </div>
                     </div>
@@ -127,28 +102,18 @@
                   <td>
                     <div class="btn-group btn-group-sm">
                       <router-link :to="`/task/${task.id}`" class="btn btn-sm btn-info" title="详情">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-eye" viewBox="0 0 16 16">
-                          <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 011.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0114.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 011.172 8z"/>
-                          <path d="M8 5.5a2.5 2.5 0 110 5 2.5 2.5 0 010-5zM4.5 8a3.5 3.5 0 117 0 3.5 3.5 0 01-7 0z"/>
-                        </svg>
+                        <i class="bi bi-eye" style="font-size: 14px;"></i>
                       </router-link>
                       <button v-if="task.status === 'pending' && task.id" @click="startTask(task.id)" 
                               class="btn btn-sm btn-success" title="开始">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-play-fill" viewBox="0 0 16 16">
-                          <path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 010 1.393z"/>
-                        </svg>
+                        <i class="bi bi-play-fill" style="font-size: 14px;"></i>
                       </button>
                       <button v-if="task.status === 'running' && task.id" @click="cancelTask(task.id)" 
                               class="btn btn-sm btn-warning" title="取消">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-x-circle-fill" viewBox="0 0 16 16">
-                          <path d="M16 8A8 8 0 110 8a8 8 0 0116 0zM5.354 4.646a.5.5 0 10-.708.708L7.293 8l-2.647 2.646a.5.5 0 00.708.708L8 8.707l2.646 2.647a.5.5 0 00.708-.708L8.707 8l2.647-2.646a.5.5 0 00-.708-.708L8 7.293 5.354 4.646z"/>
-                        </svg>
+                        <i class="bi bi-x-circle-fill" style="font-size: 14px;"></i>
                       </button>
                       <button v-if="task.id" @click="deleteTask(task.id)" class="btn btn-sm btn-danger" title="删除">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-trash" viewBox="0 0 16 16">
-                          <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
-                          <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H6a1 1 0 011-1h2a1 1 0 011 1h3.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-                        </svg>
+                        <i class="bi bi-trash" style="font-size: 14px;"></i>
                       </button>
                     </div>
                   </td>
@@ -158,15 +123,11 @@
           </div>
         </div>
         <div v-else class="text-center py-5 empty-state">
-          <svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" fill="currentColor" class="bi bi-inbox mb-3" viewBox="0 0 16 16">
-            <path d="M4.98 4a.5.5 0 00-.39.188L1.54 8H6a.5.5 0 01.5.5 1.5 1.5 0 003 0A.5.5 0 0110 8h4.46l-3.05-3.812A.5.5 0 0011.02 4H4.98zm9.954 5H10.45a2.5 2.5 0 01-4.9 0H1.066l.32 2.562a.5.5 0 00.497.438h12.234a.5.5 0 00.496-.438L14.933 9zM3.809 3.563A1.5 1.5 0 014.981 3h6.038a1.5 1.5 0 011.172.563l3.7 4.625a.5.5 0 01.105.374l-.39 3.124A1.5 1.5 0 0114.117 13H1.883a1.5 1.5 0 01-1.489-1.314l-.39-3.124a.5.5 0 01.105-.374l3.7-4.625z"/>
-          </svg>
+          <i class="bi bi-inbox mb-3" style="font-size: 80px;"></i>
           <h4 class="mb-3">暂无任务</h4>
           <p class="text-muted mb-4">还没有创建任何迁移任务</p>
           <router-link to="/task/create" class="btn btn-primary btn-sm">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-plus-circle me-2" viewBox="0 0 16 16">
-              <path d="M8 4a.5.5 0 01.5.5v3h3a.5.5 0 010 1h-3v3a.5.5 0 01-1 0v-3h-3a.5.5 0 010-1h3v-3A.5.5 0 018 4z"/>
-            </svg>
+            <i class="bi bi-plus-circle me-2"></i>
             创建第一个任务
           </router-link>
         </div>
