@@ -57,12 +57,13 @@ def task_list(request):
     
     # 搜索过滤
     if search:
+        from django.db.models import Q
         tasks = tasks.filter(
-            models.Q(name__icontains=search) |
-            models.Q(oracle_connection__name__icontains=search) |
-            models.Q(postgres_connection__name__icontains=search) |
-            models.Q(source_schema__icontains=search) |
-            models.Q(target_schema__icontains=search)
+            Q(name__icontains=search) |
+            Q(oracle_connection__name__icontains=search) |
+            Q(postgres_connection__name__icontains=search) |
+            Q(source_schema__icontains=search) |
+            Q(target_schema__icontains=search)
         )
     
     # 状态过滤

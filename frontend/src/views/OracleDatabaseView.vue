@@ -1,5 +1,13 @@
 <template>
   <div class="oracle-database-view">
+    <div v-if="alertMessage.show" :class="['alert', `alert-${alertMessage.type}`, 'alert-dismissible', 'fade', 'show']" role="alert">
+      <div class="d-flex align-items-center">
+        <i :class="getAlertIcon(alertMessage.type)" class="me-2"></i>
+        <div class="flex-grow-1">{{ alertMessage.message }}</div>
+        <button type="button" class="btn-close" @click="alertMessage.show = false"></button>
+      </div>
+    </div>
+    
     <div class="page-header mb-4">
       <h1>
         <i class="bi bi-database me-2"></i>
@@ -241,6 +249,25 @@ const selectedConnection = ref<number | null>(null)
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
 const databaseInfo = ref<any>(null)
+const alertMessage = ref<{
+  show: boolean
+  type: 'success' | 'danger' | 'warning' | 'info'
+  message: string
+}>({
+  show: false,
+  type: 'success',
+  message: '',
+})
+
+const getAlertIcon = (type: string) => {
+  const icons: Record<string, string> = {
+    success: 'bi bi-check-circle-fill',
+    danger: 'bi bi-exclamation-triangle-fill',
+    warning: 'bi bi-exclamation-circle-fill',
+    info: 'bi bi-info-circle-fill',
+  }
+  return icons[type] || 'bi bi-info-circle-fill'
+}
 const editedConnection = ref<any>({
   id: 0,
   name: '',
@@ -286,9 +313,24 @@ const createConnection = async () => {
       password: '',
     }
     await loadConnections()
+    alertMessage.value = {
+      show: true,
+      type: 'success',
+      message: '连接创建成功',
+    }
+    setTimeout(() => {
+      alertMessage.value.show = false
+    }, 3000)
   } catch (error) {
     console.error('Failed to create connection:', error)
-    alert('创建连接失败')
+    alertMessage.value = {
+      show: true,
+      type: 'danger',
+      message: '创建连接失败',
+    }
+    setTimeout(() => {
+      alertMessage.value.show = false
+    }, 3000)
   } finally {
     creating.value = false
   }
@@ -321,9 +363,24 @@ const updateConnection = async () => {
     })
     showEditModal.value = false
     await loadConnections()
+    alertMessage.value = {
+      show: true,
+      type: 'success',
+      message: '连接更新成功',
+    }
+    setTimeout(() => {
+      alertMessage.value.show = false
+    }, 3000)
   } catch (error) {
     console.error('Failed to update connection:', error)
-    alert('更新连接失败')
+    alertMessage.value = {
+      show: true,
+      type: 'danger',
+      message: '更新连接失败',
+    }
+    setTimeout(() => {
+      alertMessage.value.show = false
+    }, 3000)
   } finally {
     updating.value = false
   }
@@ -335,13 +392,34 @@ const testEditedConnection = async () => {
   try {
     const res = await oracleConnectionApi.test(editedConnection.value.id)
     if (res.data.status === 'success') {
-      alert('连接测试成功')
+      alertMessage.value = {
+        show: true,
+        type: 'success',
+        message: '连接测试成功',
+      }
+      setTimeout(() => {
+        alertMessage.value.show = false
+      }, 3000)
     } else {
-      alert('连接测试失败: ' + res.data.message)
+      alertMessage.value = {
+        show: true,
+        type: 'danger',
+        message: '连接测试失败: ' + res.data.message,
+      }
+      setTimeout(() => {
+        alertMessage.value.show = false
+      }, 3000)
     }
   } catch (error) {
     console.error('Failed to test connection:', error)
-    alert('连接测试失败')
+    alertMessage.value = {
+      show: true,
+      type: 'danger',
+      message: '连接测试失败',
+    }
+    setTimeout(() => {
+      alertMessage.value.show = false
+    }, 3000)
   } finally {
     testing.value = false
   }
@@ -363,13 +441,34 @@ const testConnection = async (id: number) => {
   try {
     const res = await oracleConnectionApi.test(id)
     if (res.data.status === 'success') {
-      alert('连接测试成功')
+      alertMessage.value = {
+        show: true,
+        type: 'success',
+        message: '连接测试成功',
+      }
+      setTimeout(() => {
+        alertMessage.value.show = false
+      }, 3000)
     } else {
-      alert('连接测试失败: ' + res.data.message)
+      alertMessage.value = {
+        show: true,
+        type: 'danger',
+        message: '连接测试失败: ' + res.data.message,
+      }
+      setTimeout(() => {
+        alertMessage.value.show = false
+      }, 3000)
     }
   } catch (error) {
     console.error('Failed to test connection:', error)
-    alert('连接测试失败')
+    alertMessage.value = {
+      show: true,
+      type: 'danger',
+      message: '连接测试失败',
+    }
+    setTimeout(() => {
+      alertMessage.value.show = false
+    }, 3000)
   }
 }
 
@@ -399,6 +498,20 @@ onMounted(() => {
 <style scoped>
 .oracle-database-view {
   animation: fadeIn 0.5s ease-in;
+}
+
+.alert {
+  margin-bottom: 1rem;
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.alert i {
+  font-size: 1.25rem;
+}
+
+.alert .btn-close {
+  padding: 0.5rem;
 }
 
 @keyframes fadeIn {
@@ -451,10 +564,18 @@ onMounted(() => {
   border: none;
   border-bottom: 1px solid var(--border);
   transition: all 0.3s ease;
+  position: relative;
 }
 
 .list-group-item:hover {
-  background-color: var(--background);
+  background-color: #f0f7ff;
+  border-left: 3px solid #2196f3;
+  padding-left: calc(1rem - 3px);
+}
+
+.list-group-item:hover h6,
+.list-group-item:hover .text-muted {
+  color: #1a1a1a;
 }
 
 .list-group-item:last-child {

@@ -991,9 +991,21 @@ def test_oracle_connection(request):
             if not connection_id:
                 return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
             
-            connection = get_oracle_connection(connection_id)
+            conn_obj = get_object_or_404(OracleConnection, pk=connection_id)
+            dsn = cx_Oracle.makedsn(conn_obj.host, conn_obj.port, service_name=conn_obj.service_name)
+            connection = cx_Oracle.connect(
+                user=conn_obj.username,
+                password=conn_obj.password,
+                dsn=dsn,
+                connect_timeout=5
+            )
             connection.close()
             return JsonResponse({'status': 'success'})
+        except cx_Oracle.DatabaseError as e:
+            error_obj, = e.args
+            if error_obj.code == 12170 or 'timeout' in str(e).lower():
+                return JsonResponse({'status': 'error', 'message': '无法连接到数据库，连接超时'})
+            return JsonResponse({'status': 'error', 'message': str(e)})
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': str(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
@@ -1184,13 +1196,14 @@ def test_pg_connection(request):
             connection.save()
             
             try:
-                # 测试连接
+                # 测试连接，设置5秒超时
                 conn = psycopg2.connect(
                     host=connection.host,
                     port=connection.port,
                     database=connection.database,
                     user=connection.username,
-                    password=connection.password
+                    password=connection.password,
+                    connect_timeout=5
                 )
                 conn.close()
                 
@@ -1199,10 +1212,13 @@ def test_pg_connection(request):
                 connection.save()
                 
                 return JsonResponse({'status': 'success'})
-            except psycopg2.Error as e:
+            except psycopg2.OperationalError as e:
                 # 更新连接状态为异常
                 connection.status = 'inactive'
                 connection.save()
+                error_msg = str(e).lower()
+                if 'timeout' in error_msg or 'could not connect' in error_msg or 'connection timed out' in error_msg:
+                    return JsonResponse({'status': 'error', 'message': '无法连接到数据库，连接超时'})
                 return JsonResponse({'status': 'error', 'message': f'连接测试失败: {str(e)}'})
             except Exception as e:
                 # 更新连接状态为异常
