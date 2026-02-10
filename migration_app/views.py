@@ -974,38 +974,84 @@ def oracle_database_management(request):
     }
     return render(request, 'migration_app/oracle/database_management.html', context)
 
+def _test_oracle_connect_with_params(host, port, service_name, username, password):
+    """使用给定参数测试 Oracle 连接，返回 (success, error_message)。"""
+    try:
+        port = int(port) if port is not None else 1521
+    except (TypeError, ValueError):
+        return False, '端口格式无效'
+    try:
+        dsn = cx_Oracle.makedsn(host, port, service_name=service_name)
+        connection = cx_Oracle.connect(
+            user=username,
+            password=password or '',
+            dsn=dsn,
+            connect_timeout=5
+        )
+        connection.close()
+        return True, None
+    except cx_Oracle.DatabaseError as e:
+        error_obj, = e.args
+        if error_obj.code == 12170 or 'timeout' in str(e).lower():
+            return False, '无法连接到数据库，连接超时'
+        return False, str(e)
+    except Exception as e:
+        return False, str(e)
+
+
 @csrf_exempt
 def test_oracle_connection(request):
-    """测试Oracle数据库连接"""
+    """测试Oracle数据库连接。支持仅传 connection_id（用已保存配置），或传 host/port/service_name/username/password（用前端未保存的输入）"""
     if request.method == 'POST':
         try:
             if request.content_type and 'application/json' in request.content_type:
                 try:
                     data = json.loads(request.body)
-                    connection_id = data.get('connection_id')
                 except json.JSONDecodeError:
                     return JsonResponse({'status': 'error', 'message': '无效的JSON数据'})
             else:
-                connection_id = request.POST.get('connection_id')
-            
+                data = dict(request.POST.items())
+
+            connection_id = data.get('connection_id')
+            use_form_params = all(
+                data.get(k) is not None and data.get(k) != ''
+                for k in ('host', 'port', 'service_name', 'username')
+            )
+            if use_form_params:
+                host = (data.get('host') or '').strip()
+                port = data.get('port', 1521)
+                service_name = (data.get('service_name') or '').strip()
+                username = (data.get('username') or '').strip()
+                if not host or not service_name or not username:
+                    return JsonResponse({'status': 'error', 'message': '请填写主机、服务名和用户名'})
+                if connection_id:
+                    try:
+                        conn_obj = OracleConnection.objects.get(pk=connection_id)
+                        password = (data.get('password') or '').strip() or conn_obj.password
+                    except (OracleConnection.DoesNotExist, ValueError):
+                        password = (data.get('password') or '').strip()
+                        if not password:
+                            return JsonResponse({'status': 'error', 'message': '请填写密码'})
+                else:
+                    password = (data.get('password') or '').strip()
+                    if not password:
+                        return JsonResponse({'status': 'error', 'message': '请填写密码'})
+                success, err_msg = _test_oracle_connect_with_params(host, port, service_name, username, password)
+                if success:
+                    return JsonResponse({'status': 'success'})
+                return JsonResponse({'status': 'error', 'message': err_msg or '连接测试失败'})
+
             if not connection_id:
                 return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
-            
+
             conn_obj = get_object_or_404(OracleConnection, pk=connection_id)
-            dsn = cx_Oracle.makedsn(conn_obj.host, conn_obj.port, service_name=conn_obj.service_name)
-            connection = cx_Oracle.connect(
-                user=conn_obj.username,
-                password=conn_obj.password,
-                dsn=dsn,
-                connect_timeout=5
+            success, err_msg = _test_oracle_connect_with_params(
+                conn_obj.host, conn_obj.port, conn_obj.service_name,
+                conn_obj.username, conn_obj.password
             )
-            connection.close()
-            return JsonResponse({'status': 'success'})
-        except cx_Oracle.DatabaseError as e:
-            error_obj, = e.args
-            if error_obj.code == 12170 or 'timeout' in str(e).lower():
-                return JsonResponse({'status': 'error', 'message': '无法连接到数据库，连接超时'})
-            return JsonResponse({'status': 'error', 'message': str(e)})
+            if success:
+                return JsonResponse({'status': 'success'})
+            return JsonResponse({'status': 'error', 'message': err_msg or '连接测试失败'})
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': str(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
@@ -1169,6 +1215,34 @@ def add_pg_connection(request):
 
 from django.views.decorators.csrf import csrf_exempt
 
+def _test_pg_connect_with_params(host, port, database, user, password):
+    """使用给定参数测试 PG 连接，返回 (success, error_message)。"""
+    try:
+        port = int(port) if port is not None else 5432
+    except (TypeError, ValueError):
+        return False, '端口格式无效'
+    try:
+        conn = psycopg2.connect(
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password or '',
+            connect_timeout=5
+        )
+        conn.close()
+        return True, None
+    except psycopg2.OperationalError as e:
+        error_msg = str(e).lower()
+        if 'timeout' in error_msg or 'could not connect' in error_msg or 'connection timed out' in error_msg:
+            return False, '无法连接到数据库，连接超时'
+        if 'does not exist' in error_msg or ('database' in error_msg and 'fatal' in error_msg):
+            return False, f'数据库 "{database}" 不存在，请先在该 PolarDB 实例上创建该数据库，或将连接配置中的数据库名改为已存在的库（如 postgres）。'
+        return False, str(e)
+    except Exception as e:
+        return False, str(e)
+
+
 @csrf_exempt
 def test_pg_connection(request):
     if request.method == 'POST':
@@ -1177,51 +1251,66 @@ def test_pg_connection(request):
             if request.content_type and 'application/json' in request.content_type:
                 try:
                     data = json.loads(request.body)
-                    connection_id = data.get('connection_id')
                 except json.JSONDecodeError:
                     return JsonResponse({'status': 'error', 'message': '无效的JSON数据'})
             else:
-                connection_id = request.POST.get('connection_id')
-            
+                data = dict(request.POST.items())
+
+            connection_id = data.get('connection_id')
+            # 若前端传入完整连接参数（编辑弹窗未保存即测试），则用当前输入值测试，不更新库里的连接状态
+            use_form_params = all(
+                data.get(k) is not None and data.get(k) != ''
+                for k in ('host', 'port', 'database', 'username')
+            )
+            if use_form_params:
+                host = data.get('host', '').strip()
+                port = data.get('port', 5432)
+                database = (data.get('database') or '').strip()
+                username = (data.get('username') or '').strip()
+                if not host or not database or not username:
+                    return JsonResponse({'status': 'error', 'message': '请填写主机、数据库名和用户名'})
+                if connection_id:
+                    try:
+                        connection = PostgresConnection.objects.get(id=connection_id)
+                        password = (data.get('password') or '').strip() or connection.password
+                    except (PostgresConnection.DoesNotExist, ValueError):
+                        password = (data.get('password') or '').strip()
+                        if not password:
+                            return JsonResponse({'status': 'error', 'message': '请填写密码'})
+                else:
+                    password = (data.get('password') or '').strip()
+                    if not password:
+                        return JsonResponse({'status': 'error', 'message': '请填写密码'})
+                success, err_msg = _test_pg_connect_with_params(host, port, database, username, password)
+                if success:
+                    return JsonResponse({'status': 'success'})
+                return JsonResponse({'status': 'error', 'message': err_msg or '连接测试失败'})
+
             if not connection_id:
                 return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
-            
+
             try:
                 connection = PostgresConnection.objects.get(id=connection_id)
             except (PostgresConnection.DoesNotExist, ValueError):
                 return JsonResponse({'status': 'error', 'message': f'找不到ID为 {connection_id} 的连接'})
-            
+
             # 更新连接状态为测试中
             connection.status = 'testing'
             connection.save()
-            
+
             try:
-                # 测试连接，设置5秒超时
-                conn = psycopg2.connect(
-                    host=connection.host,
-                    port=connection.port,
-                    database=connection.database,
-                    user=connection.username,
-                    password=connection.password,
-                    connect_timeout=5
+                success, err_msg = _test_pg_connect_with_params(
+                    connection.host, connection.port, connection.database,
+                    connection.username, connection.password
                 )
-                conn.close()
-                
-                # 更新连接状态为正常
-                connection.status = 'active'
-                connection.save()
-                
-                return JsonResponse({'status': 'success'})
-            except psycopg2.OperationalError as e:
-                # 更新连接状态为异常
+                if success:
+                    connection.status = 'active'
+                    connection.save()
+                    return JsonResponse({'status': 'success'})
                 connection.status = 'inactive'
                 connection.save()
-                error_msg = str(e).lower()
-                if 'timeout' in error_msg or 'could not connect' in error_msg or 'connection timed out' in error_msg:
-                    return JsonResponse({'status': 'error', 'message': '无法连接到数据库，连接超时'})
-                return JsonResponse({'status': 'error', 'message': f'连接测试失败: {str(e)}'})
+                return JsonResponse({'status': 'error', 'message': err_msg or '连接测试失败'})
             except Exception as e:
-                # 更新连接状态为异常
                 connection.status = 'inactive'
                 connection.save()
                 return JsonResponse({'status': 'error', 'message': f'连接测试失败: {str(e)}'})
