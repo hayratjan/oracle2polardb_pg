@@ -103,7 +103,10 @@
                     <div v-else-if="filteredObjects.length > 0" class="source-objects-list">
                       <div class="form-check" v-for="obj in filteredObjects" :key="obj">
                         <input class="form-check-input" type="checkbox" :id="'obj-' + obj" :value="obj" v-model="selectedSourceObjects">
-                        <label class="form-check-label" :for="'obj-' + obj">{{ obj }}</label>
+                        <label class="form-check-label" :for="'obj-' + obj">
+                          {{ obj }}
+                          <span v-if="sourceObjectTypes[obj]" class="badge bg-secondary ms-1">{{ sourceObjectTypes[obj] }}</span>
+                        </label>
                       </div>
                     </div>
                     <div v-else-if="sourceObjects.length > 0 && filteredObjects.length === 0" class="text-center py-3 text-muted">
@@ -123,39 +126,41 @@
                 目标数据库配置
               </h5>
               
-              <div class="row g-3">
-                <div class="col-md-6">
-                  <label class="form-label">PostgreSQL连接</label>
-                  <select v-model="form.postgres_connection" class="form-select-sm" required @change="loadPgSchemas">
-                    <option value="">请选择</option>
-                    <option v-for="conn in postgresConnections" :key="conn.id" :value="conn.id">
-                      {{ conn.name }} ({{ conn.host }}:{{ conn.port }})
-                    </option>
-                  </select>
+              <template v-if="form.task_type !== 'view_to_sqlite'">
+                <div class="row g-3">
+                  <div class="col-md-6">
+                    <label class="form-label">PostgreSQL连接</label>
+                    <select v-model="form.postgres_connection" class="form-select-sm" :required="form.task_type !== 'view_to_sqlite'" @change="loadPgSchemas">
+                      <option value="">请选择</option>
+                      <option v-for="conn in postgresConnections" :key="conn.id" :value="conn.id">
+                        {{ conn.name }} ({{ conn.host }}:{{ conn.port }})
+                      </option>
+                    </select>
+                  </div>
+                  
+                  <div class="col-md-6">
+                    <label class="form-label">目标Schema</label>
+                    <select v-model="form.target_schema" class="form-select-sm">
+                      <option value="">请选择</option>
+                      <option value="public">public (默认)</option>
+                      <option v-for="schema in pgSchemas" :key="schema" :value="schema">{{ schema }}</option>
+                    </select>
+                  </div>
                 </div>
                 
-                <div class="col-md-6">
-                  <label class="form-label">目标Schema</label>
-                  <select v-model="form.target_schema" class="form-select-sm">
-                    <option value="">请选择</option>
-                    <option value="public">public (默认)</option>
-                    <option v-for="schema in pgSchemas" :key="schema" :value="schema">{{ schema }}</option>
-                  </select>
+                <div class="row g-3 mt-3">
+                  <div class="col-md-6">
+                    <label class="form-label">目标对象名称</label>
+                    <input v-model="form.target_object" type="text" class="form-control-sm" placeholder="可选">
+                  </div>
+                  
+                  <div class="col-md-6">
+                    <label class="form-label">字段过滤</label>
+                    <textarea v-model="form.selected_fields" class="form-control-sm" rows="1"
+                              placeholder="逗号或换行分隔的字段名"></textarea>
+                  </div>
                 </div>
-              </div>
-              
-              <div class="row g-3 mt-3">
-                <div class="col-md-6">
-                  <label class="form-label">目标对象名称</label>
-                  <input v-model="form.target_object" type="text" class="form-control-sm" placeholder="可选">
-                </div>
-                
-                <div class="col-md-6">
-                  <label class="form-label">字段过滤</label>
-                  <textarea v-model="form.selected_fields" class="form-control-sm" rows="1"
-                            placeholder="逗号或换行分隔的字段名"></textarea>
-                </div>
-              </div>
+              </template>
               
               <hr class="my-4">
               
@@ -191,17 +196,24 @@
                 <label class="form-check-label" for="isBatch">批量迁移</label>
               </div>
               
-              <div v-if="form.task_type.includes('sqlite')" class="row g-3 mt-3">
+              <div v-if="form.task_type === 'view_to_sqlite'" class="row g-3 mt-3">
+                <div class="col-12">
+                  <p class="text-muted small mb-2">可指定任意目录与文件名；若文件不存在将自动创建新 SQLite 数据库。</p>
+                </div>
                 <div class="col-md-6">
                   <label class="form-label">SQLite目录</label>
-                  <input v-model="form.sqlite_directory" type="text" class="form-control-sm" 
-                         placeholder="SQLite文件保存目录">
+                  <div class="d-flex gap-1">
+                    <input v-model="form.sqlite_directory" type="text" class="form-control-sm flex-grow-1"
+                           placeholder="SQLite 文件保存目录" :required="form.task_type === 'view_to_sqlite'">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @click="openBrowseDirectories" title="浏览目录">
+                      <i class="bi bi-folder2-open"></i> 浏览
+                    </button>
+                  </div>
                 </div>
-                
                 <div class="col-md-6">
                   <label class="form-label">SQLite文件名</label>
-                  <input v-model="form.sqlite_file_name" type="text" class="form-control-sm" 
-                         placeholder="SQLite文件名">
+                  <input v-model="form.sqlite_file_name" type="text" class="form-control-sm"
+                         placeholder="如 mydb.sqlite3" :required="form.task_type === 'view_to_sqlite'">
                 </div>
               </div>
               
@@ -251,6 +263,37 @@
         </div>
       </div>
     </div>
+
+    <!-- 目录浏览弹窗 -->
+    <div v-if="showBrowseModal" class="modal d-block" tabindex="-1" style="background: rgba(0,0,0,0.5)">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">选择 SQLite 保存目录</h5>
+            <button type="button" class="btn-close" @click="showBrowseModal = false"></button>
+          </div>
+          <div class="modal-body">
+            <p class="text-muted small mb-2">当前路径: <code>{{ browseCurrentPath }}</code></p>
+            <div v-if="browseLoading" class="text-center py-3">
+              <div class="spinner-border spinner-border-sm text-primary"></div>
+            </div>
+            <ul v-else class="list-group list-group-flush">
+              <li v-for="dir in browseDirectoriesList" :key="dir.path"
+                  class="list-group-item list-group-item-action d-flex justify-content-between align-items-center"
+                  @click="navigateBrowseDir(dir)">
+                <span><i class="bi bi-folder2 me-2"></i>{{ dir.name }}</span>
+                <i v-if="!dir.is_parent" class="bi bi-chevron-right"></i>
+              </li>
+              <li v-if="browseDirectoriesList.length === 0" class="list-group-item text-muted">此目录下无子目录</li>
+            </ul>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" @click="showBrowseModal = false">取消</button>
+            <button type="button" class="btn btn-primary" @click="confirmBrowsePath">选择此目录</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -267,9 +310,14 @@ const postgresConnections = ref<any[]>([])
 const schemas = ref<string[]>([])
 const pgSchemas = ref<string[]>([])
 const sourceObjects = ref<string[]>([])
+const sourceObjectTypes = ref<Record<string, string>>({})
 const selectedSourceObjects = ref<string[]>([])
 const loadingObjects = ref(false)
 const searchTerm = ref('')
+const showBrowseModal = ref(false)
+const browseCurrentPath = ref('')
+const browseDirectoriesList = ref<{ name: string; path: string; is_parent: boolean }[]>([])
+const browseLoading = ref(false)
 
 const filteredObjects = computed(() => {
   if (!searchTerm.value) {
@@ -345,26 +393,31 @@ const loadSourceObjects = async () => {
   
   loadingObjects.value = true
   try {
-    const object_type = form.value.task_type === 'table' ? 'TABLE' : 
-                       form.value.task_type === 'view' ? 'VIEW' : 
-                       form.value.task_type === 'materialized_view' ? 'MATERIALIZED_VIEW' : 'TABLE'
-    
-    console.log('Loading source objects with params:', {
-      connection_id: form.value.oracle_connection,
-      schema: form.value.source_schema,
-      object_type: object_type,
-    })
+    const object_type = form.value.task_type === 'view_to_sqlite' ? 'view_to_sqlite' :
+                       form.value.task_type === 'table' ? 'TABLE' :
+                       form.value.task_type === 'view' ? 'VIEW' :
+                       form.value.task_type === 'materialized_view' ? 'MATERIALIZED_VIEW' :
+                       form.value.task_type === 'view_to_table' ? 'VIEW_TO_TABLE' : 'TABLE'
     
     const res = await databaseApi.getDatabaseObjects({
       connection_id: form.value.oracle_connection,
       schema: form.value.source_schema,
       object_type: object_type,
     })
-    sourceObjects.value = res.data.objects || []
-    console.log('Loaded source objects:', sourceObjects.value.length, 'items')
+    const raw = res.data.objects || []
+    sourceObjects.value = raw.map((o: string | { name: string; object_type?: string }) =>
+      typeof o === 'string' ? o : o.name
+    )
+    sourceObjectTypes.value = {}
+    if (form.value.task_type === 'view_to_sqlite' && raw.length > 0 && typeof raw[0] === 'object' && raw[0] !== null && 'object_type' in raw[0]) {
+      raw.forEach((o: { name: string; object_type?: string }) => {
+        if (o && typeof o === 'object' && o.name) sourceObjectTypes.value[o.name] = o.object_type || ''
+      })
+    }
   } catch (error) {
     console.error('Failed to load source objects:', error)
     sourceObjects.value = []
+    sourceObjectTypes.value = {}
   } finally {
     loadingObjects.value = false
   }
@@ -378,7 +431,53 @@ const clearAllObjects = () => {
   selectedSourceObjects.value = []
 }
 
+const openBrowseDirectories = async () => {
+  showBrowseModal.value = true
+  browseCurrentPath.value = form.value.sqlite_directory?.trim() || ''
+  await loadBrowseDirectories(browseCurrentPath.value || undefined)
+}
+
+const loadBrowseDirectories = async (path?: string) => {
+  browseLoading.value = true
+  try {
+    const res = await databaseApi.browseDirectories(path ? { path } : {})
+    if (res.data.status === 'success') {
+      browseCurrentPath.value = res.data.current_path || ''
+      browseDirectoriesList.value = res.data.directories || []
+    }
+  } catch (e) {
+    console.error('Browse directories failed:', e)
+    browseDirectoriesList.value = []
+  } finally {
+    browseLoading.value = false
+  }
+}
+
+const navigateBrowseDir = async (dir: { path: string; is_parent: boolean }) => {
+  browseCurrentPath.value = dir.path
+  await loadBrowseDirectories(dir.path)
+}
+
+const confirmBrowsePath = () => {
+  form.value.sqlite_directory = browseCurrentPath.value
+  showBrowseModal.value = false
+}
+
 const handleSubmit = async () => {
+  if (form.value.task_type === 'view_to_sqlite') {
+    if (!form.value.sqlite_directory?.trim()) {
+      alert('请填写 SQLite 目录或通过「浏览」选择')
+      return
+    }
+    if (!form.value.sqlite_file_name?.trim()) {
+      alert('请填写 SQLite 文件名')
+      return
+    }
+    if (selectedSourceObjects.value.length === 0) {
+      alert('请至少选择一个表或视图')
+      return
+    }
+  }
   loading.value = true
   try {
     const taskData = { ...form.value }
@@ -411,11 +510,13 @@ watch(() => form.value.oracle_connection, () => {
   schemas.value = []
   form.value.source_schema = ''
   sourceObjects.value = []
+  sourceObjectTypes.value = {}
   selectedSourceObjects.value = []
 })
 
 watch(() => form.value.source_schema, () => {
   sourceObjects.value = []
+  sourceObjectTypes.value = {}
   selectedSourceObjects.value = []
   if (form.value.oracle_connection && form.value.source_schema) {
     loadSourceObjects()
@@ -424,6 +525,7 @@ watch(() => form.value.source_schema, () => {
 
 watch(() => form.value.task_type, () => {
   sourceObjects.value = []
+  sourceObjectTypes.value = {}
   selectedSourceObjects.value = []
   if (form.value.oracle_connection && form.value.source_schema) {
     loadSourceObjects()
