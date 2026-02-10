@@ -167,6 +167,16 @@
                 <label class="form-label">密码</label>
                 <input v-model="newConnection.password" type="password" class="form-control-sm" required placeholder="数据库密码">
               </div>
+              <div class="mb-3">
+                <label class="form-label">SSL 模式</label>
+                <select v-model="newConnection.sslmode" class="form-select form-select-sm">
+                  <option value="">自动检测（PolarDB 公网推荐）</option>
+                  <option value="require">需要 SSL</option>
+                  <option value="prefer">优先 SSL</option>
+                  <option value="disable">禁用 SSL</option>
+                </select>
+                <small class="text-muted">连接 PolarDB 公网时若报错，可尝试切换此选项</small>
+              </div>
               <button type="submit" class="btn btn-sm btn-primary w-100" :disabled="creating">
                 <span v-if="creating" class="spinner-border spinner-border-sm me-2"></span>
                 {{ creating ? '创建中...' : '创建连接' }}
@@ -216,6 +226,15 @@
               <div class="mb-3">
                 <label class="form-label">密码</label>
                 <input v-model="editedConnection.password" type="password" class="form-control-sm" placeholder="留空表示不修改密码">
+              </div>
+              <div class="mb-3">
+                <label class="form-label">SSL 模式</label>
+                <select v-model="editedConnection.sslmode" class="form-select form-select-sm">
+                  <option value="">自动检测（PolarDB 公网推荐）</option>
+                  <option value="require">需要 SSL</option>
+                  <option value="prefer">优先 SSL</option>
+                  <option value="disable">禁用 SSL</option>
+                </select>
               </div>
               <div class="d-flex gap-2">
                 <button type="button" class="btn btn-sm btn-outline-info flex-fill" @click="testEditedConnection" :disabled="testing">
@@ -308,6 +327,7 @@ const editedConnection = ref<any>({
   database: '',
   username: '',
   password: '',
+  sslmode: '',
 })
 
 const newConnection = ref<PostgresConnection>({
@@ -317,6 +337,7 @@ const newConnection = ref<PostgresConnection>({
   database: '',
   username: '',
   password: '',
+  sslmode: '',
 })
 
 const getStatusBadgeClass = (status?: string) => {
@@ -371,6 +392,7 @@ const createConnection = async () => {
       database: '',
       username: '',
       password: '',
+      sslmode: '',
     }
     await loadConnections()
     alertMessage.value = {
@@ -405,6 +427,7 @@ const openEditModal = (conn: PostgresConnection) => {
     database: conn.database,
     username: conn.username,
     password: '',
+    sslmode: conn.sslmode || '',
   }
   showEditModal.value = true
 }
@@ -420,6 +443,7 @@ const updateConnection = async () => {
       database: editedConnection.value.database,
       username: editedConnection.value.username,
       password: editedConnection.value.password || undefined,
+      sslmode: editedConnection.value.sslmode || undefined,
     })
     showEditModal.value = false
     await loadConnections()
@@ -492,6 +516,7 @@ const testEditedConnection = async () => {
       database: ed.database.trim(),
       username: ed.username.trim(),
       password: ed.password || undefined,
+      sslmode: ed.sslmode || undefined,
     })
     testResultModal.value.loading = false
     testResultModal.value.success = res.data.status === 'success'
