@@ -34,6 +34,8 @@ class PostgresConnection(models.Model):
     database = models.CharField(max_length=100, verbose_name='数据库名')
     username = models.CharField(max_length=100, verbose_name='用户名')
     password = models.CharField(max_length=100, verbose_name='密码')
+    sslmode = models.CharField(max_length=20, blank=True, default='', verbose_name='SSL模式',
+                               help_text='留空自动检测；require=需要SSL；prefer=优先SSL；disable=禁用SSL')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active', verbose_name='状态')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
