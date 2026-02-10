@@ -65,6 +65,9 @@ export const oracleConnectionApi = {
   update: (id: number, data: OracleConnection) => apiClient.put(`/api/oracle-connections/${id}/`, data),
   delete: (id: number) => apiClient.delete(`/api/oracle-connections/${id}/`),
   test: (id: number) => apiClient.post(`/api/oracle/test-connection/`, { connection_id: id }),
+  /** 使用当前表单参数测试（未保存的输入），用于编辑弹窗内测试 */
+  testWithParams: (params: { connection_id?: number; host: string; port: number; service_name: string; username: string; password?: string }) =>
+    apiClient.post('/api/oracle/test-connection/', params),
   save: (data: OracleConnection) => apiClient.post('/api/oracle/save-connection/', data),
   deleteConnection: (id: number) => apiClient.post('/api/oracle/delete-connection/', { connection_id: id }),
   edit: (id: number, data: OracleConnection) => apiClient.post(`/api/oracle/edit-connection/`, { connection_id: id, ...data }),
@@ -77,6 +80,9 @@ export const postgresConnectionApi = {
   update: (id: number, data: PostgresConnection) => apiClient.put(`/api/postgres-connections/${id}/`, data),
   delete: (id: number) => apiClient.delete(`/api/postgres-connections/${id}/`),
   test: (id: number) => apiClient.post(`/api/postgres/test-connection/`, { connection_id: id }),
+  /** 使用当前表单参数测试（未保存的输入），用于编辑弹窗内测试 */
+  testWithParams: (params: { connection_id?: number; host: string; port: number; database: string; username: string; password?: string }) =>
+    apiClient.post('/api/postgres/test-connection/', params),
   save: (data: PostgresConnection) => apiClient.post('/api/postgres/save-connection/', data),
   deleteConnection: (id: number) => apiClient.post('/api/postgres/delete-connection/', { connection_id: id }),
   edit: (id: number, data: PostgresConnection) => apiClient.post(`/api/postgres/edit-connection/`, { connection_id: id, ...data }),
