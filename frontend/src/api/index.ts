@@ -20,6 +20,7 @@ export interface PostgresConnection {
   database: string
   username: string
   password: string
+  sslmode?: string
   status?: string
   created_at?: string
   updated_at?: string
@@ -81,7 +82,7 @@ export const postgresConnectionApi = {
   delete: (id: number) => apiClient.delete(`/api/postgres-connections/${id}/`),
   test: (id: number) => apiClient.post(`/api/postgres/test-connection/`, { connection_id: id }),
   /** 使用当前表单参数测试（未保存的输入），用于编辑弹窗内测试 */
-  testWithParams: (params: { connection_id?: number; host: string; port: number; database: string; username: string; password?: string }) =>
+  testWithParams: (params: { connection_id?: number; host: string; port: number; database: string; username: string; password?: string; sslmode?: string }) =>
     apiClient.post('/api/postgres/test-connection/', params),
   save: (data: PostgresConnection) => apiClient.post('/api/postgres/save-connection/', data),
   deleteConnection: (id: number) => apiClient.post('/api/postgres/delete-connection/', { connection_id: id }),
