@@ -3,7 +3,7 @@
     <nav v-if="!isLoginPage" class="navbar navbar-expand-lg navbar-dark">
       <div class="container-fluid">
         <a class="navbar-brand d-flex align-items-center" href="/">
-          <img src="@/assets/logo.svg" alt="Logo" width="25" height="25" style="margin: 8px;" />
+          <img src="@/assets/logo.svg" alt="Logo" width="35" height="35" style="margin: 8px;" />
           <span>Oracle到PolarDB-PG迁移平台</span>
         </a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
