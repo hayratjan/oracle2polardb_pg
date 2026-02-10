@@ -88,20 +88,25 @@ def get_oracle_connection(connection_id):
     )
     return connection
 
+def _pg_connect_kwargs(conn_obj, database=None):
+    """从 PostgresConnection 构建 psycopg2.connect 参数字典"""
+    db_name = database if database else conn_obj.database
+    kwargs = {
+        'host': conn_obj.host,
+        'port': conn_obj.port,
+        'database': db_name,
+        'user': conn_obj.username,
+        'password': conn_obj.password
+    }
+    sslmode = (getattr(conn_obj, 'sslmode', None) or '').strip()
+    if sslmode:
+        kwargs['sslmode'] = sslmode
+    return kwargs
+
 def get_postgres_connection(connection_id, database=None):
     """创建PostgreSQL连接"""
     conn_obj = get_object_or_404(PostgresConnection, pk=connection_id)
-    
-    # 如果指定了数据库，使用指定的数据库名
-    db_name = database if database else conn_obj.database
-    
-    connection = psycopg2.connect(
-        host=conn_obj.host,
-        port=conn_obj.port,
-        database=db_name,
-        user=conn_obj.username,
-        password=conn_obj.password
-    )
+    connection = psycopg2.connect(**_pg_connect_kwargs(conn_obj, database))
     return connection
 
 def switch_postgres_database(request, task_id):
@@ -982,11 +987,11 @@ def _test_oracle_connect_with_params(host, port, service_name, username, passwor
         return False, '端口格式无效'
     try:
         dsn = cx_Oracle.makedsn(host, port, service_name=service_name)
+        # cx_Oracle.connect() 不支持 connect_timeout 参数，需通过 DSN 或 Oracle 客户端配置超时
         connection = cx_Oracle.connect(
             user=username,
             password=password or '',
-            dsn=dsn,
-            connect_timeout=5
+            dsn=dsn
         )
         connection.close()
         return True, None
@@ -1196,8 +1201,7 @@ def add_pg_connection(request):
             database = request.POST.get('database')
             username = request.POST.get('username')
             password = request.POST.get('password')
-            
-            # 创建新连接
+            sslmode = (request.POST.get('sslmode') or '').strip()
             connection = PostgresConnection.objects.create(
                 name=name,
                 host=host,
@@ -1205,6 +1209,7 @@ def add_pg_connection(request):
                 database=database,
                 username=username,
                 password=password,
+                sslmode=sslmode,
                 status='active'
             )
             
@@ -1215,32 +1220,78 @@ def add_pg_connection(request):
 
 from django.views.decorators.csrf import csrf_exempt
 
-def _test_pg_connect_with_params(host, port, database, user, password):
+def _test_pg_connect_with_params(host, port, database, user, password, sslmode=None):
     """使用给定参数测试 PG 连接，返回 (success, error_message)。"""
     try:
         port = int(port) if port is not None else 5432
     except (TypeError, ValueError):
         return False, '端口格式无效'
-    try:
-        conn = psycopg2.connect(
-            host=host,
-            port=port,
-            database=database,
-            user=user,
-            password=password or '',
-            connect_timeout=5
-        )
-        conn.close()
-        return True, None
-    except psycopg2.OperationalError as e:
-        error_msg = str(e).lower()
-        if 'timeout' in error_msg or 'could not connect' in error_msg or 'connection timed out' in error_msg:
-            return False, '无法连接到数据库，连接超时'
-        if 'does not exist' in error_msg or ('database' in error_msg and 'fatal' in error_msg):
-            return False, f'数据库 "{database}" 不存在，请先在该 PolarDB 实例上创建该数据库，或将连接配置中的数据库名改为已存在的库（如 postgres）。'
-        return False, str(e)
-    except Exception as e:
-        return False, str(e)
+
+    def _connect(ssl_mode):
+        kwargs = {
+            'host': host,
+            'port': port,
+            'database': database,
+            'user': user,
+            'password': password or '',
+            'connect_timeout': 5
+        }
+        if ssl_mode:
+            kwargs['sslmode'] = ssl_mode
+        return psycopg2.connect(**kwargs)
+
+    last_error = None
+    # PolarDB 公网连接通常需要 SSL，优先尝试 sslmode=require
+    ssl_try_order = [sslmode] if sslmode else []
+    if not sslmode and host and ('aliyuncs.com' in host or 'polardb' in host.lower()):
+        ssl_try_order = ['require', 'prefer', 'disable']
+    elif not ssl_try_order:
+        ssl_try_order = [None]
+
+    for ssl_mode in ssl_try_order:
+        try:
+            conn = _connect(ssl_mode)
+            conn.close()
+            return True, None
+        except psycopg2.OperationalError as e:
+            last_error = e
+            error_msg = str(e).lower()
+            # SSL 相关错误时尝试其他模式
+            if 'ssl' in error_msg or 'certificate' in error_msg:
+                continue
+            if 'timeout' in error_msg or 'could not connect' in error_msg or 'connection timed out' in error_msg:
+                return False, '无法连接到数据库，连接超时。请检查：1) 主机地址和端口是否正确；2) PolarDB 控制台是否已添加当前 IP 到白名单。'
+            if 'does not exist' in error_msg or ('database' in error_msg and 'fatal' in error_msg):
+                return False, f'数据库 "{database}" 不存在，请先在该 PolarDB 实例上创建该数据库，或将连接配置中的数据库名改为已存在的库（如 postgres）。'
+            if 'password authentication failed' in error_msg or 'authentication failed' in error_msg:
+                raw_err = str(e).strip()
+                hint = (
+                    '用户名或密码错误。请检查：\n'
+                    '1) 在 PolarDB 控制台「账号管理」中确认账号和密码正确；\n'
+                    '2) 确认该账号已授权访问目标数据库；\n'
+                    '3) 若使用公网连接，请确认已添加 IP 白名单；\n'
+                    '4) 可尝试在连接配置中切换 SSL 模式（需要/禁用）。'
+                )
+                if raw_err:
+                    hint += f'\n\n原始错误: {raw_err}'
+                return False, hint
+            return False, str(e)
+        except Exception as e:
+            last_error = e
+            if ssl_mode != ssl_try_order[-1]:
+                continue
+            return False, str(e)
+
+    if last_error:
+        err_str = str(last_error).lower()
+        if 'password authentication failed' in err_str or 'authentication failed' in err_str:
+            raw_err = str(last_error).strip()
+            return False, (
+                '用户名或密码错误。请检查 PolarDB 控制台中的账号密码，确认已添加 IP 白名单。'
+                f'\n\n原始错误: {raw_err}'
+            )
+        return False, str(last_error)
+    return False, '连接测试失败'
 
 
 @csrf_exempt
@@ -1281,7 +1332,8 @@ def test_pg_connection(request):
                     password = (data.get('password') or '').strip()
                     if not password:
                         return JsonResponse({'status': 'error', 'message': '请填写密码'})
-                success, err_msg = _test_pg_connect_with_params(host, port, database, username, password)
+                sslmode = (data.get('sslmode') or '').strip() or None
+                success, err_msg = _test_pg_connect_with_params(host, port, database, username, password, sslmode)
                 if success:
                     return JsonResponse({'status': 'success'})
                 return JsonResponse({'status': 'error', 'message': err_msg or '连接测试失败'})
@@ -1299,9 +1351,11 @@ def test_pg_connection(request):
             connection.save()
 
             try:
+                sslmode = (getattr(connection, 'sslmode', None) or '').strip() or None
                 success, err_msg = _test_pg_connect_with_params(
                     connection.host, connection.port, connection.database,
-                    connection.username, connection.password
+                    connection.username, connection.password,
+                    sslmode=sslmode
                 )
                 if success:
                     connection.status = 'active'
@@ -1344,6 +1398,7 @@ def edit_pg_connection(request):
                     database = data.get('database')
                     username = data.get('username')
                     password = data.get('password')
+                    sslmode = data.get('sslmode')
                 except json.JSONDecodeError:
                     return JsonResponse({'status': 'error', 'message': '无效的JSON数据'})
             else:
@@ -1354,6 +1409,7 @@ def edit_pg_connection(request):
                 database = request.POST.get('database')
                 username = request.POST.get('username')
                 password = request.POST.get('password')
+                sslmode = request.POST.get('sslmode')
             
             if not connection_id:
                 return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
@@ -1370,9 +1426,10 @@ def edit_pg_connection(request):
             connection.database = database
             connection.username = username
             
-            # 如果提供了新密码，则更新密码
             if password:
                 connection.password = password
+            if sslmode is not None:
+                connection.sslmode = (sslmode or '').strip()
             
             connection.save()
             return JsonResponse({'status': 'success'})
