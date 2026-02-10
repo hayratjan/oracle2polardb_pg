@@ -13,7 +13,7 @@ class PostgresConnectionSerializer(serializers.ModelSerializer):
     class Meta:
         model = PostgresConnection
         fields = ['id', 'user', 'name', 'host', 'port', 'database', 'username', 'password', 
-                  'status', 'created_at', 'updated_at']
+                  'sslmode', 'status', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
