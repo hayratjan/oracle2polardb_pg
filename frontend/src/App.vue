@@ -38,7 +38,7 @@
             <li class="nav-item">
               <router-link class="nav-link" to="/postgres">
                 <i class="bi bi-server me-1"></i>
-                PostgreSQL数据库
+                polardb-pg数据库管理
               </router-link>
             </li>
             <li class="nav-item">
