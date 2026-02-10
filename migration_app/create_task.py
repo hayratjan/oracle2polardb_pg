@@ -18,7 +18,7 @@ def validate_task_data(data):
     if task_type == 'view_to_sqlite':
         required_fields.extend(['sqlite_directory', 'sqlite_file_name'])
     else:
-        required_fields.extend(['postgres_connection', 'postgres_database', 'target_schema'])
+        required_fields.extend(['postgres_connection', 'target_schema'])
     
     for field in required_fields:
         if field not in data or not data[field]:
@@ -59,26 +59,36 @@ def validate_task_data(data):
         errors.append(f"无效的标识符大小写策略: {identifier_case}")
     data['identifier_case'] = identifier_case
     
-    # 检查source_object和source_objects字段
+    # 规范化 source_objects：支持逗号分隔字符串或数组
+    def _normalize_source_objects(val):
+        if not val:
+            return []
+        if isinstance(val, list):
+            return [str(x).strip() for x in val if str(x).strip()]
+        s = str(val).replace('；', ',').replace(';', ',').replace('\n', ',')
+        return [x.strip() for x in s.split(',') if x.strip()]
+
+    if 'source_objects' in data and data['source_objects']:
+        data['source_objects'] = _normalize_source_objects(data['source_objects'])
+
+    # 检查source_object和source_objects字段（view 与 view_to_table 均支持批量 source_objects）
     if 'task_type' in data and data['task_type'] != 'all_tables':
-        if data['task_type'] in ['view_to_table', 'view_to_sqlite']:
-            # 对于多视图迁移类型，必须提供source_objects
-            if 'source_objects' not in data or not data['source_objects'] or len(data['source_objects']) == 0:
+        has_source_objects = bool(data.get('source_objects'))
+        source_obj_val = data.get('source_object')
+        has_source_object = bool(source_obj_val and str(source_obj_val).strip())
+        if data['task_type'] in ['view', 'view_to_table', 'view_to_sqlite']:
+            if not has_source_objects and not has_source_object:
                 errors.append("对于该任务类型，必须提供至少一个视图名称")
             else:
-                # 确保source_objects是一个数组
-                if isinstance(data['source_objects'], str):
-                    data['source_objects'] = [data['source_objects']]
-                # 设置source_object为第一个视图名称
-                data['source_object'] = data['source_objects'][0]
-        else:
-            # 对于其他类型，检查source_object
-            if 'source_object' not in data or not data['source_object']:
-                if 'source_objects' in data and data['source_objects'] and len(data['source_objects']) > 0:
-                    # 如果有source_objects数组但没有source_object，使用第一个
+                if has_source_objects:
                     data['source_object'] = data['source_objects'][0]
-                else:
-                    errors.append("对于非'all_tables'类型的任务，需要提供源对象名")
+                elif not has_source_object:
+                    errors.append("对于该任务类型，必须提供至少一个视图名称")
+        else:
+            if not has_source_object and not has_source_objects:
+                errors.append("对于非'all_tables'类型的任务，需要提供源对象名")
+            elif has_source_objects and not has_source_object:
+                data['source_object'] = data['source_objects'][0]
     
     # 检查冲突策略
     valid_strategies = ['error', 'replace', 'skip', 'append', 'truncate']
@@ -141,6 +151,7 @@ def create_task_validated(request):
             task.sqlite_file_name = validated_data.get('sqlite_file_name')
             task.selected_fields = validated_data.get('selected_fields')
             task.identifier_case = validated_data.get('identifier_case') or 'lower'
+            task.is_batch = bool(validated_data.get('is_batch', False))
             
             # 设置源对象（如果适用）
             if task.task_type != 'all_tables':
@@ -158,7 +169,8 @@ def create_task_validated(request):
             if task.task_type == 'view_to_sqlite':
                 task.log = f"SQLite文件: {task.sqlite_path or task.sqlite_file_name}"
             else:
-                task.log = f"目标PostgreSQL数据库: {validated_data['postgres_database']}"
+                postgres_db = validated_data.get('postgres_database') or (task.postgres_connection.database if task.postgres_connection else '')
+                task.log = f"目标PostgreSQL数据库: {postgres_db}"
             task.save()
             
             return {
