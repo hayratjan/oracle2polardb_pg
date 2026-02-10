@@ -160,6 +160,11 @@
                   <i class="bi bi-x-circle me-2" style="font-size: 18px;"></i>
                   取消任务
                 </button>
+                <button v-if="canRerun(task.status)" @click="startTask" 
+                        class="btn btn-sm btn-primary flex-grow-1">
+                  <i class="bi bi-arrow-repeat me-2" style="font-size: 18px;"></i>
+                  重新运行
+                </button>
                 <button @click="refreshStatus" class="btn btn-sm btn-outline-info">
                   <i class="bi bi-arrow-clockwise me-2" style="font-size: 18px;"></i>
                   刷新状态
@@ -321,6 +326,9 @@ const loadDatabases = async () => {
     console.error('Failed to load databases:', error)
   }
 }
+
+const canRerun = (status: string) =>
+  ['failed', 'completed', 'partial', 'canceled'].includes(status)
 
 const startTask = async () => {
   try {
