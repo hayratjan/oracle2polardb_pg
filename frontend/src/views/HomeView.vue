@@ -233,8 +233,8 @@ function drawDataFlow() {
 
     ctx.setLineDash([12, 20])
     ctx.lineDashOffset = -stream.dashOffset
-    ctx.strokeStyle = `rgba(${pr}, ${pg}, ${pb}, 0.25)`
-    ctx.lineWidth = 1.5
+    ctx.strokeStyle = `rgba(${pr}, ${pg}, ${pb}, 0.22)`
+    ctx.lineWidth = 1
     ctx.beginPath()
     ctx.moveTo(0, stream.y)
     ctx.lineTo(w, stream.y)
@@ -244,16 +244,18 @@ function drawDataFlow() {
       p.offset += p.speed
       if (p.offset > w + 20) p.offset = -20
       const x = p.offset
-      const gradient = ctx.createRadialGradient(x, stream.y, 0, x, stream.y, 12)
-      gradient.addColorStop(0, `rgba(${pr}, ${pg}, ${pb}, 0.9)`)
-      gradient.addColorStop(0.5, `rgba(${sr}, ${sg}, ${sb}, 0.4)`)
+      const glowR = 5
+      const coreR = 1.5
+      const gradient = ctx.createRadialGradient(x, stream.y, 0, x, stream.y, glowR)
+      gradient.addColorStop(0, `rgba(${pr}, ${pg}, ${pb}, 0.85)`)
+      gradient.addColorStop(0.5, `rgba(${sr}, ${sg}, ${sb}, 0.35)`)
       gradient.addColorStop(1, 'transparent')
       ctx.beginPath()
-      ctx.arc(x, stream.y, 12, 0, Math.PI * 2)
+      ctx.arc(x, stream.y, glowR, 0, Math.PI * 2)
       ctx.fillStyle = gradient
       ctx.fill()
       ctx.beginPath()
-      ctx.arc(x, stream.y, 4, 0, Math.PI * 2)
+      ctx.arc(x, stream.y, coreR, 0, Math.PI * 2)
       ctx.fillStyle = `rgba(255, 255, 255, 0.95)`
       ctx.fill()
     })
@@ -345,7 +347,8 @@ onUnmounted(() => {
   top: 0;
   left: 0;
   width: 100%;
-  height: 480px;
+  height: 100%;
+  min-height: 100vh;
   pointer-events: none;
   z-index: 0;
 }
