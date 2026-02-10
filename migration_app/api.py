@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth import authenticate, login, logout
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+from django.http import JsonResponse
 from .models import OracleConnection, PostgresConnection, MigrationTask
 from .serializers import (
     OracleConnectionSerializer, 
@@ -145,57 +146,66 @@ class MigrationTaskViewSet(viewsets.ModelViewSet):
             return MigrationTaskListSerializer
         return MigrationTaskSerializer
     
+    def _response_from_dashboard(self, result):
+        """将 dashboard 返回的 JsonResponse 转为 DRF Response 可用的 dict 和状态码"""
+        if isinstance(result, JsonResponse):
+            data = json.loads(result.content.decode('utf-8'))
+            return Response(data, status=result.status_code)
+        if isinstance(result, dict):
+            return Response(result)
+        return Response(result)
+
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
         task = self.get_object()
         try:
             result = dashboard.start_task(request, task_id=pk)
-            return Response(result)
+            return self._response_from_dashboard(result)
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         task = self.get_object()
         try:
             result = dashboard.cancel_task(request, task_id=pk)
-            return Response(result)
+            return self._response_from_dashboard(result)
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     @action(detail=True, methods=['post'])
     def delete(self, request, pk=None):
         task = self.get_object()
         try:
             result = dashboard.delete_task(request, task_id=pk)
-            return Response(result)
+            return self._response_from_dashboard(result)
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     @action(detail=True, methods=['get'])
     def status(self, request, pk=None):
         task = self.get_object()
         try:
             result = dashboard.task_status(request, task_id=pk)
-            return Response(result)
+            return self._response_from_dashboard(result)
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     @action(detail=True, methods=['get'])
     def info(self, request, pk=None):
         task = self.get_object()
         try:
             result = dashboard.task_detailed_info(request, task_id=pk)
-            return Response(result)
+            return self._response_from_dashboard(result)
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     @action(detail=True, methods=['post'])
     def switch_database(self, request, pk=None):
         task = self.get_object()
         try:
             result = dashboard.switch_postgres_database(request, task_id=pk)
-            return Response(result)
+            return self._response_from_dashboard(result)
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -230,15 +240,9 @@ class SchemasAPIView(APIView):
                 connection.close()
             elif conn_type == 'postgres':
                 from .models import PostgresConnection
+                from .views import _pg_connect_kwargs
                 pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
-                
-                conn = psycopg2.connect(
-                    host=pg_conn.host,
-                    port=pg_conn.port,
-                    database=database or pg_conn.database,
-                    user=pg_conn.username,
-                    password=pg_conn.password
-                )
+                conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, database or pg_conn.database))
                 cursor = conn.cursor()
                 
                 cursor.execute("""
@@ -392,16 +396,9 @@ class PostgresDatabasesAPIView(APIView):
             
             # 获取PostgreSQL连接信息
             from .models import PostgresConnection
+            from .views import _pg_connect_kwargs
             pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
-            
-            # 连接到PostgreSQL服务器的postgres数据库
-            conn = psycopg2.connect(
-                host=pg_conn.host,
-                port=pg_conn.port,
-                database='postgres',
-                user=pg_conn.username,
-                password=pg_conn.password
-            )
+            conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, 'postgres'))
             cursor = conn.cursor()
             
             # 查询所有非系统数据库
@@ -593,20 +590,11 @@ class PgSchemasAPIView(APIView):
                 return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
             
             from .models import PostgresConnection
+            from .views import _pg_connect_kwargs
             pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
-            
-            # 首先尝试连接到指定的数据库
             target_database = database or pg_conn.database
-            
-            # 先尝试连接到postgres系统数据库来验证目标数据库是否存在
             try:
-                conn = psycopg2.connect(
-                    host=pg_conn.host,
-                    port=pg_conn.port,
-                    database='postgres',
-                    user=pg_conn.username,
-                    password=pg_conn.password
-                )
+                conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, 'postgres'))
                 cursor = conn.cursor()
                 
                 # 检查目标数据库是否存在
@@ -624,17 +612,8 @@ class PgSchemasAPIView(APIView):
                         'message': f'数据库 "{target_database}" 不存在'
                     })
             except Exception as check_error:
-                # 如果无法连接到postgres数据库，尝试直接连接到目标数据库
                 pass
-            
-            # 连接到目标数据库
-            conn = psycopg2.connect(
-                host=pg_conn.host,
-                port=pg_conn.port,
-                database=target_database,
-                user=pg_conn.username,
-                password=pg_conn.password
-            )
+            conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, target_database))
             cursor = conn.cursor()
             
             cursor.execute("""
@@ -668,15 +647,9 @@ class PgTablesAPIView(APIView):
                 return Response({'status': 'error', 'message': '缺少必要参数：connection_id, schema'}, status=status.HTTP_400_BAD_REQUEST)
             
             from .models import PostgresConnection
+            from .views import _pg_connect_kwargs
             pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
-            
-            conn = psycopg2.connect(
-                host=pg_conn.host,
-                port=pg_conn.port,
-                database=database or pg_conn.database,
-                user=pg_conn.username,
-                password=pg_conn.password
-            )
+            conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, database or pg_conn.database))
             cursor = conn.cursor()
             
             cursor.execute("""
@@ -709,15 +682,9 @@ class PgUsersAPIView(APIView):
                 return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
             
             from .models import PostgresConnection
+            from .views import _pg_connect_kwargs
             pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
-            
-            conn = psycopg2.connect(
-                host=pg_conn.host,
-                port=pg_conn.port,
-                database=database or pg_conn.database,
-                user=pg_conn.username,
-                password=pg_conn.password
-            )
+            conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, database or pg_conn.database))
             cursor = conn.cursor()
             
             cursor.execute("""
