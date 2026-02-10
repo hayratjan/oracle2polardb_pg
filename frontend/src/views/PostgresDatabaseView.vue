@@ -11,9 +11,9 @@
     <div class="page-header mb-4">
       <h1>
         <i class="bi bi-server me-2"></i>
-        PostgreSQL数据库管理
+        PolarDB-PG数据库管理
       </h1>
-      <p class="text-muted mb-0">管理PostgreSQL数据库连接和查看数据库信息</p>
+      <p class="text-muted mb-0">管理 PolarDB-PG 数据库连接和查看数据库信息</p>
     </div>
     
     <div class="row g-4">
@@ -22,7 +22,7 @@
           <div class="card-header d-flex justify-content-between align-items-center">
             <h5 class="mb-0">
               <i class="bi bi-link-45deg me-1"></i>
-              PostgreSQL连接
+              PolarDB-PG 连接
             </h5>
             <button @click="showCreateModal = true" class="btn btn-primary btn-sm">
               <i class="bi bi-plus-lg"></i>
@@ -137,7 +137,7 @@
           <div class="modal-header">
             <h5 class="modal-title">
               <i class="bi bi-plus-circle me-2"></i>
-              添加PostgreSQL连接
+              添加 PolarDB-PG 连接
             </h5>
             <button type="button" class="btn-close" @click="showCreateModal = false"></button>
           </div>
@@ -186,7 +186,7 @@
           <div class="modal-header">
             <h5 class="modal-title">
               <i class="bi bi-pencil-square me-2"></i>
-              编辑PostgreSQL连接
+              编辑 PolarDB-PG 连接
             </h5>
             <button type="button" class="btn-close" @click="showEditModal = false"></button>
           </div>
@@ -235,6 +235,34 @@
         </div>
       </div>
     </div>
+
+    <div class="modal" v-if="testResultModal.show" tabindex="-1" style="display: block; background: rgba(0,0,0,0.5)">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">
+              <i class="bi bi-plug me-2"></i>
+              连接测试结果
+            </h5>
+            <button type="button" class="btn-close" @click="testResultModal.show = false"></button>
+          </div>
+          <div class="modal-body text-center py-4">
+            <div v-if="testResultModal.loading" class="py-3">
+              <div class="spinner-border text-primary mb-3" role="status"></div>
+              <p class="mb-0 text-muted">正在测试连接…</p>
+            </div>
+            <template v-else>
+              <i v-if="testResultModal.success" class="bi bi-check-circle-fill text-success mb-3" style="font-size: 3rem;"></i>
+              <i v-else class="bi bi-x-circle-fill text-danger mb-3" style="font-size: 3rem;"></i>
+              <p class="mb-0">{{ testResultModal.message }}</p>
+            </template>
+          </div>
+          <div class="modal-footer" v-if="!testResultModal.loading">
+            <button type="button" class="btn btn-primary" @click="testResultModal.show = false">确定</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -251,6 +279,17 @@ const connections = ref<PostgresConnection[]>([])
 const selectedConnection = ref<number | null>(null)
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
+const testResultModal = ref<{
+  show: boolean
+  loading: boolean
+  success: boolean
+  message: string
+}>({
+  show: false,
+  loading: false,
+  success: false,
+  message: '',
+})
 const databaseInfo = ref<any>(null)
 const alertMessage = ref<{
   show: boolean
@@ -420,74 +459,50 @@ const deleteConnection = async (id: number) => {
 
 const testConnection = async (id: number) => {
   if (!id) return
+  testResultModal.value = { show: true, loading: true, success: false, message: '' }
   try {
     const res = await postgresConnectionApi.test(id)
-    if (res.data.status === 'success') {
-      alertMessage.value = {
-        show: true,
-        type: 'success',
-        message: '连接测试成功',
-      }
-      setTimeout(() => {
-        alertMessage.value.show = false
-      }, 3000)
-    } else {
-      alertMessage.value = {
-        show: true,
-        type: 'danger',
-        message: '连接测试失败: ' + res.data.message,
-      }
-      setTimeout(() => {
-        alertMessage.value.show = false
-      }, 3000)
-    }
+    testResultModal.value.loading = false
+    testResultModal.value.success = res.data.status === 'success'
+    testResultModal.value.message = res.data.status === 'success'
+      ? '连接测试成功'
+      : '连接测试失败: ' + (res.data.message || '')
   } catch (error) {
     console.error('Failed to test connection:', error)
-    alertMessage.value = {
-      show: true,
-      type: 'danger',
-      message: '连接测试失败',
-    }
-    setTimeout(() => {
-      alertMessage.value.show = false
-    }, 3000)
+    testResultModal.value.loading = false
+    testResultModal.value.success = false
+    testResultModal.value.message = '连接测试失败'
   }
 }
 
 const testEditedConnection = async () => {
-  if (!editedConnection.value.id) return
+  const ed = editedConnection.value
+  if (!ed.id) return
+  if (!ed.host?.trim() || !ed.database?.trim() || !ed.username?.trim()) {
+    testResultModal.value = { show: true, loading: false, success: false, message: '请先填写主机、数据库名和用户名' }
+    return
+  }
   testing.value = true
+  testResultModal.value = { show: true, loading: true, success: false, message: '' }
   try {
-    const res = await postgresConnectionApi.test(editedConnection.value.id)
-    if (res.data.status === 'success') {
-      alertMessage.value = {
-        show: true,
-        type: 'success',
-        message: '连接测试成功',
-      }
-      setTimeout(() => {
-        alertMessage.value.show = false
-      }, 3000)
-    } else {
-      alertMessage.value = {
-        show: true,
-        type: 'danger',
-        message: '连接测试失败: ' + res.data.message,
-      }
-      setTimeout(() => {
-        alertMessage.value.show = false
-      }, 3000)
-    }
+    const res = await postgresConnectionApi.testWithParams({
+      connection_id: ed.id,
+      host: ed.host.trim(),
+      port: Number(ed.port) || 5432,
+      database: ed.database.trim(),
+      username: ed.username.trim(),
+      password: ed.password || undefined,
+    })
+    testResultModal.value.loading = false
+    testResultModal.value.success = res.data.status === 'success'
+    testResultModal.value.message = res.data.status === 'success'
+      ? '连接测试成功'
+      : '连接测试失败: ' + (res.data.message || '')
   } catch (error) {
     console.error('Failed to test connection:', error)
-    alertMessage.value = {
-      show: true,
-      type: 'danger',
-      message: '连接测试失败',
-    }
-    setTimeout(() => {
-      alertMessage.value.show = false
-    }, 3000)
+    testResultModal.value.loading = false
+    testResultModal.value.success = false
+    testResultModal.value.message = (error as any)?.response?.data?.message || '连接测试失败'
   } finally {
     testing.value = false
   }
