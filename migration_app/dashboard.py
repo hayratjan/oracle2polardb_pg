@@ -817,18 +817,10 @@ def get_postgres_databases(request):
             if not connection_id:
                 return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
             
-            # 获取PostgreSQL连接信息
             from .models import PostgresConnection
+            from .views import _pg_connect_kwargs
             pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
-            
-            # 连接到PostgreSQL服务器的postgres数据库
-            conn = psycopg2.connect(
-                host=pg_conn.host,
-                port=pg_conn.port,
-                database='postgres',  # 使用默认数据库连接
-                user=pg_conn.username,
-                password=pg_conn.password
-            )
+            conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, 'postgres'))
             cursor = conn.cursor()
             
             # 查询所有非系统数据库
