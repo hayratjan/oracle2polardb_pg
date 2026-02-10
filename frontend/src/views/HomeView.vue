@@ -1,5 +1,6 @@
 <template>
   <div class="home-view">
+    <canvas ref="dataFlowCanvas" class="data-flow-bg" aria-hidden="true"></canvas>
     <div class="hero-section">
       <div class="container">
         <div class="row align-items-center">
@@ -18,14 +19,14 @@
           </div>
           <div class="col-lg-4 d-none d-lg-block">
             <div class="hero-image">
-              <i class="bi bi-gem floating" style="font-size: 200px; color: #667eea;"></i>
+              <i class="bi bi-gem floating hero-gem" style="font-size: 200px;"></i>
             </div>
           </div>
         </div>
       </div>
     </div>
     
-    <div class="container mt-5">
+    <div class="container mt-5 content-layer">
       <div class="row g-4">
         <div class="col-md-4">
           <div class="card feature-card">
@@ -155,9 +156,123 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { migrationTaskApi, oracleConnectionApi, postgresConnectionApi } from '@/api'
 import type { MigrationTask } from '@/api'
+
+const dataFlowCanvas = ref<HTMLCanvasElement | null>(null)
+let animationFrameId: number | null = null
+
+/** 从 CSS 变量解析主题色为 rgb 数组 */
+function getThemeRgb(varName: string): [number, number, number] {
+  const computedStyle = getComputedStyle(document.documentElement)
+  const hex = computedStyle.getPropertyValue(varName).trim()
+  if (!hex || hex.length < 4) return [102, 126, 234]
+  const m = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i)
+  if (m) return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)]
+  const rgb = hex.match(/\d+/g)
+  if (rgb && rgb.length >= 3) return [Number(rgb[0]), Number(rgb[1]), Number(rgb[2])]
+  return [102, 126, 234]
+}
+
+interface DataStream {
+  y: number
+  speed: number
+  dashOffset: number
+  packets: { offset: number; speed: number }[]
+}
+
+const streams: DataStream[] = []
+const STREAM_COUNT = 10
+const PACKETS_PER_STREAM = 4
+
+function initDataFlow() {
+  const canvas = dataFlowCanvas.value
+  if (!canvas) return
+  const rect = canvas.getBoundingClientRect()
+  const dpr = window.devicePixelRatio || 1
+  canvas.width = rect.width * dpr
+  canvas.height = rect.height * dpr
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  ctx.scale(dpr, dpr)
+
+  streams.length = 0
+  for (let i = 0; i < STREAM_COUNT; i++) {
+    const packets: { offset: number; speed: number }[] = []
+    for (let j = 0; j < PACKETS_PER_STREAM; j++) {
+      packets.push({
+        offset: Math.random() * rect.width,
+        speed: 0.8 + Math.random() * 1.2
+      })
+    }
+    streams.push({
+      y: (rect.height / (STREAM_COUNT + 1)) * (i + 1),
+      speed: 0.3 + Math.random() * 0.4,
+      dashOffset: Math.random() * 40,
+      packets
+    })
+  }
+}
+
+function drawDataFlow() {
+  const canvas = dataFlowCanvas.value
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  const w = canvas.getBoundingClientRect().width
+  const h = canvas.getBoundingClientRect().height
+  const [pr, pg, pb] = getThemeRgb('--primary')
+  const [sr, sg, sb] = getThemeRgb('--secondary')
+
+  ctx.clearRect(0, 0, w, h)
+
+  streams.forEach((stream) => {
+    stream.dashOffset += stream.speed
+    if (stream.dashOffset > 40) stream.dashOffset -= 40
+
+    ctx.setLineDash([12, 20])
+    ctx.lineDashOffset = -stream.dashOffset
+    ctx.strokeStyle = `rgba(${pr}, ${pg}, ${pb}, 0.25)`
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.moveTo(0, stream.y)
+    ctx.lineTo(w, stream.y)
+    ctx.stroke()
+
+    stream.packets.forEach((p) => {
+      p.offset += p.speed
+      if (p.offset > w + 20) p.offset = -20
+      const x = p.offset
+      const gradient = ctx.createRadialGradient(x, stream.y, 0, x, stream.y, 12)
+      gradient.addColorStop(0, `rgba(${pr}, ${pg}, ${pb}, 0.9)`)
+      gradient.addColorStop(0.5, `rgba(${sr}, ${sg}, ${sb}, 0.4)`)
+      gradient.addColorStop(1, 'transparent')
+      ctx.beginPath()
+      ctx.arc(x, stream.y, 12, 0, Math.PI * 2)
+      ctx.fillStyle = gradient
+      ctx.fill()
+      ctx.beginPath()
+      ctx.arc(x, stream.y, 4, 0, Math.PI * 2)
+      ctx.fillStyle = `rgba(255, 255, 255, 0.95)`
+      ctx.fill()
+    })
+  })
+
+  animationFrameId = requestAnimationFrame(drawDataFlow)
+}
+
+function startDataFlow() {
+  initDataFlow()
+  drawDataFlow()
+}
+
+function stopDataFlow() {
+  if (animationFrameId != null) {
+    cancelAnimationFrame(animationFrameId)
+    animationFrameId = null
+  }
+}
 
 const loading = ref(false)
 const recentTasks = ref<MigrationTask[]>([])
@@ -194,6 +309,8 @@ const formatDate = (dateString?: string) => {
 }
 
 onMounted(async () => {
+  startDataFlow()
+  window.addEventListener('resize', initDataFlow)
   loading.value = true
   try {
     const [tasksRes, oracleRes, postgresRes] = await Promise.all([
@@ -210,11 +327,37 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+onUnmounted(() => {
+  stopDataFlow()
+  window.removeEventListener('resize', initDataFlow)
+})
 </script>
 
 <style scoped>
 .home-view {
+  position: relative;
   animation: fadeIn 0.5s ease-in;
+}
+
+.data-flow-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 480px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero-section {
+  position: relative;
+  z-index: 1;
+}
+
+.content-layer {
+  position: relative;
+  z-index: 1;
 }
 
 @keyframes fadeIn {
@@ -269,7 +412,9 @@ onMounted(async () => {
   justify-content: center;
 }
 
-.hero-image i {
+.hero-image i,
+.hero-gem {
+  color: var(--primary);
   filter: drop-shadow(0 20px 40px rgba(102, 126, 234, 0.4));
 }
 
