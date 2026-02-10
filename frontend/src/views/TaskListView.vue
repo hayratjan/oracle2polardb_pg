@@ -112,6 +112,10 @@
                               class="btn btn-sm btn-warning" title="取消">
                         <i class="bi bi-x-circle-fill" style="font-size: 14px;"></i>
                       </button>
+                      <button v-if="canRerun(task.status) && task.id" @click="startTask(task.id)" 
+                              class="btn btn-sm btn-primary" title="重新运行">
+                        <i class="bi bi-arrow-repeat" style="font-size: 14px;"></i>
+                      </button>
                       <button v-if="task.id" @click="deleteTask(task.id)" class="btn btn-sm btn-danger" title="删除">
                         <i class="bi bi-trash" style="font-size: 14px;"></i>
                       </button>
@@ -222,6 +226,9 @@ const loadTasks = async () => {
     loading.value = false
   }
 }
+
+const canRerun = (status: string) =>
+  ['failed', 'completed', 'partial', 'canceled'].includes(status)
 
 const startTask = async (id: number) => {
   if (!id) return
