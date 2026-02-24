@@ -27,7 +27,7 @@ class MigrationTaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = MigrationTask
         fields = ['id', 'name', 'task_type', 'oracle_connection', 'postgres_connection', 
-                  'source_schema', 'target_schema', 'target_object', 'source_object', 
+                  'postgres_database', 'source_schema', 'target_schema', 'target_object', 'source_object', 
                   'source_objects', 'selected_fields', 'identifier_case', 'is_batch', 
                   'parent_task', 'conflict_strategy', 'status', 'log', 'cancel_requested', 
                   'progress', 'created_at', 'started_at', 'completed_at', 'view_progress',
@@ -46,5 +46,5 @@ class MigrationTaskListSerializer(serializers.ModelSerializer):
         model = MigrationTask
         fields = ['id', 'name', 'task_type', 'status', 'progress', 'created_at', 
                   'started_at', 'completed_at', 'source_db', 'target_db', 
-                  'oracle_connection_name', 'postgres_connection_name']
+                  'oracle_connection_name', 'postgres_connection_name', 'postgres_database', 'target_schema']
         read_only_fields = ['id', 'created_at', 'started_at', 'completed_at']

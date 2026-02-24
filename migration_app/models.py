@@ -111,6 +111,8 @@ class MigrationTask(models.Model):
     view_progress = models.JSONField(verbose_name="视图迁移进度", blank=True, null=True, help_text="存储每个视图的迁移进度")
     sqlite_directory = models.CharField(max_length=255, blank=True, null=True, verbose_name="SQLite目录")
     sqlite_file_name = models.CharField(max_length=255, blank=True, null=True, verbose_name="SQLite文件名")
+    # 目标 PolarDB/PostgreSQL 数据库名（连接下可选的多数据库）
+    postgres_database = models.CharField(max_length=255, blank=True, null=True, verbose_name="目标数据库")
     
     def __str__(self):
         return self.name
@@ -139,6 +141,9 @@ class MigrationTask(models.Model):
             return "SQLite"
         if self.postgres_connection:
             target_info = f"{self.postgres_connection.name}"
+            db_name = self.postgres_database or self.postgres_connection.database
+            if db_name:
+                target_info += f" / {db_name}"
             if self.target_schema:
                 target_info += f" ({self.target_schema})"
             return target_info

@@ -153,6 +153,10 @@ def create_task_validated(request):
             task.identifier_case = validated_data.get('identifier_case') or 'lower'
             task.is_batch = bool(validated_data.get('is_batch', False))
             
+            # 设置目标 PolarDB 数据库名（可选，不填则用连接默认库）
+            if task.task_type != 'view_to_sqlite' and task.postgres_connection:
+                task.postgres_database = validated_data.get('postgres_database') or task.postgres_connection.database or None
+            
             # 设置源对象（如果适用）
             if task.task_type != 'all_tables':
                 task.source_object = validated_data['source_object']
@@ -169,7 +173,7 @@ def create_task_validated(request):
             if task.task_type == 'view_to_sqlite':
                 task.log = f"SQLite文件: {task.sqlite_path or task.sqlite_file_name}"
             else:
-                postgres_db = validated_data.get('postgres_database') or (task.postgres_connection.database if task.postgres_connection else '')
+                postgres_db = task.postgres_database or (task.postgres_connection.database if task.postgres_connection else '')
                 task.log = f"目标PostgreSQL数据库: {postgres_db}"
             task.save()
             

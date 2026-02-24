@@ -128,20 +128,26 @@
               
               <template v-if="form.task_type !== 'view_to_sqlite'">
                 <div class="row g-3">
-                  <div class="col-md-6">
-                    <label class="form-label">PostgreSQL连接</label>
-                    <select v-model="form.postgres_connection" class="form-select-sm" :required="form.task_type !== 'view_to_sqlite'" @change="loadPgSchemas">
-                      <option value="">请选择</option>
+                  <div class="col-md-12">
+                    <label class="form-label">第一步：PolarDB/PostgreSQL 连接</label>
+                    <select v-model="form.postgres_connection" class="form-select-sm" :required="form.task_type !== 'view_to_sqlite'" @change="onPostgresConnectionChange">
+                      <option value="">请选择数据库链接</option>
                       <option v-for="conn in postgresConnections" :key="conn.id" :value="conn.id">
                         {{ conn.name }} ({{ conn.host }}:{{ conn.port }})
                       </option>
                     </select>
                   </div>
-                  
-                  <div class="col-md-6">
-                    <label class="form-label">目标Schema</label>
-                    <select v-model="form.target_schema" class="form-select-sm">
-                      <option value="">请选择</option>
+                  <div class="col-md-12">
+                    <label class="form-label">第二步：目标数据库</label>
+                    <select v-model="form.postgres_database" class="form-select-sm" :disabled="!form.postgres_connection || pgDatabases.length === 0" @change="loadPgSchemas">
+                      <option value="">请先选择连接，再选择数据库</option>
+                      <option v-for="db in pgDatabases" :key="db" :value="db">{{ db }}</option>
+                    </select>
+                  </div>
+                  <div class="col-md-12">
+                    <label class="form-label">第三步：目标 Schema</label>
+                    <select v-model="form.target_schema" class="form-select-sm" :disabled="!form.postgres_database">
+                      <option value="">请先选择数据库，再选择 Schema</option>
                       <option value="public">public (默认)</option>
                       <option v-for="schema in pgSchemas" :key="schema" :value="schema">{{ schema }}</option>
                     </select>
@@ -307,6 +313,7 @@ const router = useRouter()
 const loading = ref(false)
 const oracleConnections = ref<any[]>([])
 const postgresConnections = ref<any[]>([])
+const pgDatabases = ref<string[]>([])
 const schemas = ref<string[]>([])
 const pgSchemas = ref<string[]>([])
 const sourceObjects = ref<string[]>([])
@@ -335,6 +342,7 @@ const form = ref<MigrationTask>({
   task_type: 'table',
   oracle_connection: 0,
   postgres_connection: 0,
+  postgres_database: '',
   source_schema: '',
   target_schema: '',
   target_object: '',
@@ -375,16 +383,52 @@ const loadSchemas = async () => {
   }
 }
 
+// 选择 PolarDB 连接后：加载该连接下的数据库列表
+const onPostgresConnectionChange = async () => {
+  pgDatabases.value = []
+  form.value.postgres_database = ''
+  pgSchemas.value = []
+  form.value.target_schema = ''
+  if (!form.value.postgres_connection) return
+  await loadPgDatabases()
+}
+
+// 加载 PolarDB 连接下的数据库列表
+const loadPgDatabases = async () => {
+  if (!form.value.postgres_connection) return
+  try {
+    const res = await databaseApi.getPostgresDatabases({
+      connection_id: form.value.postgres_connection,
+    })
+    pgDatabases.value = res.data.databases || []
+    const conn = postgresConnections.value.find((c: any) => c.id === form.value.postgres_connection)
+    if (conn?.database && pgDatabases.value.includes(conn.database)) {
+      form.value.postgres_database = conn.database
+      await loadPgSchemas()
+    }
+  } catch (error) {
+    console.error('Failed to load PostgreSQL databases:', error)
+    pgDatabases.value = []
+  }
+}
+
+// 根据选中的连接与目标数据库加载 Schema 列表
 const loadPgSchemas = async () => {
   if (!form.value.postgres_connection) return
-  
+  const database = form.value.postgres_database || undefined
+  if (!database) {
+    pgSchemas.value = []
+    return
+  }
   try {
     const res = await databaseApi.getPgSchemas({
       connection_id: form.value.postgres_connection,
+      database,
     })
     pgSchemas.value = res.data.schemas || []
   } catch (error) {
     console.error('Failed to load PostgreSQL schemas:', error)
+    pgSchemas.value = []
   }
 }
 
@@ -477,6 +521,19 @@ const handleSubmit = async () => {
       alert('请至少选择一个表或视图')
       return
     }
+  } else {
+    if (!form.value.postgres_connection) {
+      alert('请选择 PolarDB/PostgreSQL 连接')
+      return
+    }
+    if (!form.value.postgres_database?.trim()) {
+      alert('请选择目标数据库')
+      return
+    }
+    if (!form.value.target_schema?.trim()) {
+      alert('请选择目标 Schema')
+      return
+    }
   }
   loading.value = true
   try {
@@ -529,6 +586,15 @@ watch(() => form.value.task_type, () => {
   selectedSourceObjects.value = []
   if (form.value.oracle_connection && form.value.source_schema) {
     loadSourceObjects()
+  }
+})
+
+// 目标数据库变化时重新加载 Schema
+watch(() => form.value.postgres_database, () => {
+  if (form.value.postgres_connection && form.value.postgres_database) {
+    loadPgSchemas()
+  } else {
+    pgSchemas.value = []
   }
 })
 </script>

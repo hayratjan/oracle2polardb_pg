@@ -65,7 +65,7 @@
                 <div class="info-item">
                   <label class="info-label">
                     <i class="bi bi-server me-1" style="font-size: 16px;"></i>
-                    目标数据库
+                    目标概览
                   </label>
                   <div class="info-value">{{ task.target_db || '-' }}</div>
                 </div>
@@ -78,7 +78,31 @@
                   <div class="info-value">{{ task.source_schema || '-' }}</div>
                 </div>
                 
-                <div class="info-item">
+                <!-- PolarDB 目标：连接、数据库、Schema -->
+                <template v-if="task.task_type !== 'view_to_sqlite' && task.postgres_connection_name">
+                  <div class="info-item">
+                    <label class="info-label">
+                      <i class="bi bi-link-45deg me-1" style="font-size: 16px;"></i>
+                    PolarDB/PostgreSQL 连接
+                    </label>
+                    <div class="info-value">{{ task.postgres_connection_name || '-' }}</div>
+                  </div>
+                  <div class="info-item">
+                    <label class="info-label">
+                      <i class="bi bi-database me-1" style="font-size: 16px;"></i>
+                    目标数据库
+                    </label>
+                    <div class="info-value">{{ task.postgres_database || '-' }}</div>
+                  </div>
+                  <div class="info-item">
+                    <label class="info-label">
+                      <i class="bi bi-diagram-3 me-1" style="font-size: 16px;"></i>
+                    目标 Schema
+                    </label>
+                    <div class="info-value">{{ task.target_schema || '-' }}</div>
+                  </div>
+                </template>
+                <div v-else class="info-item">
                   <label class="info-label">
                     <i class="bi bi-diagram-3 me-1" style="font-size: 16px;"></i>
                     目标Schema
@@ -89,9 +113,14 @@
                 <div class="info-item">
                   <label class="info-label">
                     <i class="bi bi-box me-1" style="font-size: 16px;"></i>
-                    源对象
+                    源对象（表/视图）
                   </label>
-                  <div class="info-value">{{ task.source_object || '-' }}</div>
+                  <div class="info-value">
+                    <template v-if="task.source_objects && task.source_objects.trim()">
+                      <span v-for="(obj, i) in sourceObjectsList" :key="i">{{ obj }}{{ i < sourceObjectsList.length - 1 ? '、' : '' }}</span>
+                    </template>
+                    <template v-else>{{ task.source_object || '-' }}</template>
+                  </div>
                 </div>
                 
                 <div class="info-item">
@@ -224,7 +253,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { migrationTaskApi, databaseApi } from '@/api'
 import type { MigrationTask } from '@/api'
@@ -236,6 +265,15 @@ const task = ref<MigrationTask | null>(null)
 const databases = ref<string[]>([])
 const selectedDatabase = ref('')
 let statusInterval: number | null = null
+
+// 源对象列表（表/视图）：来自 source_objects 或 source_object
+const sourceObjectsList = computed(() => {
+  if (!task.value) return []
+  const so = task.value.source_objects?.trim()
+  if (so) return so.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean)
+  if (task.value.source_object?.trim()) return [task.value.source_object.trim()]
+  return []
+})
 
 const getTaskTypeText = (type: string) => {
   const texts: Record<string, string> = {
@@ -384,6 +422,8 @@ const switchDatabase = async () => {
 onMounted(async () => {
   await loadTask()
   await loadDatabases()
+  // 同步当前任务的目标数据库到切换下拉框
+  if (task.value?.postgres_database) selectedDatabase.value = task.value.postgres_database
   
   if (task.value?.status === 'running') {
     statusInterval = window.setInterval(async () => {

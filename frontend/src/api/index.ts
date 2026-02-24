@@ -32,6 +32,8 @@ export interface MigrationTask {
   task_type: string
   oracle_connection: number
   postgres_connection?: number
+  /** 目标 PolarDB/PostgreSQL 数据库名（连接下的具体库） */
+  postgres_database?: string
   source_schema: string
   target_schema?: string
   target_object?: string

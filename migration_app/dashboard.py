@@ -240,7 +240,9 @@ def start_task(request, task_id):
             
             if task.task_type != 'view_to_sqlite':
                 if not postgres_database:
-                    if task.log and "目标PostgreSQL数据库:" in task.log:
+                    # 优先使用任务保存的目标数据库字段
+                    postgres_database = getattr(task, 'postgres_database', None) or (task.postgres_connection.database if task.postgres_connection else None)
+                    if not postgres_database and task.log and "目标PostgreSQL数据库:" in task.log:
                         for line in task.log.split('\n'):
                             if line.startswith("目标PostgreSQL数据库:"):
                                 postgres_database = line.split(":", 1)[1].strip()
@@ -570,7 +572,8 @@ def switch_postgres_database(request, task_id):
         if not postgres_database:
             return JsonResponse({'status': 'error', 'message': '未提供PostgreSQL数据库名称'})
         
-        # 记录请求
+        # 更新任务保存的目标数据库名
+        task.postgres_database = postgres_database
         log_message = f"收到切换目标数据库请求：{postgres_database}"
         task.log = (task.log or '') + f"\n{log_message}"
         task.save()
