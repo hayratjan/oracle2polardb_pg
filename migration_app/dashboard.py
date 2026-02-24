@@ -1119,12 +1119,16 @@ def migrate_view_to_table(task_id, postgres_database=None):
                     task.save()
                     continue
                 
-                # 创建PostgreSQL中的表
-                create_table_sql = f"CREATE TABLE {task.target_schema}.{view_name} (\n"
-                column_defs = []
+                # 统一目标 schema 与表名：空 schema 默认为 public，表名统一小写，避免 CREATE 与 INSERT 不一致导致 relation 不存在
+                pg_schema = (getattr(task, 'target_schema', None) or '').strip() or 'public'
+                pg_table = view_name.lower()
                 
                 view_log.append(f"获取到视图列信息: 共 {len(columns)} 列")
                 logger.info(f"获取到视图 {view_name} 的列信息: 共 {len(columns)} 列")
+                
+                # 创建PostgreSQL中的表（使用统一小写表名，与 INSERT 一致）
+                create_table_sql = f"CREATE TABLE {pg_schema}.{pg_table} (\n"
+                column_defs = []
                 
                 for column in columns:
                     column_name, data_type, data_length, data_precision, data_scale, nullable = column
@@ -1154,50 +1158,44 @@ def migrate_view_to_table(task_id, postgres_database=None):
                 
                 # 执行创建表
                 try:
-                    # 检查是否已存在表，如存在则根据冲突策略处理
-                    pg_cursor.execute(f"SELECT to_regclass('{task.target_schema}.{view_name}')")
+                    # 检查是否已存在表，如存在则根据冲突策略处理（与 CREATE/INSERT 使用相同的 schema.table）
+                    pg_cursor.execute(f"SELECT to_regclass('{pg_schema}.{pg_table}')")
                     table_exists = pg_cursor.fetchone()[0] is not None
                     
                     if table_exists:
-                        logger.info(f"表 {task.target_schema}.{view_name} 已存在，冲突策略: {task.conflict_strategy}")
+                        logger.info(f"表 {pg_schema}.{pg_table} 已存在，冲突策略: {task.conflict_strategy}")
                         if task.conflict_strategy == 'error':
-                            error_msg = f"表 {task.target_schema}.{view_name} 已存在"
+                            error_msg = f"表 {pg_schema}.{pg_table} 已存在"
                             logger.error(error_msg)
                             raise Exception(error_msg)
                         elif task.conflict_strategy == 'replace':
-                            logger.info(f"删除已存在的表 {task.target_schema}.{view_name}")
-                            pg_cursor.execute(f"DROP TABLE IF EXISTS {task.target_schema}.{view_name}")
+                            logger.info(f"删除已存在的表 {pg_schema}.{pg_table}")
+                            pg_cursor.execute(f"DROP TABLE IF EXISTS {pg_schema}.{pg_table}")
                             pg_conn.commit()
-                            view_log.append(f"已删除已存在的表 {task.target_schema}.{view_name}")
+                            view_log.append(f"已删除已存在的表 {pg_schema}.{pg_table}")
                         elif task.conflict_strategy == 'skip':
-                            logger.info(f"跳过已存在的表 {task.target_schema}.{view_name}")
-                            view_log.append(f"表 {task.target_schema}.{view_name} 已存在，已跳过")
+                            logger.info(f"跳过已存在的表 {pg_schema}.{pg_table}")
+                            view_log.append(f"表 {pg_schema}.{pg_table} 已存在，已跳过")
                             successful_views.append(view_name)
                             task.view_progress = json.dumps({view_name: {'progress': 100, 'log': view_log}})
                             task.save()
                             continue
                         elif task.conflict_strategy == 'truncate':
-                            logger.info(f"清空表 {task.target_schema}.{view_name}")
-                            pg_cursor.execute(f"TRUNCATE TABLE {task.target_schema}.{view_name}")
+                            logger.info(f"清空表 {pg_schema}.{pg_table}")
+                            pg_cursor.execute(f"TRUNCATE TABLE {pg_schema}.{pg_table}")
                             pg_conn.commit()
-                            view_log.append(f"已清空表 {task.target_schema}.{view_name}")
+                            view_log.append(f"已清空表 {pg_schema}.{pg_table}")
                             # 继续执行数据导入部分
                         elif task.conflict_strategy == 'append':
-                            logger.info(f"表 {task.target_schema}.{view_name} 已存在，将追加数据")
-                            view_log.append(f"表 {task.target_schema}.{view_name} 已存在，将追加数据")
+                            logger.info(f"表 {pg_schema}.{pg_table} 已存在，将追加数据")
+                            view_log.append(f"表 {pg_schema}.{pg_table} 已存在，将追加数据")
                             # 不创建表，只导入数据
                     
-                    # 如果不是追加或清空数据，需要创建表
-                    # error_msg = f"迁移策略:{task.conflict_strategy}\n"
-                    # logger.error(error_msg, exc_info=True)
-                    # view_log.append(error_msg)
-                    # failed_views.append(view_name)
-                    
                     if not table_exists:
-                        logger.info(f"创建目标表: {task.target_schema}.{view_name}")
+                        logger.info(f"创建目标表: {pg_schema}.{pg_table}")
                         pg_cursor.execute(create_table_sql)
                         pg_conn.commit()
-                        view_log.append(f"成功创建PostgreSQL表 {task.target_schema}.{view_name}")
+                        view_log.append(f"成功创建PostgreSQL表 {pg_schema}.{pg_table}")
                     
                     # 从Oracle视图查询数据并插入到PostgreSQL表中
                     oracle_query = f"SELECT * FROM {task.source_schema}.{view_name}"
@@ -1226,7 +1224,7 @@ def migrate_view_to_table(task_id, postgres_database=None):
                     # 创建INSERT语句
                     placeholders = ", ".join(["%s"] * len(column_names))
                     quoted_columns = [f'"{col}"' for col in column_names]
-                    insert_sql = f"INSERT INTO {task.target_schema}.{view_name.lower()} ({', '.join(quoted_columns)}) VALUES ({placeholders})"
+                    insert_sql = f"INSERT INTO {pg_schema}.{pg_table} ({', '.join(quoted_columns)}) VALUES ({placeholders})"
                     
                     # 分批处理数据，并按真实比例更新进度（节流：每约1%或每5万行保存一次，避免频繁写库）
                     total_rows = 0
@@ -1312,6 +1310,11 @@ def migrate_view_to_table(task_id, postgres_database=None):
                     failed_views.append(view_name)
                     task.view_progress = json.dumps({view_name: {'progress': 0, 'log': view_log}})
                     task.save()
+                    # 回滚失败的事务，避免后续视图报 current transaction is aborted
+                    try:
+                        pg_conn.rollback()
+                    except Exception as rb_err:
+                        logger.warning(f"回滚事务时出错: {rb_err}")
                 
             except Exception as view_err:
                 error_msg = f"处理视图 {view_name} 时发生错误: {str(view_err)}"
