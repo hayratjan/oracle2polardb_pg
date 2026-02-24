@@ -17,6 +17,17 @@
     </div>
     
     <div class="card">
+      <!-- 批量操作栏：有选中项时显示 -->
+      <div v-if="selectedIds.size > 0" class="card-header d-flex align-items-center flex-wrap gap-2 batch-toolbar">
+        <span class="text-muted">已选 <strong>{{ selectedIds.size }}</strong> 项</span>
+        <button type="button" class="btn btn-sm btn-success" @click="batchStart" :disabled="batchStartDisabled">
+          <i class="bi bi-play-fill me-1"></i>批量运行
+        </button>
+        <button type="button" class="btn btn-sm btn-danger" @click="batchDelete" :disabled="batchDeleteDisabled">
+          <i class="bi bi-trash me-1"></i>批量删除
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" @click="clearSelection">取消选择</button>
+      </div>
       <div class="card-body">
         <div v-if="loading" class="text-center py-5">
           <div class="spinner-border text-primary" role="status"></div>
@@ -27,6 +38,10 @@
             <table class="table table-hover">
               <thead>
                 <tr>
+                  <th style="width: 44px;">
+                    <input type="checkbox" class="form-check-input" :checked="isAllSelected" :indeterminate="isIndeterminate"
+                           @change="toggleSelectAll" title="全选" />
+                  </th>
                   <th>
                     <i class="bi bi-file-text me-1"></i>
                     任务名称
@@ -56,6 +71,11 @@
               </thead>
               <tbody>
                 <tr v-for="task in tasks" :key="task.id">
+                  <td>
+                    <input v-if="task.id && canSelectTask(task)" type="checkbox" class="form-check-input"
+                           :checked="selectedIds.has(task.id)" @change="toggleSelect(task.id!)" />
+                    <span v-else class="text-muted">—</span>
+                  </td>
                   <td>
                     <router-link :to="`/task/${task.id}`" class="task-name-link">
                       {{ task.name }}
@@ -125,6 +145,21 @@
               </tbody>
             </table>
           </div>
+          <!-- 分页 -->
+          <div v-if="totalCount > 0" class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-3 pt-3 border-top pagination-bar">
+            <div class="text-muted small">
+              共 <strong>{{ totalCount }}</strong> 条，当前第 {{ rangeStart }}-{{ rangeEnd }} 条
+            </div>
+            <div class="d-flex align-items-center gap-2">
+              <button type="button" class="btn btn-sm btn-outline-primary" :disabled="!hasPrev" @click="goPage(currentPage - 1)">
+                <i class="bi bi-chevron-left"></i> 上一页
+              </button>
+              <span class="small text-muted">第 {{ currentPage }} / {{ totalPages }} 页</span>
+              <button type="button" class="btn btn-sm btn-outline-primary" :disabled="!hasNext" @click="goPage(currentPage + 1)">
+                下一页 <i class="bi bi-chevron-right"></i>
+              </button>
+            </div>
+          </div>
         </div>
         <div v-else class="text-center py-5 empty-state">
           <i class="bi bi-inbox mb-3" style="font-size: 80px;"></i>
@@ -141,12 +176,47 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { migrationTaskApi } from '@/api'
 import type { MigrationTask } from '@/api'
 
+const pageSize = 20
 const loading = ref(false)
 const tasks = ref<MigrationTask[]>([])
+const totalCount = ref(0)
+const currentPage = ref(1)
+/** 当前页选中的任务 id 集合（仅当前页） */
+const selectedIds = ref<Set<number>>(new Set())
+
+// 分页计算
+const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize)))
+const hasPrev = computed(() => currentPage.value > 1)
+const hasNext = computed(() => currentPage.value < totalPages.value)
+const rangeStart = computed(() => (currentPage.value - 1) * pageSize + 1)
+const rangeEnd = computed(() => Math.min(currentPage.value * pageSize, totalCount.value))
+
+// 全选状态：当前页可选项是否全部选中
+const selectableTasks = computed(() => tasks.value.filter(t => t.id && canSelectTask(t)))
+const isAllSelected = computed(() =>
+  selectableTasks.value.length > 0 && selectableTasks.value.every(t => selectedIds.value.has(t.id!)))
+const isIndeterminate = computed(() => {
+  const n = selectableTasks.value.filter(t => selectedIds.value.has(t.id!)).length
+  return n > 0 && n < selectableTasks.value.length
+})
+
+// 批量运行：仅当存在可运行任务时可用（pending 或可重跑）
+const canRerunStatus = (status: string) => ['failed', 'completed', 'partial', 'canceled'].includes(status)
+const batchStartDisabled = computed(() =>
+  ![...selectedIds.value].some(id => {
+    const t = tasks.value.find(x => x.id === id)
+    return t && (t.status === 'pending' || canRerunStatus(t.status))
+  }))
+// 批量删除：运行中的不能删，存在非运行中的即可点
+const batchDeleteDisabled = computed(() =>
+  ![...selectedIds.value].some(id => {
+    const t = tasks.value.find(x => x.id === id)
+    return t && t.status !== 'running'
+  }))
 
 const getTaskTypeText = (type: string) => {
   const texts: Record<string, string> = {
@@ -215,16 +285,89 @@ const formatDate = (dateString?: string) => {
   return new Date(dateString).toLocaleString('zh-CN')
 }
 
-const loadTasks = async () => {
+/** 可勾选的任务：非运行中可删；待执行或可重跑可运行 */
+function canSelectTask(task: MigrationTask): boolean {
+  return !!task.id
+}
+
+function toggleSelectAll() {
+  if (isAllSelected.value) {
+    selectableTasks.value.forEach(t => { if (t.id) selectedIds.value.delete(t.id) })
+    selectedIds.value = new Set(selectedIds.value)
+  } else {
+    selectableTasks.value.forEach(t => { if (t.id) selectedIds.value.add(t.id) })
+    selectedIds.value = new Set(selectedIds.value)
+  }
+}
+
+function toggleSelect(id: number) {
+  if (selectedIds.value.has(id)) selectedIds.value.delete(id)
+  else selectedIds.value.add(id)
+  selectedIds.value = new Set(selectedIds.value)
+}
+
+function clearSelection() {
+  selectedIds.value = new Set()
+}
+
+const loadTasks = async (page = 1) => {
   loading.value = true
   try {
-    const res = await migrationTaskApi.list()
-    tasks.value = res.data.results || res.data
+    const res = await migrationTaskApi.list({ page, page_size: pageSize })
+    const data = res.data as { results?: MigrationTask[]; count?: number; next?: string | null; previous?: string | null }
+    tasks.value = data.results || (Array.isArray(res.data) ? res.data : [])
+    totalCount.value = data.count ?? tasks.value.length
+    currentPage.value = page
+    // 翻页后清空当前页选择（可选：也可保留 selectedIds 只对当前页生效，这里清空更清晰）
+    selectedIds.value = new Set()
   } catch (error) {
     console.error('Failed to load tasks:', error)
   } finally {
     loading.value = false
   }
+}
+
+function goPage(page: number) {
+  if (page < 1 || page > totalPages.value) return
+  loadTasks(page)
+}
+
+/** 批量运行选中的可运行任务 */
+async function batchStart() {
+  const ids = [...selectedIds.value].filter(id => {
+    const t = tasks.value.find(x => x.id === id)
+    return t && (t.status === 'pending' || canRerunStatus(t.status))
+  })
+  if (ids.length === 0) return
+  if (!confirm(`确定要运行选中的 ${ids.length} 个任务吗？`)) return
+  for (const id of ids) {
+    try {
+      await migrationTaskApi.start(id)
+    } catch (e) {
+      console.error('Failed to start task:', id, e)
+    }
+  }
+  clearSelection()
+  await loadTasks(currentPage.value)
+}
+
+/** 批量删除选中的非运行中任务 */
+async function batchDelete() {
+  const ids = [...selectedIds.value].filter(id => {
+    const t = tasks.value.find(x => x.id === id)
+    return t && t.status !== 'running'
+  })
+  if (ids.length === 0) return
+  if (!confirm(`确定要删除选中的 ${ids.length} 个任务吗？运行中的任务将跳过。`)) return
+  for (const id of ids) {
+    try {
+      await migrationTaskApi.delete(id)
+    } catch (e) {
+      console.error('Failed to delete task:', id, e)
+    }
+  }
+  clearSelection()
+  await loadTasks(currentPage.value)
 }
 
 const canRerun = (status: string) =>
@@ -234,7 +377,7 @@ const startTask = async (id: number) => {
   if (!id) return
   try {
     await migrationTaskApi.start(id)
-    await loadTasks()
+    await loadTasks(currentPage.value)
   } catch (error) {
     console.error('Failed to start task:', error)
   }
@@ -245,7 +388,7 @@ const cancelTask = async (id: number) => {
   if (!confirm('确定要取消此任务吗？')) return
   try {
     await migrationTaskApi.cancel(id)
-    await loadTasks()
+    await loadTasks(currentPage.value)
   } catch (error) {
     console.error('Failed to cancel task:', error)
   }
@@ -256,14 +399,14 @@ const deleteTask = async (id: number) => {
   if (!confirm('确定要删除此任务吗？')) return
   try {
     await migrationTaskApi.delete(id)
-    await loadTasks()
+    await loadTasks(currentPage.value)
   } catch (error) {
     console.error('Failed to delete task:', error)
   }
 }
 
 onMounted(() => {
-  loadTasks()
+  loadTasks(1)
 })
 </script>
 
@@ -420,6 +563,17 @@ onMounted(() => {
 .empty-state p {
   color: var(--text-muted);
   font-size: 1.1rem;
+}
+
+/* 批量操作栏 */
+.batch-toolbar {
+  background: var(--table-row-hover);
+  border-bottom: 1px solid var(--border);
+}
+
+/* 分页栏 */
+.pagination-bar {
+  color: var(--text-muted);
 }
 
 .table {

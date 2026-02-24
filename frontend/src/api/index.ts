@@ -91,8 +91,18 @@ export const postgresConnectionApi = {
   edit: (id: number, data: PostgresConnection) => apiClient.post(`/api/postgres/edit-connection/`, { connection_id: id, ...data }),
 }
 
+/** 任务列表分页响应 */
+export interface TaskListResponse {
+  count: number
+  next: string | null
+  previous: string | null
+  results: MigrationTask[]
+}
+
 export const migrationTaskApi = {
-  list: () => apiClient.get('/api/tasks/'),
+  /** 获取任务列表，支持分页：params.page、params.page_size */
+  list: (params?: { page?: number; page_size?: number }) =>
+    apiClient.get<TaskListResponse>('/api/tasks/', { params: params || {} }),
   get: (id: number) => apiClient.get(`/api/tasks/${id}/`),
   create: (data: MigrationTask) => apiClient.post('/api/tasks/', data),
   update: (id: number, data: MigrationTask) => apiClient.put(`/api/tasks/${id}/`, data),
