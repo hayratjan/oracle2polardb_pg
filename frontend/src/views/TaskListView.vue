@@ -150,11 +150,18 @@
             <div class="text-muted small">
               共 <strong>{{ totalCount }}</strong> 条，当前第 {{ rangeStart }}-{{ rangeEnd }} 条
             </div>
-            <div class="d-flex align-items-center gap-2">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
               <button type="button" class="btn btn-sm btn-outline-primary" :disabled="!hasPrev" @click="goPage(currentPage - 1)">
                 <i class="bi bi-chevron-left"></i> 上一页
               </button>
               <span class="small text-muted">第 {{ currentPage }} / {{ totalPages }} 页</span>
+              <div class="d-flex align-items-center gap-1 jump-page-wrap">
+                <span class="small text-muted">跳至</span>
+                <input v-model.number="jumpPageInput" type="number" class="form-control form-control-sm jump-page-input"
+                       min="1" :max="totalPages" placeholder="页" @keyup.enter="jumpToPage" />
+                <span class="small text-muted">页</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" @click="jumpToPage" title="跳转到指定页">跳转</button>
+              </div>
               <button type="button" class="btn btn-sm btn-outline-primary" :disabled="!hasNext" @click="goPage(currentPage + 1)">
                 下一页 <i class="bi bi-chevron-right"></i>
               </button>
@@ -185,6 +192,8 @@ const loading = ref(false)
 const tasks = ref<MigrationTask[]>([])
 const totalCount = ref(0)
 const currentPage = ref(1)
+/** 跳转页码输入框的值（用于跳转到指定页） */
+const jumpPageInput = ref<number | ''>('')
 /** 当前页选中的任务 id 集合（仅当前页） */
 const selectedIds = ref<Set<number>>(new Set())
 
@@ -330,6 +339,18 @@ const loadTasks = async (page = 1) => {
 function goPage(page: number) {
   if (page < 1 || page > totalPages.value) return
   loadTasks(page)
+}
+
+/** 跳转到指定页：根据输入框页码跳转，无效则恢复输入框为当前页 */
+function jumpToPage() {
+  const p = jumpPageInput.value
+  const num = typeof p === 'number' && !Number.isNaN(p) ? Math.floor(p) : NaN
+  if (num >= 1 && num <= totalPages.value) {
+    loadTasks(num)
+    jumpPageInput.value = ''
+  } else {
+    jumpPageInput.value = currentPage.value
+  }
 }
 
 /** 批量运行选中的可运行任务 */
@@ -574,6 +595,15 @@ onMounted(() => {
 /* 分页栏 */
 .pagination-bar {
   color: var(--text-muted);
+}
+
+.jump-page-wrap {
+  margin-left: 0.25rem;
+}
+
+.jump-page-input {
+  width: 4rem;
+  text-align: center;
 }
 
 .table {
