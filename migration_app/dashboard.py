@@ -1227,8 +1227,10 @@ def migrate_view_to_table(task_id, postgres_database=None):
                         logger.warning(f"获取总行数失败，将按已迁移行数显示进度: {count_err}")
                         view_log.append(f"提示: 未获取到总行数，进度按已迁移行数估算")
                     
-                    # 使用游标分批获取数据
-                    oracle_cursor.arraysize = 5000  # 设置每次获取5000条记录
+                    # 使用游标分批获取数据（大批次 + 每 N 批提交一次，与表迁移一致，提高吞吐）
+                    fetch_batch_size = 10000  # 每批从 Oracle 拉取行数，减少往返
+                    commit_every_batches = 5   # 每 5 批提交一次 PostgreSQL，即约每 5 万行 commit，减少磁盘/事务开销
+                    oracle_cursor.arraysize = fetch_batch_size
                     oracle_cursor.execute(oracle_query)
                     
                     # 获取列名（小写）
@@ -1244,6 +1246,7 @@ def migrate_view_to_table(task_id, postgres_database=None):
                     last_saved_pct = -1
                     last_saved_rows = 0
                     progress_save_interval_rows = 50000  # 至少每5万行保存一次进度
+                    batches_since_commit = 0
                     canceled_in_loop = False
                     while True:
                         rows = oracle_cursor.fetchmany()
@@ -1252,7 +1255,10 @@ def migrate_view_to_table(task_id, postgres_database=None):
                         
                         # 批量插入数据
                         pg_cursor.executemany(insert_sql, rows)
-                        pg_conn.commit()
+                        batches_since_commit += 1
+                        if batches_since_commit >= commit_every_batches:
+                            pg_conn.commit()
+                            batches_since_commit = 0
                         
                         total_rows += len(rows)
                         
@@ -1293,7 +1299,13 @@ def migrate_view_to_table(task_id, postgres_database=None):
                             except Exception as e:
                                 logger.error(f"更新视图进度失败: {str(e)}")
                         
-                        logger.info(f"已导入 {total_rows} 行数据到表 {task.target_schema}.{view_name}")
+                        # 仅在做进度保存时打日志，避免每批都打 log 影响速度
+                        if should_save:
+                            logger.info(f"已导入 {total_rows} 行数据到表 {pg_schema}.{pg_table}")
+                    
+                    # 提交尚未提交的批次
+                    if batches_since_commit > 0:
+                        pg_conn.commit()
                     
                     if canceled_in_loop:
                         view_log.append(f"已取消，已导入 {total_rows} 行数据")

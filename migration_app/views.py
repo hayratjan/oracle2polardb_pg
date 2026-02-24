@@ -692,8 +692,8 @@ def migrate_table(task_id, postgres_database=None):
             log.append(f"查询表数据SQL: {oracle_query}")
             
             # 增大 arraysize 减少 Oracle 往返；每 N 批提交一次减少 commit 次数以提速
-            fetch_batch_size = 10000
-            commit_every_batches = 5
+            fetch_batch_size = 20000   # 每批 2 万行，减少 Oracle 往返
+            commit_every_batches = 5   # 每 5 批提交一次，即约 10 万行/commit
             oracle_cursor.arraysize = fetch_batch_size
             oracle_cursor.execute(oracle_query)
             column_names = [col[0].lower() for col in oracle_cursor.description]
