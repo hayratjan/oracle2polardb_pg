@@ -176,6 +176,29 @@
                   </div>
                   <span class="progress-text">{{ task.progress.toFixed(1) }}%</span>
                 </div>
+                <!-- 表/视图级进度：显示 view_progress 全部参数 -->
+                <div v-if="viewProgressEntries.length" class="view-progress-list mt-3">
+                  <div v-for="[objName, info] in viewProgressEntries" :key="objName" class="view-progress-item">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                      <span class="view-progress-name">
+                        <i class="bi bi-table me-1"></i>{{ objName }}
+                      </span>
+                      <span class="view-progress-stats text-muted small">
+                        <template v-if="info.total_rows != null">
+                          已迁移 <strong>{{ formatNumber(info.migrated_rows) }}</strong> / {{ formatNumber(info.total_rows) }} 行
+                        </template>
+                        <template v-else>
+                          已迁移 <strong>{{ formatNumber(info.migrated_rows) }}</strong> 行
+                        </template>
+                        · {{ (info.progress ?? 0).toFixed(1) }}%
+                      </span>
+                    </div>
+                    <div class="progress thin">
+                      <div class="progress-bar" :class="getProgressBarClass(task.status)"
+                           :style="{ width: (info.progress ?? 0) + '%' }"></div>
+                    </div>
+                  </div>
+                </div>
               </div>
               
               <div class="action-buttons mt-4">
@@ -274,6 +297,18 @@ const sourceObjectsList = computed(() => {
   if (task.value.source_object?.trim()) return [task.value.source_object.trim()]
   return []
 })
+
+// view_progress 条目列表，用于展示每个表/视图的 progress、total_rows、migrated_rows
+const viewProgressEntries = computed(() => {
+  const vp = task.value?.view_progress
+  if (!vp || typeof vp !== 'object' || Array.isArray(vp)) return []
+  return Object.entries(vp)
+})
+
+const formatNumber = (n?: number | null) => {
+  if (n == null || Number.isNaN(n)) return '-'
+  return Number(n).toLocaleString('zh-CN')
+}
 
 const getTaskTypeText = (type: string) => {
   const texts: Record<string, string> = {
@@ -618,6 +653,33 @@ onUnmounted(() => {
   color: var(--primary);
   min-width: 60px;
   text-align: right;
+}
+
+.view-progress-list {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.view-progress-item {
+  margin-bottom: 1rem;
+}
+.view-progress-item:last-child {
+  margin-bottom: 0;
+}
+
+.view-progress-name {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.view-progress-stats strong {
+  color: var(--primary);
+}
+
+.progress.thin {
+  height: 0.5rem;
+  border-radius: 0.25rem;
+  background: var(--border);
 }
 
 .action-buttons {
