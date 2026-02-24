@@ -1224,6 +1224,16 @@ def migrate_view_to_table(task_id, postgres_database=None):
                         view_log.append(f"视图 {view_name} 总行数: {total_count}")
                         logger.info(f"视图 {view_name} 总行数: {total_count}")
                     except Exception as count_err:
+                        err_str = str(count_err).upper()
+                        # ORA-00942 表示表或视图不存在或无权限访问，后续 SELECT * 也会失败，直接标记该视图失败
+                        if "ORA-00942" in err_str or "TABLE OR VIEW DOES NOT EXIST" in err_str or "00942" in err_str:
+                            error_msg = f"无法访问源视图 {task.source_schema}.{view_name}（表或视图不存在或无 SELECT 权限）: {count_err}"
+                            logger.error(error_msg)
+                            view_log.append(error_msg)
+                            failed_views.append(view_name)
+                            task.view_progress = json.dumps({view_name: {'progress': 0, 'log': view_log}})
+                            task.save()
+                            continue
                         logger.warning(f"获取总行数失败，将按已迁移行数显示进度: {count_err}")
                         view_log.append(f"提示: 未获取到总行数，进度按已迁移行数估算")
                     

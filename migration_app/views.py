@@ -685,6 +685,13 @@ def migrate_table(task_id, postgres_database=None):
                 total_count = int(oracle_cursor.fetchone()[0])
                 log.append(f"表 {task.source_schema}.{task.source_object} 总行数: {total_count}")
             except Exception as count_err:
+                err_str = str(count_err).upper()
+                # ORA-00942 表示表或视图不存在或无权限，后续 SELECT * 也会失败，直接报错退出
+                if "ORA-00942" in err_str or "TABLE OR VIEW DOES NOT EXIST" in err_str or "00942" in err_str:
+                    raise Exception(
+                        f"无法访问源表 {task.source_schema}.{task.source_object}（表或视图不存在或当前用户无 SELECT 权限）。"
+                        f" 请检查 Schema/表名是否正确、对象是否存在、是否已授权。错误: {count_err}"
+                    )
                 logger.warning(f"获取总行数失败: {count_err}，进度将按已迁移行数估算")
             
             # 分批查询并插入，避免百万级数据一次性加载内存，同时可更新进度
