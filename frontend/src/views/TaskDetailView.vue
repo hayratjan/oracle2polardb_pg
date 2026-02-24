@@ -299,9 +299,18 @@ const sourceObjectsList = computed(() => {
 })
 
 // view_progress 条目列表，用于展示每个表/视图的 progress、total_rows、migrated_rows
+// 兼容接口返回字符串（JSON 序列化）或对象两种形态
 const viewProgressEntries = computed(() => {
-  const vp = task.value?.view_progress
-  if (!vp || typeof vp !== 'object' || Array.isArray(vp)) return []
+  let vp = task.value?.view_progress
+  if (vp == null) return []
+  if (typeof vp === 'string') {
+    try {
+      vp = JSON.parse(vp)
+    } catch {
+      return []
+    }
+  }
+  if (typeof vp !== 'object' || Array.isArray(vp)) return []
   return Object.entries(vp)
 })
 
