@@ -141,7 +141,14 @@ class MigrationTaskViewSet(viewsets.ModelViewSet):
     # 按创建时间倒序，避免分页时 UnorderedObjectListWarning
     queryset = MigrationTask.objects.all().order_by('-created_at')
     serializer_class = MigrationTaskSerializer
-    
+
+    def get_queryset(self):
+        """列表只返回顶层任务，避免「迁移所有表」产生的大量子任务刷屏"""
+        qs = MigrationTask.objects.all().order_by('-created_at')
+        if self.action == 'list':
+            qs = qs.filter(parent_task__isnull=True)
+        return qs
+
     def get_serializer_class(self):
         if self.action == 'list':
             return MigrationTaskListSerializer
