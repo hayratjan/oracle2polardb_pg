@@ -1185,6 +1185,7 @@ def migrate_view_to_table(task_id, postgres_database=None):
                             pg_cursor.execute(f"DROP TABLE IF EXISTS {pg_schema}.{pg_table}")
                             pg_conn.commit()
                             view_log.append(f"已删除已存在的表 {pg_schema}.{pg_table}")
+                            table_exists = False  # 删除后需重新建表，使下方建表逻辑执行
                         elif task.conflict_strategy == 'skip':
                             logger.info(f"跳过已存在的表 {pg_schema}.{pg_table}")
                             view_log.append(f"表 {pg_schema}.{pg_table} 已存在，已跳过")
