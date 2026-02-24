@@ -1204,6 +1204,18 @@ def migrate_view_to_table(task_id, postgres_database=None):
                     view_log.append(f"查询视图数据SQL: {oracle_query}")
                     logger.info(f"从视图 {view_name} 查询数据")
                     
+                    # 先获取总行数用于计算真实进度（大表时 COUNT 可能较慢，但只需执行一次）
+                    total_count = 0
+                    try:
+                        count_sql = f"SELECT COUNT(*) FROM {task.source_schema}.{view_name}"
+                        oracle_cursor.execute(count_sql)
+                        total_count = int(oracle_cursor.fetchone()[0])
+                        view_log.append(f"视图 {view_name} 总行数: {total_count}")
+                        logger.info(f"视图 {view_name} 总行数: {total_count}")
+                    except Exception as count_err:
+                        logger.warning(f"获取总行数失败，将按已迁移行数显示进度: {count_err}")
+                        view_log.append(f"提示: 未获取到总行数，进度按已迁移行数估算")
+                    
                     # 使用游标分批获取数据
                     oracle_cursor.arraysize = 5000  # 设置每次获取5000条记录
                     oracle_cursor.execute(oracle_query)
@@ -1216,8 +1228,12 @@ def migrate_view_to_table(task_id, postgres_database=None):
                     quoted_columns = [f'"{col}"' for col in column_names]
                     insert_sql = f"INSERT INTO {task.target_schema}.{view_name.lower()} ({', '.join(quoted_columns)}) VALUES ({placeholders})"
                     
-                    # 分批处理数据
+                    # 分批处理数据，并按真实比例更新进度（节流：每约1%或每5万行保存一次，避免频繁写库）
                     total_rows = 0
+                    last_saved_pct = -1
+                    last_saved_rows = 0
+                    progress_save_interval_rows = 50000  # 至少每5万行保存一次进度
+                    canceled_in_loop = False
                     while True:
                         rows = oracle_cursor.fetchmany()
                         if not rows:
@@ -1229,35 +1245,65 @@ def migrate_view_to_table(task_id, postgres_database=None):
                         
                         total_rows += len(rows)
                         
-                        # 更新视图进度
-                        try:
-                            # 获取当前视图进度数据
-                            current_progress = json.loads(task.view_progress) if task.view_progress else {}
-                            
-                            # 计算当前视图的进度
-                            view_progress = (total_rows / 1000000) * 100  # 假设最大100万条记录
-                            if view_progress > 100:
-                                view_progress = 100
-                            
-                            # 更新当前视图的进度和日志
-                            current_progress[view_name] = {
-                                'progress': view_progress,
-                                'log': view_log
-                            }
-                            
-                            # 保存更新后的进度
-                            task.view_progress = json.dumps(current_progress)
-                            task.save()
-                            
-                        except Exception as e:
-                            logger.error(f"更新视图进度失败: {str(e)}")
+                        # 按总行数计算当前视图进度百分比
+                        if total_count > 0:
+                            view_progress_pct = min(100.0, (total_rows / total_count) * 100)
+                        else:
+                            view_progress_pct = 100.0 if not rows else 0.0  # 无总数时完成前显示0
+                        
+                        # 计算任务总进度：前面视图占比 + 当前视图内进度占比
+                        current_view_weight = 100.0 / total_views
+                        task_progress = (index / total_views) * 100 + (view_progress_pct / 100.0) * current_view_weight
+                        task_progress = min(100.0, task_progress)
+                        
+                        # 节流：仅当进度提升约1%以上或每5万行时写库，减少数据库压力
+                        should_save = (
+                            int(view_progress_pct) > last_saved_pct
+                            or (total_rows - last_saved_rows) >= progress_save_interval_rows
+                        )
+                        if should_save:
+                            try:
+                                task.refresh_from_db()
+                                if task.cancel_requested:
+                                    canceled_in_loop = True
+                                    break  # 用户请求取消，跳出迁移循环
+                                current_progress = json.loads(task.view_progress) if task.view_progress else {}
+                                current_progress[view_name] = {
+                                    'progress': view_progress_pct,
+                                    'log': view_log,
+                                    'total_rows': total_count,
+                                    'migrated_rows': total_rows
+                                }
+                                task.view_progress = json.dumps(current_progress)
+                                task.progress = task_progress
+                                task.save(update_fields=['progress', 'view_progress'])
+                                last_saved_pct = int(view_progress_pct)
+                                last_saved_rows = total_rows
+                            except Exception as e:
+                                logger.error(f"更新视图进度失败: {str(e)}")
                         
                         logger.info(f"已导入 {total_rows} 行数据到表 {task.target_schema}.{view_name}")
                     
-                    view_log.append(f"成功从视图导入 {total_rows} 行数据到表 {task.target_schema}.{view_name}")
-                    successful_views.append(view_name)
-                    task.view_progress = json.dumps({view_name: {'progress': 100, 'log': view_log}})
-                    task.save()
+                    if canceled_in_loop:
+                        view_log.append(f"已取消，已导入 {total_rows} 行数据")
+                        pct = min(100.0, (total_rows / total_count) * 100) if total_count > 0 else 0
+                        task.view_progress = json.dumps({
+                            view_name: {
+                                'progress': pct,
+                                'log': view_log,
+                                'total_rows': total_count,
+                                'migrated_rows': total_rows,
+                                'canceled': True
+                            }
+                        })
+                        task.save(update_fields=['view_progress'])
+                        break  # 跳出 for 循环，下一轮会检测 cancel 并 return
+                    else:
+                        view_log.append(f"成功从视图导入 {total_rows} 行数据到表 {task.target_schema}.{view_name}")
+                        successful_views.append(view_name)
+                        task.view_progress = json.dumps({view_name: {'progress': 100, 'log': view_log}})
+                        task.progress = (index + 1) / total_views * 100
+                        task.save()
                     
                 except Exception as table_err:
                     error_msg = f"创建表或导入数据时出错: {str(table_err)}"

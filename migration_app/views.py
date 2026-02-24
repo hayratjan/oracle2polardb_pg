@@ -568,12 +568,14 @@ def migrate_routine(task_id, postgres_database=None):
         task.save()
 
 def migrate_table(task_id, postgres_database=None):
-    """迁移表结构和数据"""
+    """迁移表结构和数据（分批读取并实时更新进度，适用于百万级大表）"""
     task = get_object_or_404(MigrationTask, pk=task_id)
     
-    # 更新任务状态
+    # 更新任务状态并初始化进度
     task.status = 'running'
     task.started_at = timezone.now()
+    task.progress = 0
+    task.view_progress = {}
     task.save()
     
     log = []
@@ -674,29 +676,70 @@ def migrate_table(task_id, postgres_database=None):
             pg_conn.commit()
             log.append(f"成功创建PostgreSQL表 {task.target_schema}.{task.source_object}")
             
-            # 从Oracle视图查询数据并插入到PostgreSQL表中
+            # 先获取总行数用于实时进度（大表时避免进度一直为0）
+            total_count = 0
+            try:
+                oracle_cursor.execute(
+                    f"SELECT COUNT(*) FROM {task.source_schema}.{task.source_object}"
+                )
+                total_count = int(oracle_cursor.fetchone()[0])
+                log.append(f"表 {task.source_schema}.{task.source_object} 总行数: {total_count}")
+            except Exception as count_err:
+                logger.warning(f"获取总行数失败: {count_err}，进度将按已迁移行数估算")
+            
+            # 分批查询并插入，避免百万级数据一次性加载内存，同时可更新进度
             oracle_query = f"SELECT * FROM {task.source_schema}.{task.source_object}"
-            log.append(f"查询视图数据SQL: {oracle_query}")
+            log.append(f"查询表数据SQL: {oracle_query}")
             
+            oracle_cursor.arraysize = 5000
             oracle_cursor.execute(oracle_query)
-            rows = oracle_cursor.fetchall()
+            column_names = [col[0].lower() for col in oracle_cursor.description]
+            placeholders = ", ".join(["%s"] * len(column_names))
+            quoted_columns = [f'"{col}"' for col in column_names]
+            insert_sql = f"INSERT INTO {task.target_schema}.{task.source_object.lower()} ({', '.join(quoted_columns)}) VALUES ({placeholders})"
             
-            # 如果有数据，批量插入到PostgreSQL表中
-            if rows:
-                # 获取列名（小写）
-                column_names = [col[0].lower() for col in oracle_cursor.description]
-                
-                # 创建INSERT语句
-                placeholders = ", ".join(["%s"] * len(column_names))
-                quoted_columns = [f'"{col}"' for col in column_names]
-                insert_sql = f"INSERT INTO public.{task.source_object.lower()} ({', '.join(quoted_columns)}) VALUES ({placeholders})"
-                
-                # 批量插入数据
+            total_rows = 0
+            last_saved_pct = -1
+            last_saved_rows = 0
+            progress_save_interval_rows = 50000
+            
+            while True:
+                rows = oracle_cursor.fetchmany()
+                if not rows:
+                    break
                 pg_cursor.executemany(insert_sql, rows)
                 pg_conn.commit()
-                log.append(f"成功从视图导入 {len(rows)} 行数据到表 {task.target_schema}.{task.source_object}")
+                total_rows += len(rows)
+                
+                progress_pct = min(100.0, (total_rows / total_count) * 100) if total_count > 0 else (100.0 if total_rows == 0 else 0.0)
+                should_save = (
+                    int(progress_pct) > last_saved_pct
+                    or (total_rows - last_saved_rows) >= progress_save_interval_rows
+                )
+                if should_save:
+                    try:
+                        task.refresh_from_db()
+                        if task.cancel_requested:
+                            break
+                        task.progress = progress_pct
+                        task.view_progress = {
+                            task.source_object: {
+                                'progress': progress_pct,
+                                'log': log,
+                                'total_rows': total_count,
+                                'migrated_rows': total_rows
+                            }
+                        }
+                        task.save(update_fields=['progress', 'view_progress'])
+                        last_saved_pct = int(progress_pct)
+                        last_saved_rows = total_rows
+                    except Exception as save_err:
+                        logger.warning(f"更新进度失败: {save_err}")
+            
+            if total_rows == 0:
+                log.append(f"表 {task.source_schema}.{task.source_object} 中没有数据")
             else:
-                log.append(f"视图 {task.source_schema}.{task.source_object} 中没有找到数据")
+                log.append(f"成功从表导入 {total_rows} 行数据到 {task.target_schema}.{task.source_object}")
         except Exception as table_err:
             log.append(f"创建表或导入数据时出错: {str(table_err)}")
             raise
@@ -707,8 +750,9 @@ def migrate_table(task_id, postgres_database=None):
         pg_cursor.close()
         pg_conn.close()
         
-        # 更新任务状态
+        # 更新任务状态与进度
         task.status = 'completed'
+        task.progress = 100
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()

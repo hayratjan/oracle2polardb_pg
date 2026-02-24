@@ -22,12 +22,12 @@ import psycopg2
 
 
 class OracleConnectionViewSet(viewsets.ModelViewSet):
-    queryset = OracleConnection.objects.all()
+    queryset = OracleConnection.objects.all().order_by('id')
     serializer_class = OracleConnectionSerializer
 
 
 class PostgresConnectionViewSet(viewsets.ModelViewSet):
-    queryset = PostgresConnection.objects.all()
+    queryset = PostgresConnection.objects.all().order_by('id')
     serializer_class = PostgresConnectionSerializer
     
     @action(detail=True, methods=['post'])
@@ -138,7 +138,8 @@ class CheckAuthAPIView(APIView):
 
 
 class MigrationTaskViewSet(viewsets.ModelViewSet):
-    queryset = MigrationTask.objects.all()
+    # 按创建时间倒序，避免分页时 UnorderedObjectListWarning
+    queryset = MigrationTask.objects.all().order_by('-created_at')
     serializer_class = MigrationTaskSerializer
     
     def get_serializer_class(self):
