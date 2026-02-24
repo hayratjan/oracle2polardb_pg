@@ -368,6 +368,24 @@ const loadTask = async (showLoading = true) => {
   }
 }
 
+/** 轻量轮询：仅拉取状态/进度，不拉取完整 log，减少长时间任务时的响应体积与带宽 */
+const loadTaskStatusLight = async () => {
+  try {
+    const res = await migrationTaskApi.statusLight(Number(route.params.id))
+    const data = res.data
+    if (task.value && data) {
+      task.value.status = data.status
+      task.value.progress = data.progress ?? task.value.progress
+      task.value.view_progress = data.view_progress ?? task.value.view_progress
+      task.value.started_at = data.started_at
+      task.value.completed_at = data.completed_at
+      task.value.cancel_requested = data.cancel_requested
+    }
+  } catch (error) {
+    console.error('Failed to load task status:', error)
+  }
+}
+
 const loadDatabases = async () => {
   if (!task.value?.postgres_connection) return
   
@@ -443,13 +461,16 @@ onMounted(async () => {
   if (task.value?.postgres_database) selectedDatabase.value = task.value.postgres_database
   
   if (task.value?.status === 'running') {
+    // 使用轻量状态接口轮询（5 秒），减少大任务时的响应体积与服务器压力
     statusInterval = window.setInterval(async () => {
-      await loadTask(false) // 后台刷新，不显示 loading，避免整页闪烁
+      await loadTaskStatusLight()
       if (task.value?.status !== 'running' && statusInterval) {
         clearInterval(statusInterval)
         statusInterval = null
+        // 任务结束拉一次完整详情以拿到最终 log
+        await loadTask(false)
       }
-    }, 3000)
+    }, 5000)
   }
 })
 

@@ -691,7 +691,10 @@ def migrate_table(task_id, postgres_database=None):
             oracle_query = f"SELECT * FROM {task.source_schema}.{task.source_object}"
             log.append(f"查询表数据SQL: {oracle_query}")
             
-            oracle_cursor.arraysize = 5000
+            # 增大 arraysize 减少 Oracle 往返；每 N 批提交一次减少 commit 次数以提速
+            fetch_batch_size = 10000
+            commit_every_batches = 5
+            oracle_cursor.arraysize = fetch_batch_size
             oracle_cursor.execute(oracle_query)
             column_names = [col[0].lower() for col in oracle_cursor.description]
             placeholders = ", ".join(["%s"] * len(column_names))
@@ -702,14 +705,18 @@ def migrate_table(task_id, postgres_database=None):
             last_saved_pct = -1
             last_saved_rows = 0
             progress_save_interval_rows = 50000
+            batches_since_commit = 0
             
             while True:
                 rows = oracle_cursor.fetchmany()
                 if not rows:
                     break
                 pg_cursor.executemany(insert_sql, rows)
-                pg_conn.commit()
                 total_rows += len(rows)
+                batches_since_commit += 1
+                if batches_since_commit >= commit_every_batches:
+                    pg_conn.commit()
+                    batches_since_commit = 0
                 
                 progress_pct = min(100.0, (total_rows / total_count) * 100) if total_count > 0 else (100.0 if total_rows == 0 else 0.0)
                 should_save = (
@@ -722,10 +729,10 @@ def migrate_table(task_id, postgres_database=None):
                         if task.cancel_requested:
                             break
                         task.progress = progress_pct
+                        # 仅存进度与行数，不存完整 log，减少 DB 写入与 API 响应体积；完整 log 在任务结束时写入 task.log
                         task.view_progress = {
                             task.source_object: {
                                 'progress': progress_pct,
-                                'log': log,
                                 'total_rows': total_count,
                                 'migrated_rows': total_rows
                             }
@@ -735,6 +742,10 @@ def migrate_table(task_id, postgres_database=None):
                         last_saved_rows = total_rows
                     except Exception as save_err:
                         logger.warning(f"更新进度失败: {save_err}")
+            
+            # 提交尚未提交的批次
+            if batches_since_commit > 0:
+                pg_conn.commit()
             
             if total_rows == 0:
                 log.append(f"表 {task.source_schema}.{task.source_object} 中没有数据")

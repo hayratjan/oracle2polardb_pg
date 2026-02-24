@@ -100,6 +100,8 @@ export const migrationTaskApi = {
   start: (id: number) => apiClient.post(`/api/tasks/${id}/start/`),
   cancel: (id: number) => apiClient.post(`/api/tasks/${id}/cancel/`),
   status: (id: number) => apiClient.get(`/api/tasks/${id}/status/`),
+  /** 轻量状态轮询（不返回 log），用于任务执行中刷新进度，减少响应体积 */
+  statusLight: (id: number) => apiClient.get(`/api/tasks/${id}/status/`, { params: { light: 1 } }),
   info: (id: number) => apiClient.get(`/api/tasks/${id}/info/`),
   switchDatabase: (id: number, data: { postgres_database: string }) => 
     apiClient.post(`/api/tasks/${id}/switch_database/`, data),

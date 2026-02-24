@@ -168,36 +168,45 @@ def help_docs(request):
     return render(request, 'migration_app/help.html')
 
 def task_status(request, task_id):
-    """获取任务状态"""
+    """获取任务状态。支持 ?light=1 轻量轮询：不返回 log，view_progress 仅含 progress/total_rows/migrated_rows，减少响应体积。"""
     # 确保从数据库获取最新状态
     from django.db import connection
     connection.close()
     
     task = get_object_or_404(MigrationTask, pk=task_id)
-    logger.debug(f"获取任务状态: 任务ID={task_id}, 当前状态={task.status}, 进度={task.progress}%")
+    light = request.GET.get('light') == '1'
+    logger.debug(f"获取任务状态: 任务ID={task_id}, 当前状态={task.status}, 进度={task.progress}%, light={light}")
     
     # 构建响应数据
     response_data = {
         'status': task.status,
         'progress': task.progress,
-        'log': task.log,
         'created_at': task.created_at.isoformat() if task.created_at else None,
         'started_at': task.started_at.isoformat() if task.started_at else None,
-        'completed_at': task.completed_at.isoformat() if task.completed_at else None
+        'completed_at': task.completed_at.isoformat() if task.completed_at else None,
+        'cancel_requested': getattr(task, 'cancel_requested', False),
     }
+    if not light:
+        response_data['log'] = task.log
     
-    # 添加视图进度信息
+    # 添加视图进度信息；light 模式下不包含 log，减小响应体积
     if hasattr(task, 'view_progress') and task.view_progress:
         try:
-            # 如果view_progress是字符串，尝试解析为JSON
             if isinstance(task.view_progress, str):
                 view_progress = json.loads(task.view_progress)
             else:
                 view_progress = task.view_progress
-                
-            # 确保view_progress是字典类型
             if isinstance(view_progress, dict):
-                response_data['view_progress'] = view_progress
+                if light:
+                    # 轻量：只保留 progress、total_rows、migrated_rows，便于前端进度条展示
+                    response_data['view_progress'] = {
+                        k: {kk: vv for kk, vv in v.items() if kk in ('progress', 'total_rows', 'migrated_rows')}
+                        for k, v in view_progress.items()
+                    }
+                else:
+                    response_data['view_progress'] = view_progress
+            else:
+                response_data['view_progress'] = {}
         except Exception as e:
             logger.error(f"解析视图进度数据失败: {str(e)}")
             response_data['view_progress'] = {}
