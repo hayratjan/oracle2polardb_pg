@@ -276,9 +276,9 @@ const handleLogout = async () => {
   transition: all 0.3s ease;
 }
 
+/* 表格行悬停：仅改变背景色，不要用 opacity，否则整行（含文字）会变淡看不清 */
 .table tbody tr:hover {
-  background-color: var(--primary);
-  opacity: 0.1;
+  background-color: var(--table-row-hover, rgba(0, 0, 0, 0.04));
   transform: scale(1.01);
 }
 
@@ -327,8 +327,7 @@ const handleLogout = async () => {
 }
 
 .list-group-item:hover {
-  background-color: var(--primary);
-  opacity: 0.1;
+  background-color: var(--table-row-hover, rgba(0, 0, 0, 0.04));
   transform: translateX(5px);
 }
 

@@ -340,15 +340,31 @@ const formatDate = (dateString?: string) => {
   return new Date(dateString).toLocaleString('zh-CN')
 }
 
-const loadTask = async () => {
-  loading.value = true
+/**
+ * 加载任务详情
+ * @param showLoading 是否显示全屏加载（轮询刷新时传 false，避免整页闪烁）
+ */
+const loadTask = async (showLoading = true) => {
+  if (showLoading) loading.value = true
   try {
     const res = await migrationTaskApi.get(Number(route.params.id))
-    task.value = res.data
+    const data = res.data
+    // 若已有任务数据且为后台刷新：只更新会变的字段，减少整块 DOM 重绘
+    if (!showLoading && task.value && data) {
+      task.value.status = data.status
+      task.value.progress = data.progress ?? task.value.progress
+      task.value.log = data.log
+      task.value.view_progress = data.view_progress
+      task.value.started_at = data.started_at
+      task.value.completed_at = data.completed_at
+      task.value.cancel_requested = data.cancel_requested
+    } else {
+      task.value = data
+    }
   } catch (error) {
     console.error('Failed to load task:', error)
   } finally {
-    loading.value = false
+    if (showLoading) loading.value = false
   }
 }
 
@@ -397,8 +413,9 @@ const deleteTask = async () => {
   }
 }
 
+// 点击刷新：静默更新进度/状态/日志，不闪界面、不重新渲染整页
 const refreshStatus = async () => {
-  await loadTask()
+  await loadTask(false)
 }
 
 const switchDatabase = async () => {
@@ -427,7 +444,7 @@ onMounted(async () => {
   
   if (task.value?.status === 'running') {
     statusInterval = window.setInterval(async () => {
-      await loadTask()
+      await loadTask(false) // 后台刷新，不显示 loading，避免整页闪烁
       if (task.value?.status !== 'running' && statusInterval) {
         clearInterval(statusInterval)
         statusInterval = null
