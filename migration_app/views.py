@@ -567,106 +567,95 @@ def migrate_routine(task_id, postgres_database=None):
         task.completed_at = timezone.now()
         task.save()
 
-def _migrate_one_table_core(oracle_conn, oracle_cursor, pg_conn, pg_cursor,
-                            source_schema, source_table_name, target_schema, conflict_strategy,
-                            log_list, progress_callback=None, cancel_check=None):
+
+def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, target_schema, table_name,
+                          conflict_strategy, log_list, task=None):
     """
-    迁移单表的结构与数据（不创建 MigrationTask）。
-    log_list: 追加日志的列表。
-    progress_callback(percent): 可选，迁移数据时汇报 0~100 进度。
-    cancel_check(): 可选，返回 True 表示需要取消。
+    迁移单张表的结构和数据（不创建子任务，供 migrate_table 与 migrate_all_tables 复用）。
+    使用已打开的 oracle_cursor / pg_conn / pg_cursor，结果追加到 log_list。
+    task 可选，用于取消检查和进度回调（view_progress）。
+    返回 (成功与否, 迁移行数)。
     """
-    conflict_strategy = conflict_strategy or 'error'
-    target_table = source_table_name.lower()
-
-    # 获取表结构信息
-    column_query = """
-    SELECT
-        COLUMN_NAME,
-        DATA_TYPE,
-        DATA_LENGTH,
-        DATA_PRECISION,
-        DATA_SCALE,
-        NULLABLE,
-        COLUMN_ID
-    FROM ALL_TAB_COLUMNS
-    WHERE OWNER = :schema
-      AND TABLE_NAME = :table_name
-    ORDER BY COLUMN_ID
-    """
-    oracle_cursor.execute(column_query, schema=source_schema, table_name=source_table_name)
-    columns = oracle_cursor.fetchall()
-    if not columns:
-        raise Exception(f"找不到表 {source_schema}.{source_table_name}")
-
-    # 构建创建表的 SQL
-    column_definitions = []
-    for column in columns:
-        column_name, data_type, data_length, data_precision, data_scale, nullable = (
-            column[0], column[1], column[2], column[3], column[4], column[5]
-        )
-        pg_type = convert_oracle_to_pg_type(data_type, data_length, data_precision, data_scale)
-        if pg_type.startswith('VARCHAR('):
-            match = re.search(r'VARCHAR\((\d+)\)', pg_type)
-            if match and int(match.group(1)) < 1:
-                pg_type = 'VARCHAR(255)'
-                log_list.append(f"警告: 列 {column_name} 的VARCHAR长度为0，已自动调整为VARCHAR(255)")
-        not_null = "NOT NULL" if nullable == 'N' else ""
-        column_definitions.append(f"    {column_name} {pg_type} {not_null}")
-
-    create_table_sql = f"CREATE TABLE {target_schema}.{target_table} (\n" + ",\n".join(column_definitions) + "\n)"
-    log_list.append(f"创建表: {target_schema}.{target_table}")
-
-    # 检查目标表是否已存在，按冲突策略处理
+    strategy = conflict_strategy or 'error'
+    # 检查目标表是否已存在（PostgreSQL 中未加引号的表名会存成小写）
     pg_cursor.execute(
-        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s)",
-        (target_schema, target_table)
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
+        (target_schema, table_name.lower())
     )
-    table_exists = pg_cursor.fetchone()[0]
+    table_exists = pg_cursor.fetchone() is not None
+
     if table_exists:
-        if conflict_strategy == 'error':
-            raise Exception(f"表 {target_schema}.{target_table} 已存在")
-        if conflict_strategy == 'skip':
-            log_list.append(f"冲突策略 skip，跳过已存在的表 {target_schema}.{target_table}")
-            return
-        if conflict_strategy == 'replace':
-            pg_cursor.execute(f'DROP TABLE IF EXISTS "{target_schema}"."{target_table}"')
+        if strategy == 'error':
+            raise Exception(f"表 {target_schema}.{table_name} 已存在")
+        if strategy == 'skip':
+            log_list.append(f"表 {target_schema}.{table_name} 已存在，跳过")
+            return True, 0
+        if strategy == 'replace':
+            log_list.append(f"冲突策略为 replace，删除已存在的表 {target_schema}.{table_name}")
+            pg_cursor.execute(f"DROP TABLE IF EXISTS {target_schema}.{table_name}")
             pg_conn.commit()
             table_exists = False
-        elif conflict_strategy == 'truncate':
-            pg_cursor.execute(f'TRUNCATE TABLE "{target_schema}"."{target_table}"')
+        elif strategy == 'truncate':
+            log_list.append(f"冲突策略为 truncate，清空表 {target_schema}.{table_name}")
+            pg_cursor.execute(f"TRUNCATE TABLE {target_schema}.{table_name}")
             pg_conn.commit()
-        elif conflict_strategy == 'append':
-            log_list.append(f"冲突策略 append，将向现有表 {target_schema}.{target_table} 追加数据")
+        # append 或 truncate 后继续走下面的建表（仅当表不存在时）或直接导数据
 
-    if not table_exists:
+    # 获取表结构
+    column_query = """
+    SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, COLUMN_ID
+    FROM ALL_TAB_COLUMNS
+    WHERE OWNER = :schema AND TABLE_NAME = :table_name
+    ORDER BY COLUMN_ID
+    """
+    oracle_cursor.execute(column_query, schema=source_schema, table_name=table_name)
+    columns = oracle_cursor.fetchall()
+    if not columns:
+        raise Exception(f"找不到表 {source_schema}.{table_name}")
+
+    # 仅当目标表不存在或刚被 replace 掉时创建表（PG 中未加引号标识符存为小写）
+    if not table_exists or strategy == 'replace':
+        create_table_sql = f"CREATE TABLE {target_schema}.{table_name} (\n"
+        column_definitions = []
+        for column in columns:
+            col_name, data_type, data_length, data_precision, data_scale, nullable = (
+                column[0], column[1], column[2], column[3], column[4], column[5]
+            )
+            pg_type = convert_oracle_to_pg_type(data_type, data_length, data_precision, data_scale)
+            if pg_type.startswith('VARCHAR('):
+                match = re.search(r'VARCHAR\((\d+)\)', pg_type)
+                if match and int(match.group(1)) < 1:
+                    pg_type = 'VARCHAR(255)'
+                    log_list.append(f"警告: 列 {col_name} 的 VARCHAR 长度为0，已调整为 VARCHAR(255)")
+            not_null = "NOT NULL" if nullable == 'N' else ""
+            column_definitions.append(f"    {col_name} {pg_type} {not_null}")
+        create_table_sql += ",\n".join(column_definitions) + "\n)"
         pg_cursor.execute(create_table_sql)
         pg_conn.commit()
-        log_list.append(f"成功创建PostgreSQL表 {target_schema}.{target_table}")
+        log_list.append(f"成功创建表 {target_schema}.{table_name}")
 
-    # 总行数
+    # 获取总行数（Oracle 中未加引号的标识符为大写）
     total_count = 0
     try:
-        oracle_cursor.execute(f"SELECT COUNT(*) FROM {source_schema}.{source_table_name}")
+        oracle_cursor.execute(f"SELECT COUNT(*) FROM {source_schema}.{table_name}")
         total_count = int(oracle_cursor.fetchone()[0])
-        log_list.append(f"表 {source_schema}.{source_table_name} 总行数: {total_count}")
+        log_list.append(f"表 {source_schema}.{table_name} 总行数: {total_count}")
     except Exception as count_err:
         err_str = str(count_err).upper()
         if "ORA-00942" in err_str or "TABLE OR VIEW DOES NOT EXIST" in err_str or "00942" in err_str:
             raise Exception(
-                f"无法访问源表 {source_schema}.{source_table_name}（表或视图不存在或当前用户无 SELECT 权限）。错误: {count_err}"
+                f"无法访问源表 {source_schema}.{table_name}（表或视图不存在或无 SELECT 权限）。错误: {count_err}"
             )
         logger.warning(f"获取总行数失败: {count_err}，进度将按已迁移行数估算")
 
-    # 分批查询并插入
     fetch_batch_size = 20000
     commit_every_batches = 5
     oracle_cursor.arraysize = fetch_batch_size
-    oracle_cursor.execute(f"SELECT * FROM {source_schema}.{source_table_name}")
+    oracle_cursor.execute(f"SELECT * FROM {source_schema}.{table_name}")
     column_names = [col[0].lower() for col in oracle_cursor.description]
     placeholders = ", ".join(["%s"] * len(column_names))
-    quoted_columns = [f'"{c}"' for c in column_names]
-    insert_sql = f'INSERT INTO "{target_schema}"."{target_table}" ({", ".join(quoted_columns)}) VALUES ({placeholders})'
+    quoted_cols = [f'"{c}"' for c in column_names]
+    insert_sql = f"INSERT INTO {target_schema}.{table_name.lower()} ({', '.join(quoted_cols)}) VALUES ({placeholders})"
 
     total_rows = 0
     last_saved_pct = -1
@@ -675,8 +664,14 @@ def _migrate_one_table_core(oracle_conn, oracle_cursor, pg_conn, pg_cursor,
     batches_since_commit = 0
 
     while True:
-        if cancel_check and cancel_check():
-            break
+        if task:
+            try:
+                task.refresh_from_db()
+                if task.cancel_requested:
+                    log_list.append(f"用户取消，已迁移表 {table_name} 共 {total_rows} 行")
+                    break
+            except Exception:
+                pass
         rows = oracle_cursor.fetchmany()
         if not rows:
             break
@@ -688,27 +683,34 @@ def _migrate_one_table_core(oracle_conn, oracle_cursor, pg_conn, pg_cursor,
             batches_since_commit = 0
 
         progress_pct = min(100.0, (total_rows / total_count) * 100) if total_count > 0 else (100.0 if total_rows == 0 else 0.0)
-        if progress_callback and (
+        should_save = (
             int(progress_pct) > last_saved_pct
             or (total_rows - last_saved_rows) >= progress_save_interval_rows
-        ):
-            progress_callback(progress_pct)
-            last_saved_pct = int(progress_pct)
-            last_saved_rows = total_rows
+        )
+        if should_save and task:
+            try:
+                task.view_progress = {
+                    table_name: {'progress': progress_pct, 'total_rows': total_count, 'migrated_rows': total_rows}
+                }
+                task.save(update_fields=['view_progress'])
+                last_saved_pct = int(progress_pct)
+                last_saved_rows = total_rows
+            except Exception as save_err:
+                logger.warning(f"更新进度失败: {save_err}")
 
     if batches_since_commit > 0:
         pg_conn.commit()
 
     if total_rows == 0:
-        log_list.append(f"表 {source_schema}.{source_table_name} 中没有数据")
+        log_list.append(f"表 {source_schema}.{table_name} 无数据")
     else:
-        log_list.append(f"成功从表导入 {total_rows} 行数据到 {target_schema}.{target_table}")
+        log_list.append(f"表 {table_name} 导入 {total_rows} 行到 {target_schema}.{table_name}")
+    return True, total_rows
 
 
 def migrate_table(task_id, postgres_database=None):
     """迁移表结构和数据（分批读取并实时更新进度，适用于百万级大表）"""
     task = get_object_or_404(MigrationTask, pk=task_id)
-
     task.status = 'running'
     task.started_at = timezone.now()
     task.progress = 0
@@ -725,24 +727,12 @@ def migrate_table(task_id, postgres_database=None):
         pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
         pg_cursor = pg_conn.cursor()
         pg_cursor.execute("SELECT current_database()")
-        current_db = pg_cursor.fetchone()[0]
-        log.append(f"已连接到PostgreSQL数据库: {current_db}")
+        log.append(f"已连接到PostgreSQL数据库: {pg_cursor.fetchone()[0]}")
 
-        def progress_cb(pct):
-            task.refresh_from_db()
-            if not task.cancel_requested:
-                task.progress = pct
-                task.view_progress = {task.source_object: {'progress': pct}}
-                task.save(update_fields=['progress', 'view_progress'])
-
-        def cancel_check():
-            task.refresh_from_db()
-            return task.cancel_requested
-
-        _migrate_one_table_core(
-            oracle_conn, oracle_cursor, pg_conn, pg_cursor,
-            task.source_schema, task.source_object, task.target_schema or 'public', task.conflict_strategy,
-            log, progress_callback=progress_cb, cancel_check=cancel_check
+        _migrate_single_table(
+            oracle_cursor, pg_conn, pg_cursor,
+            task.source_schema, task.target_schema, task.source_object,
+            task.conflict_strategy, log, task=task
         )
 
         oracle_cursor.close()
@@ -917,123 +907,119 @@ def convert_oracle_to_pg_routine(oracle_routine_text):
     return pg_routine_text
 
 def migrate_all_tables(task_id, postgres_database=None):
-    """
-    迁移指定 schema 的所有表。
-    不再为每张表创建子任务，仅在当前任务内顺序迁移，避免产生数千条任务记录。
-    """
+    """迁移指定schema的所有表"""
     task = get_object_or_404(MigrationTask, pk=task_id)
-
+    
+    # 更新任务状态
     task.status = 'running'
     task.started_at = timezone.now()
-    task.progress = 0
-    task.is_batch = True
     task.save()
-
+    
     log = []
+    
+    # 记录数据库信息
     if postgres_database:
         log.append(f"目标PostgreSQL数据库: {postgres_database}")
-
+    
     try:
+        # 连接Oracle数据库
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
+        
+        # 连接PostgreSQL数据库
         pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
         pg_cursor = pg_conn.cursor()
+        
+        # 获取PostgreSQL数据库名
         pg_cursor.execute("SELECT current_database()")
         current_db = pg_cursor.fetchone()[0]
         log.append(f"已连接到PostgreSQL数据库: {current_db}")
-
+        
+        # 获取源schema中的所有表
         query = """
-        SELECT TABLE_NAME FROM ALL_TABLES
+        SELECT TABLE_NAME FROM ALL_TABLES 
         WHERE OWNER = :schema
         ORDER BY TABLE_NAME
         """
         oracle_cursor.execute(query, schema=task.source_schema)
-        tables = [row[0] for row in oracle_cursor.fetchall()]
-
+        tables = oracle_cursor.fetchall()
+        
         if not tables:
             log.append(f"源schema '{task.source_schema}'中没有找到表")
             task.status = 'completed'
             task.log = '\n'.join(log)
             task.completed_at = timezone.now()
             task.save()
-            oracle_cursor.close()
-            oracle_conn.close()
-            pg_cursor.close()
-            pg_conn.close()
             return
+        
+        total_tables = len(tables)
+        log.append(f"在源schema '{task.source_schema}'中找到 {total_tables} 个表，将在当前任务中依次迁移（不创建子任务）")
 
-        total = len(tables)
-        log.append(f"在源schema '{task.source_schema}'中找到 {total} 个表，将顺序迁移（不创建子任务）")
-
-        target_schema = task.target_schema or 'public'
-        conflict_strategy = task.conflict_strategy or 'error'
-
-        for i, table_name in enumerate(tables):
+        # 在当前任务中循环迁移每张表，不创建子任务
+        failed_tables = []
+        for idx, table_row in enumerate(tables):
+            table_name = table_row[0]
+            # 支持用户取消
             task.refresh_from_db()
             if task.cancel_requested:
-                log.append("用户取消，已停止迁移")
-                task.status = 'canceled'
-                task.log = '\n'.join(log)
-                task.completed_at = timezone.now()
-                task.save()
+                log.append(f"用户取消，已迁移 {idx}/{total_tables} 张表")
+                task.status = 'partial'
                 break
-
-            log.append(f"正在迁移表 ({i + 1}/{total}): {table_name}")
             try:
-                _migrate_one_table_core(
-                    oracle_conn, oracle_cursor, pg_conn, pg_cursor,
-                    task.source_schema, table_name, target_schema, conflict_strategy,
-                    log, progress_callback=None, cancel_check=lambda: (task.refresh_from_db(), task.cancel_requested)[1]
+                _migrate_single_table(
+                    oracle_cursor, pg_conn, pg_cursor,
+                    task.source_schema, task.target_schema, table_name,
+                    task.conflict_strategy, log, task=task
                 )
             except Exception as table_err:
-                log.append(f"表 {table_name} 迁移失败: {table_err}")
-                task.status = 'failed'
-                task.log = '\n'.join(log)
-                task.completed_at = timezone.now()
-                task.save()
-                oracle_cursor.close()
-                oracle_conn.close()
-                pg_cursor.close()
-                pg_conn.close()
-                return
-
-            task.progress = min(100.0, (i + 1) / total * 100)
+                err_msg = str(table_err)
+                log.append(f"表 {table_name} 迁移失败: {err_msg}")
+                failed_tables.append((table_name, err_msg))
+                # 继续迁移下一张表，最后标记为部分完成
+            # 更新当前任务进度与视图进度（供前端展示）
+            done = idx + 1
+            task.progress = min(100.0, (done / total_tables) * 100)
+            task.view_progress = {
+                'current_table': table_name,
+                'current': done,
+                'total': total_tables,
+                'failed_count': len(failed_tables),
+            }
             task.log = '\n'.join(log)
-            task.save(update_fields=['progress', 'log'])
+            task.save(update_fields=['progress', 'view_progress', 'log'])
 
-        else:
-            # 循环正常结束，未 break
-            task.status = 'completed'
-            task.progress = 100
-            task.log = '\n'.join(log)
-            task.completed_at = timezone.now()
-            task.save()
-
+        # 关闭连接
         oracle_cursor.close()
         oracle_conn.close()
         pg_cursor.close()
         pg_conn.close()
 
+        # 根据是否有失败表设置最终状态
+        if task.cancel_requested:
+            pass  # 已在上面设为 partial
+        elif failed_tables:
+            task.status = 'partial'
+            log.append(f"部分完成：共 {total_tables} 张表，失败 {len(failed_tables)} 张")
+            for tname, err in failed_tables:
+                log.append(f"  - {tname}: {err}")
+        else:
+            task.status = 'completed'
+            log.append(f"全部完成：共迁移 {total_tables} 张表")
+        task.log = '\n'.join(log)
+        task.completed_at = timezone.now()
+        task.save()
+        
     except Exception as e:
         error_msg = str(e)
         trace = traceback.format_exc()
         log.append(f"错误: {error_msg}")
         log.append(f"详细错误: {trace}")
+        
+        # 更新任务状态
         task.status = 'failed'
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
-        try:
-            if 'oracle_cursor' in locals() and oracle_cursor:
-                oracle_cursor.close()
-            if 'oracle_conn' in locals() and oracle_conn:
-                oracle_conn.close()
-            if 'pg_cursor' in locals() and pg_cursor:
-                pg_cursor.close()
-            if 'pg_conn' in locals() and pg_conn:
-                pg_conn.close()
-        except Exception:
-            pass
 
 def oracle_database_management(request):
     """Oracle数据库管理视图"""
