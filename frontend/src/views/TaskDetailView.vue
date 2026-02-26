@@ -176,24 +176,39 @@
                   </div>
                   <span class="progress-text">{{ task.progress.toFixed(1) }}%</span>
                 </div>
-                <!-- 表/视图级进度：显示 view_progress 全部参数 -->
-                <div v-if="viewProgressEntries.length" class="view-progress-list mt-3">
+                <!-- 所有表任务：当前任务内顺序迁移，显示第 x/y 张表、当前表名 -->
+                <div v-if="allTablesProgress" class="all-tables-progress mt-3 p-3 rounded bg-light">
+                  <div class="d-flex align-items-center mb-1">
+                    <i class="bi bi-collection me-2 text-primary"></i>
+                    <span class="text-muted">当前进度：</span>
+                    <strong class="ms-1">第 {{ allTablesProgress.current }} / {{ allTablesProgress.total }} 张表</strong>
+                  </div>
+                  <div v-if="allTablesProgress.current_table" class="text-muted small">
+                    正在迁移：<code>{{ allTablesProgress.current_table }}</code>
+                  </div>
+                  <div v-if="allTablesProgress.failed_count != null && allTablesProgress.failed_count > 0" class="text-warning small mt-1">
+                    已失败 {{ allTablesProgress.failed_count }} 张表
+                  </div>
+                </div>
+                <!-- 表/视图级进度：非「所有表」汇总格式时显示各对象 progress、total_rows、migrated_rows -->
+                <div v-else-if="viewProgressEntries.length" class="view-progress-list mt-3">
                   <div v-for="[objName, info] in viewProgressEntries" :key="objName" class="view-progress-item">
                     <div class="d-flex justify-content-between align-items-center mb-1">
                       <span class="view-progress-name">
                         <i class="bi bi-table me-1"></i>{{ objName }}
                       </span>
                       <span class="view-progress-stats text-muted small">
-                        <template v-if="info.total_rows != null">
+                        <template v-if="info && typeof info === 'object' && info.total_rows != null">
                           已迁移 <strong>{{ formatNumber(info.migrated_rows) }}</strong> / {{ formatNumber(info.total_rows) }} 行
                         </template>
-                        <template v-else>
+                        <template v-else-if="info && typeof info === 'object'">
                           已迁移 <strong>{{ formatNumber(info.migrated_rows) }}</strong> 行
                         </template>
-                        · {{ (info.progress ?? 0).toFixed(1) }}%
+                        <template v-else>—</template>
+                        <template v-if="info && typeof info === 'object'"> · {{ (info.progress ?? 0).toFixed(1) }}%</template>
                       </span>
                     </div>
-                    <div class="progress thin">
+                    <div v-if="info && typeof info === 'object' && (info.progress != null || info.total_rows != null)" class="progress thin">
                       <div class="progress-bar" :class="getProgressBarClass(task.status)"
                            :style="{ width: (info.progress ?? 0) + '%' }"></div>
                     </div>
@@ -298,8 +313,25 @@ const sourceObjectsList = computed(() => {
   return []
 })
 
-// view_progress 条目列表，用于展示每个表/视图的 progress、total_rows、migrated_rows
-// 兼容接口返回字符串（JSON 序列化）或对象两种形态
+// 「所有表」任务进度：view_progress 为 { current, total, current_table, failed_count } 时使用
+const ALL_TABLES_KEYS = ['current', 'total', 'current_table', 'failed_count']
+const allTablesProgress = computed(() => {
+  const vp = task.value?.view_progress
+  if (vp == null || typeof vp !== 'object' || Array.isArray(vp)) return null
+  const raw = typeof vp === 'string' ? (() => { try { return JSON.parse(vp) } catch { return null } })() : vp
+  if (raw == null || typeof raw !== 'object') return null
+  if (raw.current != null && raw.total != null) {
+    return {
+      current: Number(raw.current),
+      total: Number(raw.total),
+      current_table: raw.current_table ?? '',
+      failed_count: raw.failed_count != null ? Number(raw.failed_count) : 0,
+    }
+  }
+  return null
+})
+
+// view_progress 条目列表，用于展示每个表/视图的 progress、total_rows、migrated_rows（排除「所有表」汇总字段）
 const viewProgressEntries = computed(() => {
   let vp = task.value?.view_progress
   if (vp == null) return []
@@ -311,7 +343,7 @@ const viewProgressEntries = computed(() => {
     }
   }
   if (typeof vp !== 'object' || Array.isArray(vp)) return []
-  return Object.entries(vp)
+  return Object.entries(vp).filter(([k]) => !ALL_TABLES_KEYS.includes(k))
 })
 
 const formatNumber = (n?: number | null) => {

@@ -569,11 +569,13 @@ def migrate_routine(task_id, postgres_database=None):
 
 
 def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, target_schema, table_name,
-                          conflict_strategy, log_list, task=None):
+                          conflict_strategy, log_list, task=None, all_tables_context=None):
     """
     迁移单张表的结构和数据（不创建子任务，供 migrate_table 与 migrate_all_tables 复用）。
     使用已打开的 oracle_cursor / pg_conn / pg_cursor，结果追加到 log_list。
     task 可选，用于取消检查和进度回调（view_progress）。
+    all_tables_context 可选，格式 {'total_tables': N, 'table_index': idx, 'failed_count': n}，
+        用于「所有表」任务时在单表迁移过程中更新总进度 task.progress，避免首张表很大时进度一直为 0。
     返回 (成功与否, 迁移行数)。
     """
     strategy = conflict_strategy or 'error'
@@ -689,10 +691,28 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
         )
         if should_save and task:
             try:
-                task.view_progress = {
-                    table_name: {'progress': progress_pct, 'total_rows': total_count, 'migrated_rows': total_rows}
-                }
-                task.save(update_fields=['view_progress'])
+                ctx = all_tables_context or {}
+                total_tables = ctx.get('total_tables')
+                table_index = ctx.get('table_index', 0)
+                failed_count = ctx.get('failed_count', 0)
+                if total_tables and total_tables > 0:
+                    # 「所有表」任务：保留 current/current_table/total/failed_count，并合并当前表明细；同时更新总进度
+                    task.view_progress = {
+                        'current_table': table_name,
+                        'current': table_index,
+                        'total': total_tables,
+                        'failed_count': failed_count,
+                        table_name: {'progress': progress_pct, 'total_rows': total_count, 'migrated_rows': total_rows},
+                    }
+                    # 总进度 = (已完成表数 + 当前表内进度) / 总表数 * 100
+                    overall_pct = (table_index + progress_pct / 100.0) / total_tables * 100.0
+                    task.progress = min(100.0, overall_pct)
+                    task.save(update_fields=['view_progress', 'progress'])
+                else:
+                    task.view_progress = {
+                        table_name: {'progress': progress_pct, 'total_rows': total_count, 'migrated_rows': total_rows}
+                    }
+                    task.save(update_fields=['view_progress'])
                 last_saved_pct = int(progress_pct)
                 last_saved_rows = total_rows
             except Exception as save_err:
@@ -907,7 +927,7 @@ def convert_oracle_to_pg_routine(oracle_routine_text):
     return pg_routine_text
 
 def migrate_all_tables(task_id, postgres_database=None):
-    """迁移指定schema的所有表"""
+    """迁移指定 schema 的所有表。在当前任务中依次迁移每张表，不创建子任务、不调用线程池，避免 interpreter shutdown 时 submit 报错。"""
     task = get_object_or_404(MigrationTask, pk=task_id)
     
     # 更新任务状态
@@ -916,7 +936,7 @@ def migrate_all_tables(task_id, postgres_database=None):
     task.save()
     
     log = []
-    
+    log.append("【当前任务顺序迁移模式】不创建子任务，不使用线程池。")
     # 记录数据库信息
     if postgres_database:
         log.append(f"目标PostgreSQL数据库: {postgres_database}")
@@ -954,11 +974,31 @@ def migrate_all_tables(task_id, postgres_database=None):
         
         total_tables = len(tables)
         log.append(f"在源schema '{task.source_schema}'中找到 {total_tables} 个表，将在当前任务中依次迁移（不创建子任务）")
+        # 立即写入初始进度，便于前端在首张表迁移前就显示「第 0/N 张表」
+        first_table = tables[0][0] if tables else ""
+        task.progress = 0.0
+        task.view_progress = {
+            'current': 0,
+            'total': total_tables,
+            'current_table': first_table,
+            'failed_count': 0,
+        }
+        task.log = '\n'.join(log)
+        task.save(update_fields=['progress', 'view_progress', 'log'])
 
         # 在当前任务中循环迁移每张表，不创建子任务
         failed_tables = []
         for idx, table_row in enumerate(tables):
             table_name = table_row[0]
+            # 每张表开始前先更新「正在迁移：当前表名」，避免首张表耗时长时界面一直空白
+            task.view_progress = {
+                'current_table': table_name,
+                'current': idx,
+                'total': total_tables,
+                'failed_count': len(failed_tables),
+            }
+            task.save(update_fields=['view_progress'])
+
             # 支持用户取消
             task.refresh_from_db()
             if task.cancel_requested:
@@ -969,7 +1009,12 @@ def migrate_all_tables(task_id, postgres_database=None):
                 _migrate_single_table(
                     oracle_cursor, pg_conn, pg_cursor,
                     task.source_schema, task.target_schema, table_name,
-                    task.conflict_strategy, log, task=task
+                    task.conflict_strategy, log, task=task,
+                    all_tables_context={
+                        'total_tables': total_tables,
+                        'table_index': idx,
+                        'failed_count': len(failed_tables),
+                    },
                 )
             except Exception as table_err:
                 err_msg = str(table_err)

@@ -5,6 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 import logging
 import json
 import threading
+import importlib
 from django.contrib import messages
 from django.shortcuts import redirect
 from django.utils import timezone
@@ -198,11 +199,18 @@ def task_status(request, task_id):
                 view_progress = task.view_progress
             if isinstance(view_progress, dict):
                 if light:
-                    # 轻量：只保留 progress、total_rows、migrated_rows，便于前端进度条展示
-                    response_data['view_progress'] = {
-                        k: {kk: vv for kk, vv in v.items() if kk in ('progress', 'total_rows', 'migrated_rows')}
-                        for k, v in view_progress.items()
-                    }
+                    # 「所有表」任务：view_progress 为 { current_table, current, total, failed_count }，原样返回便于前端展示
+                    if 'current' in view_progress and 'total' in view_progress:
+                        response_data['view_progress'] = {
+                            k: v for k, v in view_progress.items()
+                            if k in ('current_table', 'current', 'total', 'failed_count')
+                        }
+                    else:
+                        # 表/视图级进度：只保留 progress、total_rows、migrated_rows
+                        response_data['view_progress'] = {
+                            k: {kk: vv for kk, vv in (v.items() if isinstance(v, dict) else []) if kk in ('progress', 'total_rows', 'migrated_rows')}
+                            for k, v in view_progress.items() if isinstance(v, dict)
+                        }
                 else:
                     response_data['view_progress'] = view_progress
             else:
@@ -317,8 +325,18 @@ def start_task(request, task_id):
                     logger.info(f"提交存储过程/函数迁移任务: {task.source_schema}.{task.source_object}")
                     executor.submit(views.migrate_routine, task.id, postgres_database)
                 elif task.task_type == 'all_tables':
-                    logger.info(f"提交全部表迁移任务: {task.source_schema}.*")
-                    executor.submit(views.migrate_all_tables, task.id, postgres_database)
+                    # 所有表迁移不使用线程池，避免 interpreter shutdown 时 submit 报错；用独立线程并重载 views 确保跑最新逻辑
+                    logger.info(f"提交全部表迁移任务（独立线程）: {task.source_schema}.*")
+                    def run_all_tables():
+                        try:
+                            import migration_app.views as v
+                            importlib.reload(v)
+                            v.migrate_all_tables(task.id, postgres_database)
+                        except Exception as e:
+                            logger.error(f"全部表迁移任务异常: {str(e)}", exc_info=True)
+                    t = threading.Thread(target=run_all_tables)
+                    t.daemon = True
+                    t.start()
                 elif task.task_type == 'view_to_table':
                     logger.info(f"提交视图数据迁移到表任务: {task.source_schema}.{task.source_object}")
                     # 直接在当前进程中执行，以便调试
@@ -353,8 +371,10 @@ def start_task(request, task_id):
                             logger.info(f"开始执行存储过程/函数迁移任务: {task.source_schema}.{task.source_object}")
                             views.migrate_routine(task.id, postgres_database)
                         elif task.task_type == 'all_tables':
-                            logger.info(f"开始执行全部表迁移任务: {task.source_schema}.*")
-                            views.migrate_all_tables(task.id, postgres_database)
+                            logger.info(f"开始执行全部表迁移任务（重载 views 后执行）: {task.source_schema}.*")
+                            import migration_app.views as v
+                            importlib.reload(v)
+                            v.migrate_all_tables(task.id, postgres_database)
                         elif task.task_type == 'view_to_table':
                             logger.info(f"开始执行视图数据迁移到表任务: {task.source_schema}.{task.source_object}")
                             # 直接在当前进程中执行，以便调试
