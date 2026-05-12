@@ -72,11 +72,24 @@ def validate_task_data(data):
         data['source_objects'] = _normalize_source_objects(data['source_objects'])
 
     imode = data.get('incremental_mode') or 'none'
-    if imode not in ('none', 'timestamp'):
+    if imode not in ('none', 'timestamp', 'pk_mirror'):
         errors.append(f"无效的增量模式: {imode}")
     data['incremental_mode'] = imode
     if imode == 'timestamp' and data.get('task_type') == 'table' and not (data.get('watermark_column') or '').strip():
         errors.append("增量模式为「按水位列」时，必须填写 watermark_column（源表列名）")
+    if imode == 'pk_mirror' and data.get('task_type') == 'table':
+        if (data.get('conflict_strategy') or 'error') != 'append':
+            errors.append('主键对齐增量需将冲突策略设为「追加数据」，以便目标表已存在时只做差量同步。')
+        sm = data.get('sync_max_pkey_rows')
+        if sm is not None and str(sm).strip() != '':
+            try:
+                n = int(sm)
+                if n < 1000 or n > 10_000_000:
+                    errors.append('sync_max_pkey_rows 需在 1000～10000000 之间')
+                else:
+                    data['sync_max_pkey_rows'] = n
+            except (TypeError, ValueError):
+                errors.append('sync_max_pkey_rows 必须为整数')
 
     # 检查source_object和source_objects字段（view 与 view_to_table 均支持批量 source_objects）
     if 'task_type' in data and data['task_type'] not in ('all_tables', 'full_schema'):
@@ -182,6 +195,8 @@ def create_task_validated(request):
                 task.schedule_interval_minutes = max(1, int(validated_data.get('schedule_interval_minutes') or 60))
             except (TypeError, ValueError):
                 task.schedule_interval_minutes = 60
+            if validated_data.get('sync_max_pkey_rows') is not None:
+                task.sync_max_pkey_rows = int(validated_data['sync_max_pkey_rows'])
 
             # 设置冲突策略
             if 'conflict_strategy' in validated_data:

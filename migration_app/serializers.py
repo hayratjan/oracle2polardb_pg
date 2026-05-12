@@ -40,7 +40,8 @@ class MigrationTaskSerializer(serializers.ModelSerializer):
                   'sqlite_directory', 'sqlite_file_name', 'source_db', 'target_db',
                   'sqlite_path', 'oracle_connection_name', 'postgres_connection_name',
                   'incremental_mode', 'watermark_column', 'last_watermark',
-                  'schedule_enabled', 'schedule_interval_minutes', 'last_schedule_run']
+                  'schedule_enabled', 'schedule_interval_minutes', 'last_schedule_run',
+                  'sync_max_pkey_rows']
         read_only_fields = ['id', 'created_at', 'started_at', 'completed_at', 'last_schedule_run']
 
 

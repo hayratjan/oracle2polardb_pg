@@ -859,27 +859,35 @@ def migrate_table(task_id, postgres_database=None):
         pg_cursor.execute("SELECT current_database()")
         log.append(f"已连接到PostgreSQL数据库: {pg_cursor.fetchone()[0]}")
 
-        wm_col = (getattr(task, 'watermark_column', None) or '').strip()
-        wm_after = getattr(task, 'last_watermark', None)
-        use_wm = (
-            getattr(task, 'incremental_mode', 'none') == 'timestamp'
-            and wm_col
-            and wm_after is not None
-            and str(wm_after).strip() != ''
-        )
-        if use_wm:
-            log.append(f"增量模式: 水位列 {wm_col}")
+        imode = getattr(task, 'incremental_mode', 'none') or 'none'
+        if imode == 'pk_mirror':
+            from .incremental_sync import run_table_pk_mirror_flow
 
-        _migrate_single_table(
-            oracle_cursor, pg_conn, pg_cursor,
-            task.source_schema, task.target_schema, task.source_object,
-            task.conflict_strategy, log, task=task,
-            watermark_column=wm_col if use_wm else None,
-            watermark_min_exclusive=wm_after if use_wm else None,
-        )
+            log.append("增量模式: 主键对齐（Oracle 为权威源，PolarDB 补插缺失行、删除多余行）")
+            run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log)
+        else:
+            wm_col = (getattr(task, 'watermark_column', None) or '').strip()
+            wm_after = getattr(task, 'last_watermark', None)
+            use_wm = (
+                imode == 'timestamp'
+                and wm_col
+                and wm_after is not None
+                and str(wm_after).strip() != ''
+            )
+            if use_wm:
+                log.append(f"增量模式: 水位列 {wm_col}")
 
-        # 成功后刷新水位（全量首次跑也会写入 MAX）
-        if getattr(task, 'incremental_mode', 'none') == 'timestamp' and wm_col:
+            _migrate_single_table(
+                oracle_cursor, pg_conn, pg_cursor,
+                task.source_schema, task.target_schema, task.source_object,
+                task.conflict_strategy, log, task=task,
+                watermark_column=wm_col if use_wm else None,
+                watermark_min_exclusive=wm_after if use_wm else None,
+            )
+
+        # 成功后刷新水位（全量首次跑也会写入 MAX）；主键对齐模式不使用水位列
+        if imode == 'timestamp' and (getattr(task, 'watermark_column', None) or '').strip():
+            wm_col = (task.watermark_column or '').strip()
             try:
                 safe_wm = _safe_oracle_identifier(wm_col)
                 oracle_cursor.execute(

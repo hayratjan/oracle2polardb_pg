@@ -46,9 +46,10 @@
                 <div class="col-12"><strong class="text-muted">增量与定时（可选）</strong></div>
                 <div class="col-md-4">
                   <label class="form-label">增量模式</label>
-                  <select v-model="form.incremental_mode" class="form-select-sm">
+                  <select v-model="form.incremental_mode" class="form-select-sm" @change="onIncrementalModeChange">
                     <option value="none">全量</option>
-                    <option value="timestamp">按水位列增量</option>
+                    <option value="timestamp">按水位列增量（只追加变更行）</option>
+                    <option value="pk_mirror">主键对齐（定时对比主键，目标侧补插/删除）</option>
                   </select>
                 </div>
                 <div class="col-md-4">
@@ -59,10 +60,17 @@
                   <label class="form-label">初始水位（可选）</label>
                   <input v-model="form.last_watermark" type="text" class="form-control-sm" placeholder="首次全量留空" :disabled="form.incremental_mode !== 'timestamp'">
                 </div>
+                <div class="col-md-4" v-if="form.incremental_mode === 'pk_mirror'">
+                  <label class="form-label">主键对齐行数上限</label>
+                  <input v-model.number="form.sync_max_pkey_rows" type="number" min="1000" max="10000000" class="form-control-sm" title="源表与目标表行数均不得超过该值">
+                </div>
+                <div class="col-12 small text-muted" v-if="form.incremental_mode === 'pk_mirror'">
+                  需 Oracle 表有主键；冲突策略须为「追加数据」。首次执行若目标无表则自动全量建表导数，之后按间隔对比主键做增删。大表请用水位列增量或调大上限。
+                </div>
                 <div class="col-md-4 d-flex align-items-end">
                   <div class="form-check">
-                    <input v-model="form.schedule_enabled" class="form-check-input" type="checkbox" id="schedEn" :disabled="form.incremental_mode !== 'timestamp'">
-                    <label class="form-check-label" for="schedEn">启用 Celery Beat 定时拉取</label>
+                    <input v-model="form.schedule_enabled" class="form-check-input" type="checkbox" id="schedEn" :disabled="!incrementalScheduleAllowed">
+                    <label class="form-check-label" for="schedEn">启用 Celery Beat 定时执行</label>
                   </div>
                 </div>
                 <div class="col-md-4">
@@ -392,7 +400,25 @@ const form = ref<MigrationTask>({
   last_watermark: '',
   schedule_enabled: false,
   schedule_interval_minutes: 60,
+  sync_max_pkey_rows: 500000,
 })
+
+/** 水位列或主键对齐模式才允许勾选定时 */
+const incrementalScheduleAllowed = computed(() => {
+  const m = form.value.incremental_mode
+  return form.value.task_type === 'table' && (m === 'timestamp' || m === 'pk_mirror')
+})
+
+const onIncrementalModeChange = () => {
+  if (form.value.incremental_mode === 'pk_mirror') {
+    form.value.conflict_strategy = 'append'
+    form.value.watermark_column = ''
+    form.value.last_watermark = ''
+  }
+  if (form.value.incremental_mode !== 'timestamp' && form.value.incremental_mode !== 'pk_mirror') {
+    form.value.schedule_enabled = false
+  }
+}
 
 const loadConnections = async () => {
   try {

@@ -239,6 +239,7 @@ CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = int(os.environ.get('CELERY_TASK_TIME_LIMIT', '86400'))
 CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', '').lower() == 'true'
 CELERY_BEAT_SCHEDULE = {
+    # 默认每 5 分钟扫描一次：时间戳增量任务（需水位列）与主键对齐增量任务（需启用定时）
     'scan-scheduled-migrations': {
         'task': 'migration_app.tasks.beat_scan_scheduled_migrations',
         'schedule': float(os.environ.get('MIGRATION_BEAT_SCAN_SECONDS', '300')),

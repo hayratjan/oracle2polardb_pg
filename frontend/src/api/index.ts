@@ -59,13 +59,15 @@ export interface MigrationTask {
   sqlite_path?: string
   oracle_connection_name?: string
   postgres_connection_name?: string
-  /** 增量：none | timestamp */
+  /** 增量：none | timestamp | pk_mirror（主键对齐定时增删） */
   incremental_mode?: string
   watermark_column?: string
   last_watermark?: string
   schedule_enabled?: boolean
   schedule_interval_minutes?: number
   last_schedule_run?: string
+  /** 主键对齐单次允许对比的最大行数（源、目标两侧） */
+  sync_max_pkey_rows?: number
 }
 
 export const oracleConnectionApi = {

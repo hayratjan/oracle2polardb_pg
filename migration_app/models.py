@@ -100,6 +100,7 @@ class MigrationTask(models.Model):
     INCREMENTAL_MODE_CHOICES = [
         ('none', '全量'),
         ('timestamp', '按水位列增量'),
+        ('pk_mirror', '主键对齐增量(定时增删)'),
     ]
 
     name = models.CharField(max_length=100, verbose_name="任务名称")
@@ -143,6 +144,12 @@ class MigrationTask(models.Model):
     schedule_enabled = models.BooleanField(default=False, verbose_name="启用定时增量")
     schedule_interval_minutes = models.PositiveIntegerField(default=60, verbose_name="调度最小间隔(分钟)")
     last_schedule_run = models.DateTimeField(null=True, blank=True, verbose_name="上次定时触发时间")
+    # 主键对齐增量：单次在内存中对比主键的最大行数（源、目标两侧均不得超过）
+    sync_max_pkey_rows = models.PositiveIntegerField(
+        default=500_000,
+        verbose_name="主键对齐单次最大行数",
+        help_text="超过则拒绝执行主键对齐，避免 OOM；大表请用水位列增量或调大该值",
+    )
 
     def __str__(self):
         return self.name

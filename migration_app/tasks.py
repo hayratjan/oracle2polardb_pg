@@ -22,10 +22,11 @@ def celery_run_migration_task(self, task_id: int, postgres_database=None):
 @shared_task(bind=True, ignore_result=True)
 def beat_scan_scheduled_migrations(self):
     """
-    Beat 周期任务：扫描启用定时且为时间戳增量模式的表任务，按最小间隔触发执行。
+    Beat 周期任务：扫描启用定时的表任务（按水位列增量或主键对齐增量），按最小间隔触发执行。
     """
     from datetime import timedelta
 
+    from django.db.models import Q
     from django.utils import timezone
 
     from .models import MigrationTask
@@ -33,11 +34,14 @@ def beat_scan_scheduled_migrations(self):
     if not getattr(settings, 'CELERY_BROKER_URL', '').strip():
         return
     now = timezone.now()
+    # 水位列增量需配置 watermark；主键对齐增量无需水位列
     qs = MigrationTask.objects.filter(
         schedule_enabled=True,
-        incremental_mode='timestamp',
         task_type='table',
-    ).exclude(status='running').exclude(watermark_column='')
+    ).exclude(status='running').filter(
+        Q(incremental_mode='pk_mirror')
+        | (Q(incremental_mode='timestamp') & ~Q(watermark_column=''))
+    )
     for task in qs:
         interval = max(1, int(task.schedule_interval_minutes or 60))
         if task.last_schedule_run:
