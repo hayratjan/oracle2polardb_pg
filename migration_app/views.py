@@ -78,12 +78,9 @@ def index(request):
     return render(request, 'migration_app/index.html', context)
 
 def _connection_plain_password(stored):
-    """返回连接配置中的明文密码（兼容未加密的旧数据）。"""
-    from .credentials import maybe_decrypt_password
-    if not stored:
-        return ''
-    plain = maybe_decrypt_password(stored)
-    return plain if plain else stored
+    """返回连接配置中的明文密码（兼容未加密旧数据）；密文解密失败时抛出 PasswordDecryptError。"""
+    from .credentials import require_plain_connection_password
+    return require_plain_connection_password(stored)
 
 
 def get_oracle_connection(connection_id):
@@ -1421,12 +1418,22 @@ def migrate_schema_orchestration(task_id, postgres_database=None):
         task.refresh_from_db()
         merged = '\n'.join(phase1_log) + '\n\n' + (task.log or '')
         task.log = merged
-        task.view_progress = {
-            'orchestration': True,
-            'phase': phases[2],
-            'phase_index': 2,
-            'phases': phases,
-        }
+        # 全表阶段失败时不把编排进度标为 done，避免界面误以为编排已成功收尾
+        if task.status == 'failed':
+            task.view_progress = {
+                'orchestration': True,
+                'phase': phases[1],
+                'phase_index': 1,
+                'phases': phases,
+                'tables_phase_failed': True,
+            }
+        else:
+            task.view_progress = {
+                'orchestration': True,
+                'phase': phases[2],
+                'phase_index': 2,
+                'phases': phases,
+            }
         task.save(update_fields=['log', 'view_progress'])
         try:
             append_migration_log(
