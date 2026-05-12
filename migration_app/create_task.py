@@ -71,8 +71,15 @@ def validate_task_data(data):
     if 'source_objects' in data and data['source_objects']:
         data['source_objects'] = _normalize_source_objects(data['source_objects'])
 
+    imode = data.get('incremental_mode') or 'none'
+    if imode not in ('none', 'timestamp'):
+        errors.append(f"无效的增量模式: {imode}")
+    data['incremental_mode'] = imode
+    if imode == 'timestamp' and data.get('task_type') == 'table' and not (data.get('watermark_column') or '').strip():
+        errors.append("增量模式为「按水位列」时，必须填写 watermark_column（源表列名）")
+
     # 检查source_object和source_objects字段（view 与 view_to_table 均支持批量 source_objects）
-    if 'task_type' in data and data['task_type'] != 'all_tables':
+    if 'task_type' in data and data['task_type'] not in ('all_tables', 'full_schema'):
         has_source_objects = bool(data.get('source_objects'))
         source_obj_val = data.get('source_object')
         has_source_object = bool(source_obj_val and str(source_obj_val).strip())
@@ -86,7 +93,7 @@ def validate_task_data(data):
                     errors.append("对于该任务类型，必须提供至少一个视图名称")
         else:
             if not has_source_object and not has_source_objects:
-                errors.append("对于非'all_tables'类型的任务，需要提供源对象名")
+                errors.append("对于该任务类型，需要提供源对象名（表/视图/序列/触发器等）")
             elif has_source_objects and not has_source_object:
                 data['source_object'] = data['source_objects'][0]
     
@@ -158,12 +165,24 @@ def create_task_validated(request):
                 task.postgres_database = validated_data.get('postgres_database') or task.postgres_connection.database or None
             
             # 设置源对象（如果适用）
-            if task.task_type != 'all_tables':
-                task.source_object = validated_data['source_object']
-                # 设置source_objects字段
+            if task.task_type not in ('all_tables', 'full_schema'):
+                task.source_object = validated_data.get('source_object') or ''
                 if 'source_objects' in validated_data and validated_data['source_objects']:
                     task.source_objects = ','.join(validated_data['source_objects'])
-            
+            else:
+                task.source_object = ''
+                task.source_objects = None
+
+            task.incremental_mode = validated_data.get('incremental_mode') or 'none'
+            task.watermark_column = (validated_data.get('watermark_column') or '').strip() or ''
+            lw = validated_data.get('last_watermark')
+            task.last_watermark = lw if lw not in (None, '') else None
+            task.schedule_enabled = bool(validated_data.get('schedule_enabled', False))
+            try:
+                task.schedule_interval_minutes = max(1, int(validated_data.get('schedule_interval_minutes') or 60))
+            except (TypeError, ValueError):
+                task.schedule_interval_minutes = 60
+
             # 设置冲突策略
             if 'conflict_strategy' in validated_data:
                 task.conflict_strategy = validated_data['conflict_strategy']

@@ -33,9 +33,41 @@
                     <option value="view">视图</option>
                     <option value="routine">例程</option>
                     <option value="all_tables">所有表</option>
+                    <option value="full_schema">全Schema编排（序列+所有表）</option>
+                    <option value="sequence">序列</option>
+                    <option value="trigger">触发器</option>
                     <option value="view_to_table">视图数据迁移到表</option>
                     <option value="view_to_sqlite">视图数据迁移到SQLite</option>
                   </select>
+                </div>
+              </div>
+
+              <div v-if="form.task_type === 'table'" class="row g-3 mt-2 border rounded p-3 bg-light">
+                <div class="col-12"><strong class="text-muted">增量与定时（可选）</strong></div>
+                <div class="col-md-4">
+                  <label class="form-label">增量模式</label>
+                  <select v-model="form.incremental_mode" class="form-select-sm">
+                    <option value="none">全量</option>
+                    <option value="timestamp">按水位列增量</option>
+                  </select>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">水位列名</label>
+                  <input v-model="form.watermark_column" type="text" class="form-control-sm" placeholder="如 UPDATED_AT" :disabled="form.incremental_mode !== 'timestamp'">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">初始水位（可选）</label>
+                  <input v-model="form.last_watermark" type="text" class="form-control-sm" placeholder="首次全量留空" :disabled="form.incremental_mode !== 'timestamp'">
+                </div>
+                <div class="col-md-4 d-flex align-items-end">
+                  <div class="form-check">
+                    <input v-model="form.schedule_enabled" class="form-check-input" type="checkbox" id="schedEn" :disabled="form.incremental_mode !== 'timestamp'">
+                    <label class="form-check-label" for="schedEn">启用 Celery Beat 定时拉取</label>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">最小间隔（分钟）</label>
+                  <input v-model.number="form.schedule_interval_minutes" type="number" min="1" class="form-control-sm" :disabled="!form.schedule_enabled">
                 </div>
               </div>
               
@@ -355,6 +387,11 @@ const form = ref<MigrationTask>({
   status: 'pending',
   cancel_requested: false,
   progress: 0,
+  incremental_mode: 'none',
+  watermark_column: '',
+  last_watermark: '',
+  schedule_enabled: false,
+  schedule_interval_minutes: 60,
 })
 
 const loadConnections = async () => {
@@ -441,7 +478,10 @@ const loadSourceObjects = async () => {
                        form.value.task_type === 'table' ? 'TABLE' :
                        form.value.task_type === 'view' ? 'VIEW' :
                        form.value.task_type === 'materialized_view' ? 'MATERIALIZED_VIEW' :
-                       form.value.task_type === 'view_to_table' ? 'VIEW_TO_TABLE' : 'TABLE'
+                       form.value.task_type === 'view_to_table' ? 'VIEW_TO_TABLE' :
+                       form.value.task_type === 'sequence' ? 'SEQUENCE' :
+                       form.value.task_type === 'trigger' ? 'TRIGGER' :
+                       form.value.task_type === 'full_schema' ? 'TABLE' : 'TABLE'
     
     const res = await databaseApi.getDatabaseObjects({
       connection_id: form.value.oracle_connection,

@@ -10,10 +10,11 @@ from django.utils.decorators import method_decorator
 from django.http import JsonResponse
 from .models import OracleConnection, PostgresConnection, MigrationTask
 from .serializers import (
-    OracleConnectionSerializer, 
-    PostgresConnectionSerializer, 
+    OracleConnectionSerializer,
+    PostgresConnectionSerializer,
     MigrationTaskSerializer,
-    MigrationTaskListSerializer
+    MigrationTaskListSerializer,
+    MigrationTaskLogSerializer,
 )
 from . import dashboard
 from . import create_task
@@ -193,6 +194,35 @@ class MigrationTaskViewSet(viewsets.ModelViewSet):
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['get'])
+    def logs(self, request, pk=None):
+        """分页返回结构化任务日志（MigrationTaskLog），cursor 为上一页最后一条 id。"""
+        from .models import MigrationTaskLog
+
+        task = self.get_object()
+        try:
+            page_size = min(int(request.query_params.get('page_size', 50)), 200)
+        except (TypeError, ValueError):
+            page_size = 50
+        cursor_id = request.query_params.get('cursor')
+        qs = MigrationTaskLog.objects.filter(task=task).order_by('-id')
+        if cursor_id:
+            try:
+                qs = qs.filter(id__lt=int(cursor_id))
+            except ValueError:
+                pass
+        rows = list(qs[: page_size + 1])
+        has_more = len(rows) > page_size
+        rows = rows[:page_size]
+        next_cursor = str(rows[-1].id) if has_more and rows else None
+        ser = MigrationTaskLogSerializer(rows, many=True)
+        return Response({
+            'status': 'success',
+            'results': ser.data,
+            'next_cursor': next_cursor,
+            'task_id': task.id,
+        })
+
+    @action(detail=True, methods=['get'])
     def info(self, request, pk=None):
         task = self.get_object()
         try:
@@ -364,7 +394,24 @@ class DatabaseObjectsAPIView(APIView):
                 """
                 cursor.execute(query, {'schema': schema})
                 objects = [row[0] for row in cursor.fetchall()]
-            
+
+            elif object_type.upper() == 'SEQUENCE':
+                query = """
+                SELECT SEQUENCE_NAME FROM ALL_SEQUENCES
+                WHERE SEQUENCE_OWNER = :schema ORDER BY SEQUENCE_NAME
+                """
+                cursor.execute(query, {'schema': schema})
+                objects = [row[0] for row in cursor.fetchall()]
+
+            elif object_type.upper() == 'TRIGGER':
+                query = """
+                SELECT TRIGGER_NAME FROM ALL_TRIGGERS
+                WHERE OWNER = :schema AND BASE_OBJECT_TYPE IN ('TABLE', 'VIEW')
+                ORDER BY TRIGGER_NAME
+                """
+                cursor.execute(query, {'schema': schema})
+                objects = [row[0] for row in cursor.fetchall()]
+
             else:
                 cursor.close()
                 connection.close()

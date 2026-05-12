@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'migration_app',
+    'django_celery_beat',
     # 'mdeditor',  # 添加Markdown编辑器支持
 ]
 
@@ -230,3 +231,19 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOW_CREDENTIALS = True
 
 CORS_ALLOW_ALL_ORIGINS = True  # 开发环境允许所有来源
+
+# Celery：设置环境变量 CELERY_BROKER_URL（如 redis://127.0.0.1:6379/0）后，迁移任务由 Worker 执行
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', '')
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', CELERY_BROKER_URL or 'cache+memory://')
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = int(os.environ.get('CELERY_TASK_TIME_LIMIT', '86400'))
+CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', '').lower() == 'true'
+CELERY_BEAT_SCHEDULE = {
+    'scan-scheduled-migrations': {
+        'task': 'migration_app.tasks.beat_scan_scheduled_migrations',
+        'schedule': float(os.environ.get('MIGRATION_BEAT_SCAN_SECONDS', '300')),
+    },
+}
+
+# 连接密码加密：设置 MIGRATION_FERNET_KEY 后保存连接时自动加密（见 migration_app.credentials）
+MIGRATION_FERNET_KEY = os.environ.get('MIGRATION_FERNET_KEY', '')

@@ -298,19 +298,33 @@ def start_task(request, task_id):
             
             # 导入视图模块以调用迁移函数
             from . import views
-            
-            # 检查任务类型是否有效
-            if task.task_type not in ['table', 'materialized_view', 'view', 'routine', 'all_tables', 'view_to_table', 'view_to_sqlite']:
+            from django.conf import settings as dj_settings
+
+            valid_task_types = [
+                'table', 'materialized_view', 'view', 'routine', 'all_tables',
+                'view_to_table', 'view_to_sqlite', 'trigger', 'sequence', 'full_schema',
+            ]
+            if task.task_type not in valid_task_types:
                 logger.error(f"未知的任务类型: {task.task_type}")
                 return JsonResponse({
                     'status': 'error',
                     'message': f'未知的任务类型: {task.task_type}'
                 }, status=400)
-            
-            # 获取全局线程池    
+
+            # 若配置了 Celery Broker，则交由 Worker 执行（企业部署推荐）
+            broker = (getattr(dj_settings, 'CELERY_BROKER_URL', None) or '').strip()
+            if broker:
+                from migration_app.tasks import celery_run_migration_task
+                celery_run_migration_task.delay(task.id, postgres_database)
+                logger.info(f"任务已提交 Celery 队列: 任务ID={task_id}")
+                if request.method == 'GET':
+                    return redirect('migration_app:task_detail', task_id=task_id)
+                return JsonResponse({'status': 'success', 'queued': 'celery'})
+
+            # 获取全局线程池（未配置 Celery 时）
             try:
                 executor = views.get_task_executor()
-                
+
                 # 提交任务到线程池
                 if task.task_type == 'table':
                     logger.info(f"提交表迁移任务: {task.source_schema}.{task.source_object}")
@@ -324,6 +338,24 @@ def start_task(request, task_id):
                 elif task.task_type == 'routine':
                     logger.info(f"提交存储过程/函数迁移任务: {task.source_schema}.{task.source_object}")
                     executor.submit(views.migrate_routine, task.id, postgres_database)
+                elif task.task_type == 'trigger':
+                    logger.info(f"提交触发器迁移任务: {task.source_schema}.{task.source_object}")
+                    executor.submit(views.migrate_trigger, task.id, postgres_database)
+                elif task.task_type == 'sequence':
+                    logger.info(f"提交序列迁移任务: {task.source_schema}.{task.source_object}")
+                    executor.submit(views.migrate_sequence, task.id, postgres_database)
+                elif task.task_type == 'full_schema':
+                    logger.info(f"提交全 Schema 编排任务: {task.source_schema}")
+                    def run_full_schema():
+                        try:
+                            import migration_app.views as v
+                            importlib.reload(v)
+                            v.migrate_schema_orchestration(task.id, postgres_database)
+                        except Exception as ex:
+                            logger.error(f"编排迁移异常: {str(ex)}", exc_info=True)
+                    t2 = threading.Thread(target=run_full_schema)
+                    t2.daemon = True
+                    t2.start()
                 elif task.task_type == 'all_tables':
                     # 所有表迁移不使用线程池，避免 interpreter shutdown 时 submit 报错；用独立线程并重载 views 确保跑最新逻辑
                     logger.info(f"提交全部表迁移任务（独立线程）: {task.source_schema}.*")
@@ -338,23 +370,17 @@ def start_task(request, task_id):
                     t.daemon = True
                     t.start()
                 elif task.task_type == 'view_to_table':
-                    logger.info(f"提交视图数据迁移到表任务: {task.source_schema}.{task.source_object}")
-                    # 直接在当前进程中执行，以便调试
-                    logger.info("直接执行migrate_view_to_table函数进行调试")
-                    migrate_view_to_table(task.id, postgres_database)
-                    logger.info("migrate_view_to_table函数执行完毕")
-                    # 不要使用线程池
-                    # from migration_app.dashboard import migrate_view_to_table
-                    # executor.submit(migrate_view_to_table, task.id, postgres_database)
+                    logger.info(f"提交视图数据迁移到表任务（线程池异步）: {task.source_schema}.{task.source_object}")
+                    executor.submit(migrate_view_to_table, task.id, postgres_database)
                 elif task.task_type == 'view_to_sqlite':
                     logger.info(f"提交视图迁移到SQLite任务: {task.source_schema}")
                     migrate_view_to_sqlite(task.id)
-                
+
                 logger.info(f"任务已成功提交执行: 任务ID={task_id}")
             except (RuntimeError, AttributeError) as e:
                 # 处理线程池已关闭或为None的情况
                 logger.error(f"线程池不可用，将使用独立线程执行任务: {str(e)}")
-                
+
                 # 创建独立线程执行任务
                 def run_task():
                     try:
@@ -370,6 +396,17 @@ def start_task(request, task_id):
                         elif task.task_type == 'routine':
                             logger.info(f"开始执行存储过程/函数迁移任务: {task.source_schema}.{task.source_object}")
                             views.migrate_routine(task.id, postgres_database)
+                        elif task.task_type == 'trigger':
+                            logger.info(f"开始执行触发器迁移任务: {task.source_schema}.{task.source_object}")
+                            views.migrate_trigger(task.id, postgres_database)
+                        elif task.task_type == 'sequence':
+                            logger.info(f"开始执行序列迁移任务: {task.source_schema}.{task.source_object}")
+                            views.migrate_sequence(task.id, postgres_database)
+                        elif task.task_type == 'full_schema':
+                            logger.info(f"开始执行全 Schema 编排任务: {task.source_schema}")
+                            import migration_app.views as v
+                            importlib.reload(v)
+                            v.migrate_schema_orchestration(task.id, postgres_database)
                         elif task.task_type == 'all_tables':
                             logger.info(f"开始执行全部表迁移任务（重载 views 后执行）: {task.source_schema}.*")
                             import migration_app.views as v
@@ -377,19 +414,13 @@ def start_task(request, task_id):
                             v.migrate_all_tables(task.id, postgres_database)
                         elif task.task_type == 'view_to_table':
                             logger.info(f"开始执行视图数据迁移到表任务: {task.source_schema}.{task.source_object}")
-                            # 直接在当前进程中执行，以便调试
-                            logger.info("直接执行migrate_view_to_table函数进行调试")
                             migrate_view_to_table(task.id, postgres_database)
-                            logger.info("migrate_view_to_table函数执行完毕")
-                            # 不要使用单独线程
-                            # from migration_app.dashboard import migrate_view_to_table
-                            # migrate_view_to_table(task.id, postgres_database)
                         elif task.task_type == 'view_to_sqlite':
                             logger.info("开始执行视图迁移到SQLite任务")
                             migrate_view_to_sqlite(task.id)
                     except Exception as e:
                         logger.error(f"任务执行时发生异常: {str(e)}", exc_info=True)
-                
+
                 # 启动后台线程
                 task_thread = threading.Thread(target=run_task)
                 task_thread.daemon = True  # 设置为守护线程，不会阻止主程序退出

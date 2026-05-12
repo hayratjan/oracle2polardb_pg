@@ -2,7 +2,6 @@ from django.db import models
 from django.contrib.auth.models import User
 import os
 
-# Create your models here.
 
 class OracleConnection(models.Model):
     name = models.CharField(max_length=100, verbose_name="连接名称")
@@ -10,15 +9,23 @@ class OracleConnection(models.Model):
     port = models.IntegerField(default=1521, verbose_name="端口")
     service_name = models.CharField(max_length=100, verbose_name="服务名")
     username = models.CharField(max_length=50, verbose_name="用户名")
-    password = models.CharField(max_length=50, verbose_name="密码")
+    # 加密后变长，预留长度（enc: + Fernet）
+    password = models.CharField(max_length=512, verbose_name="密码")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
-    
+
+    def save(self, *args, **kwargs):
+        from .credentials import maybe_encrypt_password
+        if self.password:
+            self.password = maybe_encrypt_password(self.password)
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
-    
+
     class Meta:
         verbose_name = "Oracle连接"
         verbose_name_plural = "Oracle连接"
+
 
 class PostgresConnection(models.Model):
     STATUS_CHOICES = [
@@ -26,27 +33,34 @@ class PostgresConnection(models.Model):
         ('inactive', '异常'),
         ('testing', '测试中')
     ]
-    
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True, verbose_name='用户')
     name = models.CharField(max_length=100, verbose_name='连接名称')
     host = models.CharField(max_length=100, verbose_name='主机地址')
     port = models.IntegerField(default=5432, verbose_name='端口')
     database = models.CharField(max_length=100, verbose_name='数据库名')
     username = models.CharField(max_length=100, verbose_name='用户名')
-    password = models.CharField(max_length=100, verbose_name='密码')
+    password = models.CharField(max_length=512, verbose_name='密码')
     sslmode = models.CharField(max_length=20, blank=True, default='', verbose_name='SSL模式',
                                help_text='留空自动检测；require=需要SSL；prefer=优先SSL；disable=禁用SSL')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active', verbose_name='状态')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
-    
+
+    def save(self, *args, **kwargs):
+        from .credentials import maybe_encrypt_password
+        if self.password:
+            self.password = maybe_encrypt_password(self.password)
+        super().save(*args, **kwargs)
+
     class Meta:
         verbose_name = 'PostgreSQL连接'
         verbose_name_plural = 'PostgreSQL连接'
         ordering = ['-created_at']
-    
+
     def __str__(self):
         return f"{self.name} ({self.host}:{self.port})"
+
 
 class MigrationTask(models.Model):
     TASK_TYPE_CHOICES = [
@@ -57,8 +71,11 @@ class MigrationTask(models.Model):
         ('all_tables', '所有表'),
         ('view_to_table', '视图数据迁移到表'),
         ('view_to_sqlite', '视图数据迁移到SQLite'),
+        ('trigger', '触发器'),
+        ('sequence', '序列'),
+        ('full_schema', '全Schema编排迁移'),
     ]
-    
+
     STATUS_CHOICES = [
         ('pending', '待执行'),
         ('running', '执行中'),
@@ -67,7 +84,7 @@ class MigrationTask(models.Model):
         ('partial', '部分完成'),
         ('canceled', '已取消'),
     ]
-    
+
     CONFLICT_STRATEGY_CHOICES = [
         ('error', '遇到冲突时报错'),
         ('replace', '删除并替换已存在对象'),
@@ -80,9 +97,13 @@ class MigrationTask(models.Model):
         ('upper', '全部大写'),
         ('preserve', '保持原样'),
     ]
-    
+    INCREMENTAL_MODE_CHOICES = [
+        ('none', '全量'),
+        ('timestamp', '按水位列增量'),
+    ]
+
     name = models.CharField(max_length=100, verbose_name="任务名称")
-    task_type = models.CharField(max_length=20, choices=TASK_TYPE_CHOICES, verbose_name="任务类型")
+    task_type = models.CharField(max_length=30, choices=TASK_TYPE_CHOICES, verbose_name="任务类型")
     oracle_connection = models.ForeignKey(OracleConnection, on_delete=models.CASCADE, verbose_name="Oracle连接")
     postgres_connection = models.ForeignKey(
         PostgresConnection,
@@ -111,30 +132,36 @@ class MigrationTask(models.Model):
     view_progress = models.JSONField(verbose_name="视图迁移进度", blank=True, null=True, help_text="存储每个视图的迁移进度")
     sqlite_directory = models.CharField(max_length=255, blank=True, null=True, verbose_name="SQLite目录")
     sqlite_file_name = models.CharField(max_length=255, blank=True, null=True, verbose_name="SQLite文件名")
-    # 目标 PolarDB/PostgreSQL 数据库名（连接下可选的多数据库）
     postgres_database = models.CharField(max_length=255, blank=True, null=True, verbose_name="目标数据库")
-    
+    # 增量与定时（与 Celery Beat 扫描配合）
+    incremental_mode = models.CharField(
+        max_length=20, choices=INCREMENTAL_MODE_CHOICES, default='none',
+        verbose_name="增量模式"
+    )
+    watermark_column = models.CharField(max_length=128, blank=True, default='', verbose_name="水位列名")
+    last_watermark = models.TextField(blank=True, null=True, verbose_name="上次水位值")
+    schedule_enabled = models.BooleanField(default=False, verbose_name="启用定时增量")
+    schedule_interval_minutes = models.PositiveIntegerField(default=60, verbose_name="调度最小间隔(分钟)")
+    last_schedule_run = models.DateTimeField(null=True, blank=True, verbose_name="上次定时触发时间")
+
     def __str__(self):
         return self.name
-    
+
     @property
     def sqlite_path(self):
-        """返回SQLite完整路径"""
         if self.sqlite_directory and self.sqlite_file_name:
             directory = os.path.expanduser(self.sqlite_directory)
             return os.path.abspath(os.path.join(directory, self.sqlite_file_name))
         return None
-    
+
     @property
     def source_db(self):
-        """返回源数据库显示名称"""
         if self.oracle_connection:
             return f"{self.oracle_connection.name} ({self.source_schema})"
         return f"Oracle ({self.source_schema})"
-    
+
     @property
     def target_db(self):
-        """返回目标数据库显示名称"""
         if self.task_type == 'view_to_sqlite':
             if self.sqlite_file_name:
                 return f"SQLite ({self.sqlite_file_name})"
@@ -150,7 +177,26 @@ class MigrationTask(models.Model):
         if self.target_schema:
             return f"PostgreSQL ({self.target_schema})"
         return "PostgreSQL"
-    
+
     class Meta:
         verbose_name = "迁移任务"
         verbose_name_plural = "迁移任务"
+
+
+class MigrationTaskLog(models.Model):
+    """结构化任务日志，支持分页查询。"""
+    task = models.ForeignKey(MigrationTask, on_delete=models.CASCADE, related_name='log_entries', verbose_name="任务")
+    level = models.CharField(max_length=16, default='INFO', verbose_name="级别")
+    message = models.TextField(verbose_name="消息")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="时间")
+
+    class Meta:
+        verbose_name = "迁移任务日志行"
+        verbose_name_plural = "迁移任务日志行"
+        ordering = ['-id']
+        indexes = [
+            models.Index(fields=['task', '-id']),
+        ]
+
+    def __str__(self):
+        return f"{self.task_id} {self.level} {self.created_at}"

@@ -5,3 +5,7 @@ djangorestframework-simplejwt
 django-cors-headers
 cx-Oracle
 psycopg2-binary
+celery[redis]>=5.3,<6
+django-celery-beat>=2.6,<3
+redis>=5.0,<6
+cryptography>=42,<45

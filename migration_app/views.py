@@ -77,13 +77,23 @@ def index(request):
     }
     return render(request, 'migration_app/index.html', context)
 
+def _connection_plain_password(stored):
+    """返回连接配置中的明文密码（兼容未加密的旧数据）。"""
+    from .credentials import maybe_decrypt_password
+    if not stored:
+        return ''
+    plain = maybe_decrypt_password(stored)
+    return plain if plain else stored
+
+
 def get_oracle_connection(connection_id):
     """创建Oracle连接"""
     conn_obj = get_object_or_404(OracleConnection, pk=connection_id)
     dsn = cx_Oracle.makedsn(conn_obj.host, conn_obj.port, service_name=conn_obj.service_name)
+    pwd = _connection_plain_password(conn_obj.password)
     connection = cx_Oracle.connect(
         user=conn_obj.username,
-        password=conn_obj.password,
+        password=pwd,
         dsn=dsn
     )
     return connection
@@ -91,12 +101,13 @@ def get_oracle_connection(connection_id):
 def _pg_connect_kwargs(conn_obj, database=None):
     """从 PostgresConnection 构建 psycopg2.connect 参数字典"""
     db_name = database if database else conn_obj.database
+    pwd = _connection_plain_password(conn_obj.password)
     kwargs = {
         'host': conn_obj.host,
         'port': conn_obj.port,
         'database': db_name,
         'user': conn_obj.username,
-        'password': conn_obj.password
+        'password': pwd
     }
     sslmode = (getattr(conn_obj, 'sslmode', None) or '').strip()
     if sslmode:
@@ -568,8 +579,89 @@ def migrate_routine(task_id, postgres_database=None):
         task.save()
 
 
+def _safe_oracle_identifier(name: str) -> str:
+    """校验 Oracle 未加引号标识符（大写字母、数字、下划线）。"""
+    n = (name or '').strip().upper().replace('"', '')
+    if not n or not re.match(r'^[A-Z][A-Z0-9_]*$', n):
+        raise ValueError(f'非法 Oracle 标识符: {name}')
+    return n
+
+
+def _topological_sort_tables_by_fk(oracle_cursor, owner: str, table_names):
+    """
+    按外键依赖排序表名：父表在前、子表在后；无法解析的边或环则按字母序追加并记日志。
+    table_names 为 ALL_TABLES 返回的名称列表（通常大写）。
+    """
+    if not table_names:
+        return []
+    # 去重且保持首次出现顺序
+    seen = set()
+    ordered_unique = []
+    for t in table_names:
+        u = t[0] if isinstance(t, (list, tuple)) else t
+        u = str(u).strip()
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        ordered_unique.append(u)
+    if len(ordered_unique) <= 1:
+        return ordered_unique
+    upper_list = [x.upper() for x in ordered_unique]
+    name_set = set(upper_list)
+    orig_by_upper = {x.upper(): x for x in ordered_unique}
+
+    def sql_literal(ident: str) -> str:
+        return "'" + ident.replace("'", "''") + "'"
+
+    in_clause = ','.join(sql_literal(x) for x in upper_list)
+    query = f"""
+    SELECT DISTINCT c.table_name AS child_tab, pk.table_name AS parent_tab
+    FROM all_constraints c
+    JOIN all_constraints pk
+      ON c.r_owner = pk.owner AND c.r_constraint_name = pk.constraint_name
+    WHERE c.constraint_type = 'R'
+      AND c.owner = :owner
+      AND c.table_name IN ({in_clause})
+    """
+    oracle_cursor.execute(query, {'owner': owner.upper()})
+    rows = oracle_cursor.fetchall()
+    from collections import defaultdict
+    from heapq import heappush, heappop
+
+    indegree = defaultdict(int)
+    children = defaultdict(list)
+    nodes = set(upper_list)
+    for child_tab, parent_tab in rows:
+        if not child_tab or not parent_tab:
+            continue
+        cu, pu = child_tab.upper(), parent_tab.upper()
+        if cu not in name_set or pu not in name_set:
+            continue
+        children[pu].append(cu)
+        indegree[cu] += 1
+
+    heap = []
+    for n in nodes:
+        if indegree[n] == 0:
+            heappush(heap, n)
+    result_upper = []
+    while heap:
+        n = heappop(heap)
+        result_upper.append(n)
+        for ch in sorted(children[n]):
+            indegree[ch] -= 1
+            if indegree[ch] == 0:
+                heappush(heap, ch)
+
+    remaining = [n for n in nodes if n not in result_upper]
+    if remaining:
+        result_upper.extend(sorted(remaining))
+    return [orig_by_upper[u] for u in result_upper]
+
+
 def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, target_schema, table_name,
-                          conflict_strategy, log_list, task=None, all_tables_context=None):
+                          conflict_strategy, log_list, task=None, all_tables_context=None,
+                          watermark_column=None, watermark_min_exclusive=None):
     """
     迁移单张表的结构和数据（不创建子任务，供 migrate_table 与 migrate_all_tables 复用）。
     使用已打开的 oracle_cursor / pg_conn / pg_cursor，结果追加到 log_list。
@@ -636,10 +728,25 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
         pg_conn.commit()
         log_list.append(f"成功创建表 {target_schema}.{table_name}")
 
-    # 获取总行数（Oracle 中未加引号的标识符为大写）
+    # 获取总行数（Oracle 中未加引号的标识符为大写）；支持按水位列增量统计
+    wm_sql_fragment = ""
+    if watermark_column and watermark_min_exclusive is not None and str(watermark_min_exclusive).strip() != '':
+        try:
+            wm_col_sql = _safe_oracle_identifier(watermark_column)
+        except ValueError as e:
+            raise Exception(str(e))
+        wm_sql_fragment = f" WHERE {wm_col_sql} > :wmv "
+        log_list.append(f"使用增量条件: {wm_col_sql} > 上一水位值")
+
     total_count = 0
     try:
-        oracle_cursor.execute(f"SELECT COUNT(*) FROM {source_schema}.{table_name}")
+        if wm_sql_fragment:
+            oracle_cursor.execute(
+                f"SELECT COUNT(*) FROM {source_schema}.{table_name}{wm_sql_fragment}",
+                wmv=watermark_min_exclusive,
+            )
+        else:
+            oracle_cursor.execute(f"SELECT COUNT(*) FROM {source_schema}.{table_name}")
         total_count = int(oracle_cursor.fetchone()[0])
         log_list.append(f"表 {source_schema}.{table_name} 总行数: {total_count}")
     except Exception as count_err:
@@ -653,7 +760,13 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
     fetch_batch_size = 20000
     commit_every_batches = 5
     oracle_cursor.arraysize = fetch_batch_size
-    oracle_cursor.execute(f"SELECT * FROM {source_schema}.{table_name}")
+    if wm_sql_fragment:
+        oracle_cursor.execute(
+            f"SELECT * FROM {source_schema}.{table_name}{wm_sql_fragment}",
+            wmv=watermark_min_exclusive,
+        )
+    else:
+        oracle_cursor.execute(f"SELECT * FROM {source_schema}.{table_name}")
     column_names = [col[0].lower() for col in oracle_cursor.description]
     placeholders = ", ".join(["%s"] * len(column_names))
     quoted_cols = [f'"{c}"' for c in column_names]
@@ -749,11 +862,39 @@ def migrate_table(task_id, postgres_database=None):
         pg_cursor.execute("SELECT current_database()")
         log.append(f"已连接到PostgreSQL数据库: {pg_cursor.fetchone()[0]}")
 
+        wm_col = (getattr(task, 'watermark_column', None) or '').strip()
+        wm_after = getattr(task, 'last_watermark', None)
+        use_wm = (
+            getattr(task, 'incremental_mode', 'none') == 'timestamp'
+            and wm_col
+            and wm_after is not None
+            and str(wm_after).strip() != ''
+        )
+        if use_wm:
+            log.append(f"增量模式: 水位列 {wm_col}")
+
         _migrate_single_table(
             oracle_cursor, pg_conn, pg_cursor,
             task.source_schema, task.target_schema, task.source_object,
-            task.conflict_strategy, log, task=task
+            task.conflict_strategy, log, task=task,
+            watermark_column=wm_col if use_wm else None,
+            watermark_min_exclusive=wm_after if use_wm else None,
         )
+
+        # 成功后刷新水位（全量首次跑也会写入 MAX）
+        if getattr(task, 'incremental_mode', 'none') == 'timestamp' and wm_col:
+            try:
+                safe_wm = _safe_oracle_identifier(wm_col)
+                oracle_cursor.execute(
+                    f"SELECT MAX({safe_wm}) FROM {task.source_schema}.{task.source_object}"
+                )
+                mx = oracle_cursor.fetchone()[0]
+                if mx is not None:
+                    task.last_watermark = str(mx)
+                    task.save(update_fields=['last_watermark'])
+                    log.append(f"已更新水位 last_watermark={task.last_watermark}")
+            except Exception as wm_err:
+                log.append(f"更新水位失败（可忽略）: {wm_err}")
 
         oracle_cursor.close()
         oracle_conn.close()
@@ -962,8 +1103,17 @@ def migrate_all_tables(task_id, postgres_database=None):
         ORDER BY TABLE_NAME
         """
         oracle_cursor.execute(query, schema=task.source_schema)
-        tables = oracle_cursor.fetchall()
-        
+        table_rows = oracle_cursor.fetchall()
+        raw_names = [row[0] for row in table_rows]
+        try:
+            sorted_names = _topological_sort_tables_by_fk(oracle_cursor, task.source_schema, raw_names)
+        except Exception as sort_err:
+            logger.warning(f"外键拓扑排序失败，使用数据库原始顺序: {sort_err}")
+            sorted_names = raw_names
+        if raw_names and [x.upper() for x in raw_names] != [x.upper() for x in sorted_names]:
+            log.append("已根据外键依赖对表迁移顺序进行拓扑排序（父表优先）；存在环时剩余表按名字追加。")
+        tables = sorted_names
+
         if not tables:
             log.append(f"源schema '{task.source_schema}'中没有找到表")
             task.status = 'completed'
@@ -971,11 +1121,11 @@ def migrate_all_tables(task_id, postgres_database=None):
             task.completed_at = timezone.now()
             task.save()
             return
-        
+
         total_tables = len(tables)
         log.append(f"在源schema '{task.source_schema}'中找到 {total_tables} 个表，将在当前任务中依次迁移（不创建子任务）")
         # 立即写入初始进度，便于前端在首张表迁移前就显示「第 0/N 张表」
-        first_table = tables[0][0] if tables else ""
+        first_table = tables[0] if tables else ""
         task.progress = 0.0
         task.view_progress = {
             'current': 0,
@@ -988,8 +1138,7 @@ def migrate_all_tables(task_id, postgres_database=None):
 
         # 在当前任务中循环迁移每张表，不创建子任务
         failed_tables = []
-        for idx, table_row in enumerate(tables):
-            table_name = table_row[0]
+        for idx, table_name in enumerate(tables):
             # 每张表开始前先更新「正在迁移：当前表名」，避免首张表耗时长时界面一直空白
             task.view_progress = {
                 'current_table': table_name,
@@ -1066,6 +1215,235 @@ def migrate_all_tables(task_id, postgres_database=None):
         task.completed_at = timezone.now()
         task.save()
 
+def _migrate_one_sequence(oracle_cursor, pg_conn, pg_cursor, source_schema, target_schema, seq_name,
+                          conflict_strategy, log_list):
+    """
+    根据 ALL_SEQUENCES 在 PolarDB/PostgreSQL 中创建等价序列（常见属性映射）。
+    """
+    strategy = conflict_strategy or 'error'
+    oracle_cursor.execute("""
+        SELECT MIN_VALUE, MAX_VALUE, INCREMENT_BY, CYCLE_FLAG, ORDER_FLAG, CACHE_SIZE, LAST_NUMBER
+        FROM ALL_SEQUENCES
+        WHERE SEQUENCE_OWNER = :o AND SEQUENCE_NAME = :n
+    """, {'o': source_schema.upper(), 'n': seq_name.upper()})
+    row = oracle_cursor.fetchone()
+    if not row:
+        raise Exception(f"找不到序列 {source_schema}.{seq_name}")
+    min_v, max_v, inc_by, cycle_f, _order_f, cache_sz, last_num = (
+        int(row[0]), int(row[1]), int(row[2]), row[3], row[4],
+        int(row[5]) if row[5] is not None else 20,
+        int(row[6]) if row[6] is not None else 1,
+    )
+    cycle_sql = 'CYCLE' if (cycle_f or 'N') == 'Y' else 'NO CYCLE'
+    cache_n = max(1, int(cache_sz) if cache_sz else 1)
+    seq_ident = seq_name.lower()
+    pg_cursor.execute(
+        """
+        SELECT 1 FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind = 'S' AND n.nspname = %s AND c.relname = %s
+        """,
+        (target_schema, seq_ident),
+    )
+    exists = pg_cursor.fetchone() is not None
+    if exists:
+        if strategy == 'skip':
+            log_list.append(f"序列 {target_schema}.{seq_ident} 已存在，跳过")
+            return
+        if strategy == 'error':
+            raise Exception(f"序列 {target_schema}.{seq_ident} 已存在")
+        pg_cursor.execute(f"DROP SEQUENCE IF EXISTS {target_schema}.{seq_ident} CASCADE")
+        pg_conn.commit()
+    sql = (
+        f"CREATE SEQUENCE {target_schema}.{seq_ident} "
+        f"INCREMENT BY {inc_by} MINVALUE {min_v} MAXVALUE {max_v} "
+        f"START WITH {last_num} CACHE {cache_n} {cycle_sql}"
+    )
+    pg_cursor.execute(sql)
+    pg_conn.commit()
+    log_list.append(f"已创建序列: {target_schema}.{seq_ident}")
+
+
+def migrate_sequence(task_id, postgres_database=None):
+    """迁移单个 Oracle 序列至 PostgreSQL。"""
+    task = get_object_or_404(MigrationTask, pk=task_id)
+    task.status = 'running'
+    task.started_at = timezone.now()
+    task.save()
+    log = []
+    if postgres_database:
+        log.append(f"目标PostgreSQL数据库: {postgres_database}")
+    try:
+        oracle_conn = get_oracle_connection(task.oracle_connection.id)
+        oracle_cursor = oracle_conn.cursor()
+        pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
+        pg_cursor = pg_conn.cursor()
+        _migrate_one_sequence(
+            oracle_cursor, pg_conn, pg_cursor,
+            task.source_schema, task.target_schema, task.source_object,
+            task.conflict_strategy, log,
+        )
+        oracle_cursor.close()
+        oracle_conn.close()
+        pg_cursor.close()
+        pg_conn.close()
+        task.status = 'completed'
+        task.progress = 100
+        task.log = '\n'.join(log)
+        task.completed_at = timezone.now()
+        task.save()
+    except Exception as e:
+        task.status = 'failed'
+        log.append(str(e))
+        log.append(traceback.format_exc())
+        task.log = '\n'.join(log)
+        task.completed_at = timezone.now()
+        task.save()
+
+
+def migrate_trigger(task_id, postgres_database=None):
+    """
+    读取 Oracle 触发器定义（ALL_TRIGGERS + ALL_SOURCE），记录适配说明。
+    PostgreSQL 需改写为 EXECUTE FUNCTION 形式，此处不自动下发 DDL，避免误创建无效触发器。
+    """
+    task = get_object_or_404(MigrationTask, pk=task_id)
+    task.status = 'running'
+    task.started_at = timezone.now()
+    task.save()
+    log = []
+    if postgres_database:
+        log.append(f"目标PostgreSQL数据库: {postgres_database}")
+    try:
+        oracle_conn = get_oracle_connection(task.oracle_connection.id)
+        oracle_cursor = oracle_conn.cursor()
+        pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
+        pg_cursor = pg_conn.cursor()
+        pg_cursor.execute("SELECT current_database()")
+        log.append(f"已连接到PostgreSQL数据库: {pg_cursor.fetchone()[0]}")
+
+        oracle_cursor.execute("""
+            SELECT TRIGGER_NAME, TRIGGER_TYPE, TRIGGERING_EVENT, TABLE_NAME, STATUS, DESCRIPTION
+            FROM ALL_TRIGGERS
+            WHERE OWNER = :o AND TRIGGER_NAME = :n
+        """, {'o': task.source_schema.upper(), 'n': task.source_object.upper()})
+        meta = oracle_cursor.fetchone()
+        if not meta:
+            raise Exception(f"找不到触发器 {task.source_schema}.{task.source_object}")
+        log.append(f"触发器元数据: name={meta[0]}, type={meta[1]}, event={meta[2]}, table={meta[3]}, status={meta[4]}")
+
+        oracle_cursor.execute("""
+            SELECT TEXT FROM ALL_SOURCE
+            WHERE OWNER = :o AND NAME = :n AND TYPE = 'TRIGGER'
+            ORDER BY LINE
+        """, {'o': task.source_schema.upper(), 'n': task.source_object.upper()})
+        src_lines = oracle_cursor.fetchall()
+        body = '\n'.join(r[0] for r in src_lines) if src_lines else ''
+        log.append("---- Oracle 触发器源码（需人工改写为 PL/pgSQL 函数 + CREATE TRIGGER）----")
+        log.append(body[:8000] + ('\n...(截断)' if len(body) > 8000 else ''))
+        log.append("---- 请在目标库手写 CREATE FUNCTION ... RETURNS TRIGGER + CREATE TRIGGER ... EXECUTE FUNCTION ----")
+
+        oracle_cursor.close()
+        oracle_conn.close()
+        pg_cursor.close()
+        pg_conn.close()
+        task.status = 'completed'
+        task.progress = 100
+        task.log = '\n'.join(log)
+        task.completed_at = timezone.now()
+        task.save()
+    except Exception as e:
+        task.status = 'failed'
+        log.append(str(e))
+        log.append(traceback.format_exc())
+        task.log = '\n'.join(log)
+        task.completed_at = timezone.now()
+        task.save()
+
+
+def migrate_schema_orchestration(task_id, postgres_database=None):
+    """
+    全 Schema 编排：先迁移序列，再复用「所有表」逻辑迁移全部表；其余对象请单独建任务。
+    """
+    from .task_logging import append_migration_log
+
+    task = get_object_or_404(MigrationTask, pk=task_id)
+    task.status = 'running'
+    task.started_at = timezone.now()
+    task.progress = 0
+    phases = ['sequences', 'all_tables', 'done']
+    task.view_progress = {
+        'orchestration': True,
+        'phase': phases[0],
+        'phase_index': 0,
+        'phases': phases,
+    }
+    task.save()
+
+    phase1_log = []
+    try:
+        oracle_conn = get_oracle_connection(task.oracle_connection.id)
+        oracle_cursor = oracle_conn.cursor()
+        pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
+        pg_cursor = pg_conn.cursor()
+
+        phase1_log.append("【编排】阶段一：迁移序列")
+        oracle_cursor.execute("""
+            SELECT SEQUENCE_NAME FROM ALL_SEQUENCES
+            WHERE SEQUENCE_OWNER = :s ORDER BY SEQUENCE_NAME
+        """, {'s': task.source_schema.upper()})
+        seq_rows = [r[0] for r in oracle_cursor.fetchall()]
+        phase1_log.append(f"共 {len(seq_rows)} 个序列")
+        for sn in seq_rows:
+            try:
+                _migrate_one_sequence(
+                    oracle_cursor, pg_conn, pg_cursor,
+                    task.source_schema, task.target_schema, sn,
+                    task.conflict_strategy, phase1_log,
+                )
+            except Exception as se:
+                phase1_log.append(f"序列 {sn} 失败: {se}")
+
+        oracle_cursor.close()
+        oracle_conn.close()
+        pg_cursor.close()
+        pg_conn.close()
+
+        task.view_progress = {
+            'orchestration': True,
+            'phase': phases[1],
+            'phase_index': 1,
+            'phases': phases,
+        }
+        task.save(update_fields=['view_progress'])
+
+        migrate_all_tables(task_id, postgres_database)
+
+        task.refresh_from_db()
+        merged = '\n'.join(phase1_log) + '\n\n' + (task.log or '')
+        task.log = merged
+        task.view_progress = {
+            'orchestration': True,
+            'phase': phases[2],
+            'phase_index': 2,
+            'phases': phases,
+        }
+        task.save(update_fields=['log', 'view_progress'])
+        try:
+            append_migration_log(
+                task,
+                '【编排】物化视图、普通视图、例程、触发器请通过对应任务类型分别迁移。',
+            )
+        except Exception:
+            task.refresh_from_db()
+            task.log = (task.log or '') + '\n【编排】物化视图、普通视图、例程、触发器请通过对应任务类型分别迁移。'
+            task.save(update_fields=['log'])
+    except Exception as e:
+        task.status = 'failed'
+        task.log = (task.log or '') + f"\n编排任务失败: {e}\n{traceback.format_exc()}"
+        task.completed_at = timezone.now()
+        task.save()
+
+
 def oracle_database_management(request):
     """Oracle数据库管理视图"""
     # 获取所有Oracle连接
@@ -1129,7 +1507,7 @@ def test_oracle_connection(request):
                 if connection_id:
                     try:
                         conn_obj = OracleConnection.objects.get(pk=connection_id)
-                        password = (data.get('password') or '').strip() or conn_obj.password
+                        password = (data.get('password') or '').strip() or _connection_plain_password(conn_obj.password)
                     except (OracleConnection.DoesNotExist, ValueError):
                         password = (data.get('password') or '').strip()
                         if not password:
@@ -1149,7 +1527,7 @@ def test_oracle_connection(request):
             conn_obj = get_object_or_404(OracleConnection, pk=connection_id)
             success, err_msg = _test_oracle_connect_with_params(
                 conn_obj.host, conn_obj.port, conn_obj.service_name,
-                conn_obj.username, conn_obj.password
+                conn_obj.username, _connection_plain_password(conn_obj.password)
             )
             if success:
                 return JsonResponse({'status': 'success'})
@@ -1420,7 +1798,7 @@ def test_pg_connection(request):
                 if connection_id:
                     try:
                         connection = PostgresConnection.objects.get(id=connection_id)
-                        password = (data.get('password') or '').strip() or connection.password
+                        password = (data.get('password') or '').strip() or _connection_plain_password(connection.password)
                     except (PostgresConnection.DoesNotExist, ValueError):
                         password = (data.get('password') or '').strip()
                         if not password:
@@ -1451,7 +1829,7 @@ def test_pg_connection(request):
                 sslmode = (getattr(connection, 'sslmode', None) or '').strip() or None
                 success, err_msg = _test_pg_connect_with_params(
                     connection.host, connection.port, connection.database,
-                    connection.username, connection.password,
+                    connection.username, _connection_plain_password(connection.password),
                     sslmode=sslmode
                 )
                 if success:

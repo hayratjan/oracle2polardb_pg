@@ -59,6 +59,13 @@ export interface MigrationTask {
   sqlite_path?: string
   oracle_connection_name?: string
   postgres_connection_name?: string
+  /** 增量：none | timestamp */
+  incremental_mode?: string
+  watermark_column?: string
+  last_watermark?: string
+  schedule_enabled?: boolean
+  schedule_interval_minutes?: number
+  last_schedule_run?: string
 }
 
 export const oracleConnectionApi = {
@@ -116,6 +123,12 @@ export const migrationTaskApi = {
   switchDatabase: (id: number, data: { postgres_database: string }) => 
     apiClient.post(`/api/tasks/${id}/switch_database/`, data),
   createValidated: (data: MigrationTask) => apiClient.post('/api/create-task/', data),
+  /** 结构化任务日志分页，cursor 为上一页最后一条 id */
+  logs: (id: number, params?: { page_size?: number; cursor?: string }) =>
+    apiClient.get<{ status: string; results: { id: number; level: string; message: string; created_at: string }[]; next_cursor: string | null; task_id: number }>(
+      `/api/tasks/${id}/logs/`,
+      { params: params || {} },
+    ),
 }
 
 export const databaseApi = {

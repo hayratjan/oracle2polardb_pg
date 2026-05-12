@@ -1,5 +1,14 @@
 from django.contrib import admin
-from .models import OracleConnection, PostgresConnection, MigrationTask
+from .models import OracleConnection, PostgresConnection, MigrationTask, MigrationTaskLog
+
+
+@admin.register(MigrationTaskLog)
+class MigrationTaskLogAdmin(admin.ModelAdmin):
+    list_display = ('id', 'task', 'level', 'created_at')
+    list_filter = ('level', 'created_at')
+    search_fields = ('message',)
+    raw_id_fields = ('task',)
+
 
 @admin.register(OracleConnection)
 class OracleConnectionAdmin(admin.ModelAdmin):
