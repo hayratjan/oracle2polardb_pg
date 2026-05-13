@@ -838,9 +838,49 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
     return True, total_rows
 
 
+def _parse_task_source_object_names(task):
+    """
+    解析「表」类任务要迁移的源对象名列表：优先 source_objects（逗号/中文逗号分隔），否则使用 source_object。
+    """
+    raw = (getattr(task, "source_objects", None) or "").strip()
+    names = []
+    if raw:
+        normalized = raw.replace("，", ",")
+        for chunk in normalized.split(","):
+            s = chunk.strip()
+            if s:
+                names.append(s)
+    if not names:
+        one = (getattr(task, "source_object", None) or "").strip()
+        if one:
+            names.append(one)
+    return names
+
+
+def _update_task_last_watermark_max(task, oracle_cursor, log, oracle_table_name):
+    """按水位列增量：根据指定源表刷新任务上的 last_watermark（Oracle MAX）。"""
+    wm_col = (getattr(task, "watermark_column", None) or "").strip()
+    if not wm_col:
+        return
+    try:
+        safe_wm = _safe_oracle_identifier(wm_col)
+        oracle_cursor.execute(
+            f"SELECT MAX({safe_wm}) FROM {task.source_schema}.{oracle_table_name}"
+        )
+        mx = oracle_cursor.fetchone()[0]
+        if mx is not None:
+            task.last_watermark = str(mx)
+            task.save(update_fields=["last_watermark"])
+            log.append(f"表 {oracle_table_name} 已更新水位 last_watermark={task.last_watermark}")
+    except Exception as wm_err:
+        log.append(f"表 {oracle_table_name} 更新水位失败（可忽略）: {wm_err}")
+
+
 def migrate_table(task_id, postgres_database=None):
-    """迁移表结构和数据（分批读取并实时更新进度，适用于百万级大表）"""
+    """迁移表结构和数据（分批读取；支持 source_objects 多表顺序迁移，与「所有表」任务类似的进度展示）。"""
     task = get_object_or_404(MigrationTask, pk=task_id)
+    table_names = _parse_task_source_object_names(task)
+
     task.status = 'running'
     task.started_at = timezone.now()
     task.progress = 0
@@ -851,6 +891,18 @@ def migrate_table(task_id, postgres_database=None):
     if postgres_database:
         log.append(f"目标PostgreSQL数据库: {postgres_database}")
 
+    if not table_names:
+        task.status = 'failed'
+        task.log = "未配置源表名：请在创建任务时选择表，或填写 source_object / source_objects。"
+        task.completed_at = timezone.now()
+        task.save()
+        return
+
+    oracle_conn = None
+    oracle_cursor = None
+    pg_conn = None
+    pg_cursor = None
+
     try:
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
@@ -860,11 +912,71 @@ def migrate_table(task_id, postgres_database=None):
         log.append(f"已连接到PostgreSQL数据库: {pg_cursor.fetchone()[0]}")
 
         imode = getattr(task, 'incremental_mode', 'none') or 'none'
+        total_tables = len(table_names)
+
         if imode == 'pk_mirror':
             from .incremental_sync import run_table_pk_mirror_flow
 
             log.append("增量模式: 主键对齐（Oracle 为权威源，PolarDB 补插缺失行、删除多余行）")
-            run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log)
+            if total_tables > 1:
+                log.append(f"主键对齐批量：共 {total_tables} 张表，将依次处理。")
+            failed_tables = []
+            first_table = table_names[0]
+            task.progress = 0.0
+            task.view_progress = {
+                'current': 0,
+                'total': total_tables,
+                'current_table': first_table,
+                'failed_count': 0,
+            }
+            task.log = '\n'.join(log)
+            task.save(update_fields=['progress', 'view_progress', 'log'])
+
+            for idx, tn in enumerate(table_names):
+                task.refresh_from_db()
+                if task.cancel_requested:
+                    log.append(f"用户取消，已处理 {idx}/{total_tables} 张表（主键对齐）")
+                    task.status = 'partial'
+                    break
+                task.view_progress = {
+                    'current_table': tn,
+                    'current': idx,
+                    'total': total_tables,
+                    'failed_count': len(failed_tables),
+                }
+                task.save(update_fields=['view_progress'])
+                try:
+                    run_table_pk_mirror_flow(
+                        task, oracle_cursor, pg_conn, pg_cursor, log, source_table_name=tn
+                    )
+                except Exception as pk_err:
+                    err_msg = str(pk_err)
+                    log.append(f"表 {tn} 主键对齐失败: {err_msg}")
+                    failed_tables.append((tn, err_msg))
+                done = idx + 1
+                task.progress = min(100.0, (done / total_tables) * 100)
+                task.view_progress = {
+                    'current_table': tn,
+                    'current': done,
+                    'total': total_tables,
+                    'failed_count': len(failed_tables),
+                }
+                task.log = '\n'.join(log)
+                task.save(update_fields=['progress', 'view_progress', 'log'])
+
+            if task.cancel_requested:
+                pass
+            elif failed_tables:
+                task.status = 'partial'
+                log.append(f"部分完成：主键对齐 {total_tables} 张表中失败 {len(failed_tables)} 张")
+                for tname, err in failed_tables:
+                    log.append(f"  - {tname}: {err}")
+            else:
+                task.status = 'completed'
+                task.progress = 100
+                if total_tables > 1:
+                    log.append(f"全部完成：主键对齐共 {total_tables} 张表")
+
         else:
             wm_col = (getattr(task, 'watermark_column', None) or '').strip()
             wm_after = getattr(task, 'last_watermark', None)
@@ -877,37 +989,99 @@ def migrate_table(task_id, postgres_database=None):
             if use_wm:
                 log.append(f"增量模式: 水位列 {wm_col}")
 
-            _migrate_single_table(
-                oracle_cursor, pg_conn, pg_cursor,
-                task.source_schema, task.target_schema, task.source_object,
-                task.conflict_strategy, log, task=task,
-                watermark_column=wm_col if use_wm else None,
-                watermark_min_exclusive=wm_after if use_wm else None,
-            )
+            failed_tables = []
+            if total_tables > 1:
+                log.append(f"批量迁移表：共 {total_tables} 张，按任务中的顺序依次迁移。")
+                task.progress = 0.0
+                task.view_progress = {
+                    'current': 0,
+                    'total': total_tables,
+                    'current_table': table_names[0],
+                    'failed_count': 0,
+                }
+                task.log = '\n'.join(log)
+                task.save(update_fields=['progress', 'view_progress', 'log'])
 
-        # 成功后刷新水位（全量首次跑也会写入 MAX）；主键对齐模式不使用水位列
-        if imode == 'timestamp' and (getattr(task, 'watermark_column', None) or '').strip():
-            wm_col = (task.watermark_column or '').strip()
-            try:
-                safe_wm = _safe_oracle_identifier(wm_col)
-                oracle_cursor.execute(
-                    f"SELECT MAX({safe_wm}) FROM {task.source_schema}.{task.source_object}"
-                )
-                mx = oracle_cursor.fetchone()[0]
-                if mx is not None:
-                    task.last_watermark = str(mx)
-                    task.save(update_fields=['last_watermark'])
-                    log.append(f"已更新水位 last_watermark={task.last_watermark}")
-            except Exception as wm_err:
-                log.append(f"更新水位失败（可忽略）: {wm_err}")
+            for idx, table_name in enumerate(table_names):
+                task.refresh_from_db()
+                if task.cancel_requested:
+                    log.append(f"用户取消，已迁移 {idx}/{total_tables} 张表")
+                    task.status = 'partial'
+                    break
+                if total_tables > 1:
+                    task.view_progress = {
+                        'current_table': table_name,
+                        'current': idx,
+                        'total': total_tables,
+                        'failed_count': len(failed_tables),
+                    }
+                    task.save(update_fields=['view_progress'])
+                try:
+                    ctx = None
+                    if total_tables > 1:
+                        ctx = {
+                            'total_tables': total_tables,
+                            'table_index': idx,
+                            'failed_count': len(failed_tables),
+                        }
+                    _migrate_single_table(
+                        oracle_cursor, pg_conn, pg_cursor,
+                        task.source_schema, task.target_schema, table_name,
+                        task.conflict_strategy, log, task=task,
+                        all_tables_context=ctx,
+                        watermark_column=wm_col if use_wm else None,
+                        watermark_min_exclusive=wm_after if use_wm else None,
+                    )
+                    if use_wm:
+                        _update_task_last_watermark_max(task, oracle_cursor, log, table_name)
+                except Exception as table_err:
+                    err_msg = str(table_err)
+                    log.append(f"表 {table_name} 迁移失败: {err_msg}")
+                    log.append(traceback.format_exc())
+                    failed_tables.append((table_name, err_msg))
 
-        oracle_cursor.close()
-        oracle_conn.close()
-        pg_cursor.close()
-        pg_conn.close()
+                if total_tables > 1:
+                    done = idx + 1
+                    task.progress = min(100.0, (done / total_tables) * 100)
+                    task.view_progress = {
+                        'current_table': table_name,
+                        'current': done,
+                        'total': total_tables,
+                        'failed_count': len(failed_tables),
+                    }
+                    task.log = '\n'.join(log)
+                    task.save(update_fields=['progress', 'view_progress', 'log'])
 
-        task.status = 'completed'
-        task.progress = 100
+            if task.cancel_requested:
+                pass
+            elif total_tables > 1:
+                if failed_tables:
+                    task.status = 'partial'
+                    log.append(f"部分完成：共 {total_tables} 张表，失败 {len(failed_tables)} 张")
+                    for tname, err in failed_tables:
+                        log.append(f"  - {tname}: {err}")
+                else:
+                    task.status = 'completed'
+                    task.progress = 100
+                    log.append(f"全部完成：共迁移 {total_tables} 张表")
+            else:
+                if failed_tables:
+                    task.status = 'failed'
+                else:
+                    task.status = 'completed'
+                    task.progress = 100
+
+        if oracle_cursor:
+            oracle_cursor.close()
+        if oracle_conn:
+            oracle_conn.close()
+        if pg_cursor:
+            pg_cursor.close()
+        if pg_conn:
+            pg_conn.close()
+
+        if task.status == 'completed':
+            task.progress = 100
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
@@ -915,16 +1089,16 @@ def migrate_table(task_id, postgres_database=None):
     except Exception as e:
         error_msg = str(e)
         trace = traceback.format_exc()
-        log.append(f"处理表 {task.source_object} 时发生错误: {error_msg}")
+        log.append(f"迁移任务发生错误: {error_msg}")
         log.append(f"详细错误: {trace}")
         try:
-            if 'oracle_cursor' in locals() and oracle_cursor:
+            if oracle_cursor:
                 oracle_cursor.close()
-            if 'oracle_conn' in locals() and oracle_conn:
+            if oracle_conn:
                 oracle_conn.close()
-            if 'pg_cursor' in locals() and pg_cursor:
+            if pg_cursor:
                 pg_cursor.close()
-            if 'pg_conn' in locals() and pg_conn:
+            if pg_conn:
                 pg_conn.close()
         except Exception as close_err:
             log.append(f"关闭数据库连接时出错: {str(close_err)}")

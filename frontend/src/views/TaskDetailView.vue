@@ -117,7 +117,15 @@
                   </label>
                   <div class="info-value">
                     <template v-if="task.source_objects && task.source_objects.trim()">
-                      <span v-for="(obj, i) in sourceObjectsList" :key="i">{{ obj }}{{ i < sourceObjectsList.length - 1 ? '、' : '' }}</span>
+                      <div v-if="sourceObjectsList.length > sourceListInlineMax" class="source-objects-compact">
+                        <div class="text-muted small mb-1">
+                          共 {{ sourceObjectsList.length }} 个对象（列表可滚动，避免一次渲染数千行顿卡）
+                        </div>
+                        <pre class="source-objects-monolist">{{ sourceObjectsMonolist }}</pre>
+                      </div>
+                      <template v-else>
+                        <span v-for="(obj, i) in sourceObjectsList" :key="i">{{ obj }}{{ i < sourceObjectsList.length - 1 ? '、' : '' }}</span>
+                      </template>
                     </template>
                     <template v-else>{{ task.source_object || '-' }}</template>
                   </div>
@@ -176,7 +184,7 @@
                   </div>
                   <span class="progress-text">{{ task.progress.toFixed(1) }}%</span>
                 </div>
-                <!-- 所有表任务：当前任务内顺序迁移，显示第 x/y 张表、当前表名 -->
+                <!-- 多表批量或「所有表」：view_progress 为 { current, total, current_table, failed_count } -->
                 <div v-if="allTablesProgress" class="all-tables-progress mt-3 p-3 rounded bg-light">
                   <div class="d-flex align-items-center mb-1">
                     <i class="bi bi-collection me-2 text-primary"></i>
@@ -305,6 +313,8 @@ const selectedDatabase = ref('')
 let statusInterval: number | null = null
 
 // 源对象列表（表/视图）：来自 source_objects 或 source_object
+const sourceListInlineMax = 40
+
 const sourceObjectsList = computed(() => {
   if (!task.value) return []
   const so = task.value.source_objects?.trim()
@@ -312,6 +322,9 @@ const sourceObjectsList = computed(() => {
   if (task.value.source_object?.trim()) return [task.value.source_object.trim()]
   return []
 })
+
+/** 大量表名时用换行拼接，配合 pre 滚动，比数千个 span 轻量 */
+const sourceObjectsMonolist = computed(() => sourceObjectsList.value.join('\n'))
 
 // 「所有表」任务进度：view_progress 为 { current, total, current_table, failed_count } 时使用
 const ALL_TABLES_KEYS = ['current', 'total', 'current_table', 'failed_count']
@@ -635,6 +648,21 @@ onUnmounted(() => {
   background: var(--background);
   border-radius: 0.5rem;
   border-left: 3px solid var(--primary);
+}
+
+/* 任务详情：大量源表名可滚动展示 */
+.source-objects-compact .source-objects-monolist {
+  max-height: 14rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  white-space: pre;
+  word-break: break-all;
+  background: var(--background);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 0.35rem;
 }
 
 .status-badge {

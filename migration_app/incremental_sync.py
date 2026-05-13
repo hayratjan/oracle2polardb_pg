@@ -75,15 +75,20 @@ def fetch_oracle_pk_columns(oracle_cursor, owner: str, table_name: str) -> List[
     return [_safe_oracle_ident(c) for c in rows]
 
 
-def run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log) -> None:
+def run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log, source_table_name=None) -> None:
     """
     主键对齐同步入口：目标表不存在时先走全量建表+导数；已存在则只做主键差集增删。
+
+    :param source_table_name: 可选，指定当前处理的 Oracle 表名；多表批量任务时传入，避免改写 task.source_object（
+        否则 _migrate_single_table 内 refresh_from_db 会还原库中的单表字段）。
     """
     from .views import _migrate_single_table
 
     source_schema = task.source_schema
     target_schema = task.target_schema
-    table_name = task.source_object
+    table_name = (source_table_name or task.source_object or "").strip()
+    if not table_name:
+        raise ValueError("主键对齐模式需要有效的源表名")
     pg_table = table_name.lower()
 
     pg_cursor.execute(
