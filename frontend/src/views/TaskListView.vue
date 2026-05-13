@@ -638,6 +638,6 @@ onMounted(() => {
 }
 
 .table tbody tr:hover .task-name-link {
-  color: #764ba2;
+  color: var(--link-hover);
 }
 </style>
