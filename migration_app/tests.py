@@ -132,3 +132,16 @@ class DatabaseObjectsViewToSqliteAPITest(TestCase):
             self.assertIn('objects', data)
             if data.get('status') == 'success':
                 self.assertIsInstance(data['objects'], list)
+
+
+class PgIdentifiersTest(TestCase):
+    """PostgreSQL 列名引号，避免 ISNULL 等保留字建表失败。"""
+
+    def test_build_column_definition_isnull(self):
+        from migration_app.pg_identifiers import build_pg_column_definition, quote_identifier
+
+        self.assertEqual(quote_identifier('isnull'), '"isnull"')
+        ddl = build_pg_column_definition('ISNULL', 'SMALLINT', 'Y', id_case='lower')
+        self.assertIn('"isnull"', ddl)
+        self.assertIn('SMALLINT', ddl)
+        self.assertNotIn('    ISNULL SMALLINT', ddl)

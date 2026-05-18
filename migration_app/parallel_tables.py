@@ -31,11 +31,10 @@ def _migrate_one_table_job(
     在线程中迁移单张表（独立连接，不写 task 进度，避免并发写库冲突）。
     返回 {table, ok, error, log_lines, rows}。
     """
-    from .views import (
-        _migrate_single_table,
-        get_oracle_connection,
-        get_postgres_connection,
-    )
+    # 热重载 views，避免长驻进程仍执行未加引号列名的旧建表逻辑
+    import importlib
+    from . import views as views_mod
+    importlib.reload(views_mod)
 
     close_old_connections()
     table_log: List[str] = []
@@ -45,11 +44,11 @@ def _migrate_one_table_job(
     pg_cursor = None
     try:
         table_log.append(f"【并行】开始迁移表 {table_name}")
-        oracle_conn = get_oracle_connection(oracle_connection_id)
+        oracle_conn = views_mod.get_oracle_connection(oracle_connection_id)
         oracle_cursor = oracle_conn.cursor()
-        pg_conn = get_postgres_connection(postgres_connection_id, postgres_database)
+        pg_conn = views_mod.get_postgres_connection(postgres_connection_id, postgres_database)
         pg_cursor = pg_conn.cursor()
-        _migrate_single_table(
+        views_mod._migrate_single_table(
             oracle_cursor,
             pg_conn,
             pg_cursor,

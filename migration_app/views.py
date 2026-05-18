@@ -19,6 +19,12 @@ from .resume import (
     normalize_view_progress,
 )
 from .oracle_row_adapter import adapt_oracle_rows
+from .pg_identifiers import (
+    apply_identifier_case,
+    build_pg_column_definition,
+    build_qualified_table_name,
+    quote_identifier,
+)
 import cx_Oracle
 import psycopg2
 import logging
@@ -745,19 +751,21 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
             col_name, data_type, data_length, data_precision, data_scale, nullable = (
                 column[0], column[1], column[2], column[3], column[4], column[5]
             )
-            pg_col = apply_identifier_case(col_name, id_case)
             pg_type = convert_oracle_to_pg_type(data_type, data_length, data_precision, data_scale)
             if pg_type.startswith('VARCHAR('):
                 match = re.search(r'VARCHAR\((\d+)\)', pg_type)
                 if match and int(match.group(1)) < 1:
                     pg_type = 'VARCHAR(255)'
                     log_list.append(f"警告: 列 {col_name} 的 VARCHAR 长度为0，已调整为 VARCHAR(255)")
-            col_parts = [quote_identifier(pg_col), pg_type]
-            if nullable == 'N':
-                col_parts.append('NOT NULL')
-            column_definitions.append('    ' + ' '.join(col_parts))
+            column_definitions.append(
+                build_pg_column_definition(col_name, pg_type, nullable, id_case=id_case)
+            )
         create_table_sql += ",\n".join(column_definitions) + "\n)"
-        pg_cursor.execute(create_table_sql)
+        try:
+            pg_cursor.execute(create_table_sql)
+        except Exception as create_err:
+            log_list.append(f"建表 SQL 失败:\n{create_table_sql}")
+            raise create_err
         pg_conn.commit()
         log_list.append(f"成功创建表 {target_schema}.{table_name}")
 
@@ -1307,27 +1315,6 @@ def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None
         # 对于未知类型，记录警告并返回TEXT
         logger.warning(f"未知的Oracle数据类型: {oracle_type}，将使用TEXT代替")
         return "TEXT"
-
-def apply_identifier_case(name, case_option):
-    """根据任务配置调整标识符大小写"""
-    if not name:
-        return name
-    if case_option == 'lower':
-        return name.lower()
-    if case_option == 'upper':
-        return name.upper()
-    return name
-
-def quote_identifier(name):
-    """对标识符进行双引号转义"""
-    if name is None:
-        return '""'
-    safe = str(name).replace('"', '""')
-    return f'"{safe}"'
-
-def build_qualified_table_name(schema, table):
-    """返回带双引号的schema.table格式"""
-    return f"{quote_identifier(schema)}.{quote_identifier(table)}"
 
 def convert_oracle_to_sqlite_type(oracle_type, data_length=None, data_precision=None, data_scale=None):
     """将Oracle数据类型转换为SQLite数据类型"""
