@@ -116,7 +116,9 @@ export const migrationTaskApi = {
   create: (data: MigrationTask) => apiClient.post('/api/tasks/', data),
   update: (id: number, data: MigrationTask) => apiClient.put(`/api/tasks/${id}/`, data),
   delete: (id: number) => apiClient.delete(`/api/tasks/${id}/`),
-  start: (id: number) => apiClient.post(`/api/tasks/${id}/start/`),
+  /** 启动任务；resume=true 时断点续传（跳过已完成表） */
+  start: (id: number, data?: { resume?: boolean; conflict_strategy?: string; postgres_database?: string }) =>
+    apiClient.post(`/api/tasks/${id}/start/`, data ?? {}),
   cancel: (id: number) => apiClient.post(`/api/tasks/${id}/cancel/`),
   status: (id: number) => apiClient.get(`/api/tasks/${id}/status/`),
   /** 轻量状态轮询（不返回 log），用于任务执行中刷新进度，减少响应体积 */
@@ -131,6 +133,79 @@ export const migrationTaskApi = {
       `/api/tasks/${id}/logs/`,
       { params: params || {} },
     ),
+  /** 实时任务监控聚合数据 */
+  monitor: (params?: { task_limit?: number; log_limit?: number; compare_limit?: number }) =>
+    apiClient.get<TaskMonitorResponse>('/api/tasks/monitor/', { params: params || {} }),
+}
+
+/** 主键对齐对比快照 */
+export interface CompareSnapshot {
+  task_id: number
+  task_name: string
+  source_object?: string
+  source_schema?: string
+  target_schema?: string
+  incremental_mode?: string
+  schedule_enabled?: boolean
+  last_schedule_run?: string | null
+  status?: string
+  source_rows?: number
+  target_rows?: number
+  row_diff?: number
+  to_delete?: number
+  to_insert?: number
+  pk_columns?: string
+  is_consistent?: boolean
+  summary_line?: string
+}
+
+export interface TaskMonitorItem {
+  id: number
+  name: string
+  task_type: string
+  status: string
+  progress: number
+  source_db: string
+  target_db: string
+  incremental_mode?: string
+  schedule_enabled?: boolean
+  schedule_interval_minutes?: number
+  last_schedule_run?: string | null
+  cancel_requested?: boolean
+  created_at?: string
+  started_at?: string
+  completed_at?: string
+  view_progress?: Record<string, unknown>
+  log_tail?: string
+  compare?: CompareSnapshot
+}
+
+export interface TaskMonitorLogEntry {
+  id: number
+  task_id: number
+  task_name: string
+  level: string
+  message: string
+  created_at: string
+}
+
+export interface TaskMonitorResponse {
+  status: string
+  server_time: string
+  summary: {
+    total: number
+    pending: number
+    running: number
+    completed: number
+    failed: number
+    partial: number
+    canceled: number
+  }
+  running_tasks: TaskMonitorItem[]
+  tasks: TaskMonitorItem[]
+  compare_snapshots: CompareSnapshot[]
+  recent_logs: TaskMonitorLogEntry[]
+  recent_operations: TaskMonitorLogEntry[]
 }
 
 export const databaseApi = {

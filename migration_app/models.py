@@ -83,6 +83,7 @@ class MigrationTask(models.Model):
         ('failed', '失败'),
         ('partial', '部分完成'),
         ('canceled', '已取消'),
+        ('aborted', '异常停止'),
     ]
 
     CONFLICT_STRATEGY_CHOICES = [

@@ -289,6 +289,7 @@ const getStatusBadgeClass = (status: string) => {
     failed: 'bg-danger',
     partial: 'bg-warning',
     canceled: 'bg-dark',
+    aborted: 'bg-danger',
   }
   return classes[status] || 'bg-secondary'
 }
@@ -301,6 +302,7 @@ const getStatusText = (status: string) => {
     failed: '失败',
     partial: '部分完成',
     canceled: '已取消',
+    aborted: '异常停止',
   }
   return texts[status] || status
 }

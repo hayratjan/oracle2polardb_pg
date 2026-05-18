@@ -4,6 +4,18 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.contrib import messages
 from .models import OracleConnection, PostgresConnection, MigrationTask
+from .batch_config import (
+    MIGRATION_COMMIT_EVERY_BATCHES,
+    MIGRATION_FETCH_BATCH_SIZE,
+    MIGRATION_PROGRESS_SAVE_ROWS,
+)
+from .resume import (
+    build_batch_view_progress,
+    filter_pending_tables,
+    get_completed_tables,
+    mark_table_completed,
+    normalize_view_progress,
+)
 import cx_Oracle
 import psycopg2
 import logging
@@ -607,21 +619,23 @@ def _topological_sort_tables_by_fk(oracle_cursor, owner: str, table_names):
     name_set = set(upper_list)
     orig_by_upper = {x.upper(): x for x in ordered_unique}
 
-    def sql_literal(ident: str) -> str:
-        return "'" + ident.replace("'", "''") + "'"
-
-    in_clause = ','.join(sql_literal(x) for x in upper_list)
-    query = f"""
+    # 不在 SQL 中使用 IN (表名列表)：Oracle 限制 IN 最多 1000 项（ORA-01795）
+    query = """
     SELECT DISTINCT c.table_name AS child_tab, pk.table_name AS parent_tab
     FROM all_constraints c
     JOIN all_constraints pk
       ON c.r_owner = pk.owner AND c.r_constraint_name = pk.constraint_name
     WHERE c.constraint_type = 'R'
       AND c.owner = :owner
-      AND c.table_name IN ({in_clause})
     """
     oracle_cursor.execute(query, {'owner': owner.upper()})
-    rows = oracle_cursor.fetchall()
+    rows = [
+        (child_tab, parent_tab)
+        for child_tab, parent_tab in oracle_cursor.fetchall()
+        if child_tab and parent_tab
+        and child_tab.upper() in name_set
+        and parent_tab.upper() in name_set
+    ]
     from collections import defaultdict
     from heapq import heappush, heappop
 
@@ -654,6 +668,17 @@ def _topological_sort_tables_by_fk(oracle_cursor, owner: str, table_names):
     if remaining:
         result_upper.extend(sorted(remaining))
     return [orig_by_upper[u] for u in result_upper]
+
+
+def _persist_running_task_log(task, log_list, extra_update_fields=None):
+    """运行中将日志写回数据库，便于前端轮询展示分批进度。"""
+    if task is None:
+        return
+    task.log = '\n'.join(log_list)
+    fields = {'log'}
+    if extra_update_fields:
+        fields.update(extra_update_fields)
+    task.save(update_fields=list(fields))
 
 
 def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, target_schema, table_name,
@@ -754,8 +779,20 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
             )
         logger.warning(f"获取总行数失败: {count_err}，进度将按已迁移行数估算")
 
-    fetch_batch_size = 20000
-    commit_every_batches = 5
+    fetch_batch_size = MIGRATION_FETCH_BATCH_SIZE
+    commit_every_batches = MIGRATION_COMMIT_EVERY_BATCHES
+    if total_count > 0:
+        rows_per_commit = fetch_batch_size * commit_every_batches
+        log_list.append(
+            f"【开始迁移】{source_schema}.{table_name}，共 {total_count} 行，"
+            f"每批读取 {fetch_batch_size} 行，每 {commit_every_batches} 批提交一次"
+            f"（约 {rows_per_commit} 行/事务）"
+        )
+    else:
+        log_list.append(f"【开始迁移】{source_schema}.{table_name}，源表无数据行")
+    if task and all_tables_context:
+        _persist_running_task_log(task, log_list)
+
     oracle_cursor.arraysize = fetch_batch_size
     if wm_sql_fragment:
         oracle_cursor.execute(
@@ -772,7 +809,7 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
     total_rows = 0
     last_saved_pct = -1
     last_saved_rows = 0
-    progress_save_interval_rows = 50000
+    progress_save_interval_rows = MIGRATION_PROGRESS_SAVE_ROWS
     batches_since_commit = 0
 
     while True:
@@ -805,6 +842,13 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
                 total_tables = ctx.get('total_tables')
                 table_index = ctx.get('table_index', 0)
                 failed_count = ctx.get('failed_count', 0)
+                if total_count > 0:
+                    log_list.append(
+                        f"【分批】表 {table_name} 已成功迁移 {total_rows}/{total_count} 行"
+                        f"（{progress_pct:.1f}%）"
+                    )
+                else:
+                    log_list.append(f"【分批】表 {table_name} 已迁移 {total_rows} 行")
                 if total_tables and total_tables > 0:
                     # 「所有表」任务：保留 current/current_table/total/failed_count，并合并当前表明细；同时更新总进度
                     task.view_progress = {
@@ -817,12 +861,14 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
                     # 总进度 = (已完成表数 + 当前表内进度) / 总表数 * 100
                     overall_pct = (table_index + progress_pct / 100.0) / total_tables * 100.0
                     task.progress = min(100.0, overall_pct)
-                    task.save(update_fields=['view_progress', 'progress'])
+                    _persist_running_task_log(
+                        task, log_list, extra_update_fields={'view_progress', 'progress'}
+                    )
                 else:
                     task.view_progress = {
                         table_name: {'progress': progress_pct, 'total_rows': total_count, 'migrated_rows': total_rows}
                     }
-                    task.save(update_fields=['view_progress'])
+                    _persist_running_task_log(task, log_list, extra_update_fields={'view_progress'})
                 last_saved_pct = int(progress_pct)
                 last_saved_rows = total_rows
             except Exception as save_err:
@@ -832,9 +878,11 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
         pg_conn.commit()
 
     if total_rows == 0:
-        log_list.append(f"表 {source_schema}.{table_name} 无数据")
+        log_list.append(f"【完成】表 {source_schema}.{table_name} 无数据，跳过数据导入")
     else:
-        log_list.append(f"表 {table_name} 导入 {total_rows} 行到 {target_schema}.{table_name}")
+        log_list.append(
+            f"【完成】表 {table_name} 迁移成功，共导入 {total_rows} 行到 {target_schema}.{table_name}"
+        )
     return True, total_rows
 
 
@@ -881,13 +929,25 @@ def migrate_table(task_id, postgres_database=None):
     task = get_object_or_404(MigrationTask, pk=task_id)
     table_names = _parse_task_source_object_names(task)
 
+    vp_init = normalize_view_progress(task.view_progress)
+    resume_mode = bool(vp_init.pop('resume', False))
+    completed_set = get_completed_tables(task) if resume_mode else set()
+
     task.status = 'running'
-    task.started_at = timezone.now()
-    task.progress = 0
-    task.view_progress = {}
+    if not task.started_at:
+        task.started_at = timezone.now()
+    if resume_mode:
+        if not task.progress:
+            task.progress = min(100.0, (len(completed_set) / max(len(table_names), 1)) * 100)
+    else:
+        task.progress = 0
+        task.view_progress = {}
     task.save()
 
-    log = []
+    if resume_mode:
+        log = [ln for ln in (task.log or '').split('\n') if ln is not None]
+    else:
+        log = []
     if postgres_database:
         log.append(f"目标PostgreSQL数据库: {postgres_database}")
 
@@ -912,7 +972,39 @@ def migrate_table(task_id, postgres_database=None):
         log.append(f"已连接到PostgreSQL数据库: {pg_cursor.fetchone()[0]}")
 
         imode = getattr(task, 'incremental_mode', 'none') or 'none'
-        total_tables = len(table_names)
+        all_table_names = list(table_names)
+        if resume_mode and len(all_table_names) > 1:
+            table_names = filter_pending_tables(all_table_names, completed_set)
+            log.append(
+                f"【继续迁移】共 {len(all_table_names)} 张表，已完成 {len(completed_set)} 张，"
+                f"剩余 {len(table_names)} 张"
+            )
+        total_tables = len(all_table_names)
+        base_done = len(completed_set) if resume_mode else 0
+
+        if resume_mode and not table_names:
+            log.append("【继续迁移】所选表均已迁移完成")
+            task.status = 'completed'
+            task.progress = 100.0
+            task.view_progress = build_batch_view_progress(
+                current_table='',
+                current_index=total_tables,
+                total_tables=total_tables,
+                failed_count=0,
+                completed_tables=sorted(completed_set),
+            )
+            task.log = '\n'.join(log)
+            task.completed_at = timezone.now()
+            task.save()
+            if oracle_cursor:
+                oracle_cursor.close()
+            if oracle_conn:
+                oracle_conn.close()
+            if pg_cursor:
+                pg_cursor.close()
+            if pg_conn:
+                pg_conn.close()
+            return
 
         if imode == 'pk_mirror':
             from .incremental_sync import run_table_pk_mirror_flow
@@ -932,35 +1024,39 @@ def migrate_table(task_id, postgres_database=None):
             task.log = '\n'.join(log)
             task.save(update_fields=['progress', 'view_progress', 'log'])
 
-            for idx, tn in enumerate(table_names):
+            for loop_idx, tn in enumerate(table_names):
+                idx = base_done + loop_idx
                 task.refresh_from_db()
                 if task.cancel_requested:
                     log.append(f"用户取消，已处理 {idx}/{total_tables} 张表（主键对齐）")
                     task.status = 'partial'
                     break
-                task.view_progress = {
-                    'current_table': tn,
-                    'current': idx,
-                    'total': total_tables,
-                    'failed_count': len(failed_tables),
-                }
+                task.view_progress = build_batch_view_progress(
+                    current_table=tn,
+                    current_index=idx,
+                    total_tables=total_tables,
+                    failed_count=len(failed_tables),
+                    completed_tables=sorted(completed_set),
+                )
                 task.save(update_fields=['view_progress'])
                 try:
                     run_table_pk_mirror_flow(
                         task, oracle_cursor, pg_conn, pg_cursor, log, source_table_name=tn
                     )
+                    mark_table_completed(completed_set, tn)
                 except Exception as pk_err:
                     err_msg = str(pk_err)
                     log.append(f"表 {tn} 主键对齐失败: {err_msg}")
                     failed_tables.append((tn, err_msg))
                 done = idx + 1
                 task.progress = min(100.0, (done / total_tables) * 100)
-                task.view_progress = {
-                    'current_table': tn,
-                    'current': done,
-                    'total': total_tables,
-                    'failed_count': len(failed_tables),
-                }
+                task.view_progress = build_batch_view_progress(
+                    current_table=tn,
+                    current_index=done,
+                    total_tables=total_tables,
+                    failed_count=len(failed_tables),
+                    completed_tables=sorted(completed_set),
+                )
                 task.log = '\n'.join(log)
                 task.save(update_fields=['progress', 'view_progress', 'log'])
 
@@ -990,32 +1086,36 @@ def migrate_table(task_id, postgres_database=None):
                 log.append(f"增量模式: 水位列 {wm_col}")
 
             failed_tables = []
-            if total_tables > 1:
+            if total_tables > 1 and not resume_mode:
                 log.append(f"批量迁移表：共 {total_tables} 张，按任务中的顺序依次迁移。")
                 task.progress = 0.0
-                task.view_progress = {
-                    'current': 0,
-                    'total': total_tables,
-                    'current_table': table_names[0],
-                    'failed_count': 0,
-                }
+                task.view_progress = build_batch_view_progress(
+                    current_table=table_names[0] if table_names else '',
+                    current_index=base_done,
+                    total_tables=total_tables,
+                    failed_count=0,
+                    completed_tables=sorted(completed_set),
+                )
                 task.log = '\n'.join(log)
                 task.save(update_fields=['progress', 'view_progress', 'log'])
 
-            for idx, table_name in enumerate(table_names):
+            for loop_idx, table_name in enumerate(table_names):
+                idx = base_done + loop_idx
                 task.refresh_from_db()
                 if task.cancel_requested:
-                    log.append(f"用户取消，已迁移 {idx}/{total_tables} 张表")
+                    log.append(f"用户取消，已完成 {idx}/{total_tables} 张表")
                     task.status = 'partial'
                     break
                 if total_tables > 1:
-                    task.view_progress = {
-                        'current_table': table_name,
-                        'current': idx,
-                        'total': total_tables,
-                        'failed_count': len(failed_tables),
-                    }
-                    task.save(update_fields=['view_progress'])
+                    log.append(f"【开始】第 {idx + 1}/{total_tables} 张表: {table_name}")
+                    task.view_progress = build_batch_view_progress(
+                        current_table=table_name,
+                        current_index=idx,
+                        total_tables=total_tables,
+                        failed_count=len(failed_tables),
+                        completed_tables=sorted(completed_set),
+                    )
+                    _persist_running_task_log(task, log, extra_update_fields={'view_progress'})
                 try:
                     ctx = None
                     if total_tables > 1:
@@ -1034,6 +1134,8 @@ def migrate_table(task_id, postgres_database=None):
                     )
                     if use_wm:
                         _update_task_last_watermark_max(task, oracle_cursor, log, table_name)
+                    if total_tables > 1:
+                        mark_table_completed(completed_set, table_name)
                 except Exception as table_err:
                     err_msg = str(table_err)
                     log.append(f"表 {table_name} 迁移失败: {err_msg}")
@@ -1043,12 +1145,13 @@ def migrate_table(task_id, postgres_database=None):
                 if total_tables > 1:
                     done = idx + 1
                     task.progress = min(100.0, (done / total_tables) * 100)
-                    task.view_progress = {
-                        'current_table': table_name,
-                        'current': done,
-                        'total': total_tables,
-                        'failed_count': len(failed_tables),
-                    }
+                    task.view_progress = build_batch_view_progress(
+                        current_table=table_name,
+                        current_index=done,
+                        total_tables=total_tables,
+                        failed_count=len(failed_tables),
+                        completed_tables=sorted(completed_set),
+                    )
                     task.log = '\n'.join(log)
                     task.save(update_fields=['progress', 'view_progress', 'log'])
 
@@ -1082,6 +1185,11 @@ def migrate_table(task_id, postgres_database=None):
 
         if task.status == 'completed':
             task.progress = 100
+        final_vp = normalize_view_progress(task.view_progress)
+        final_vp.pop('resume', None)
+        if total_tables > 1:
+            final_vp['completed_tables'] = sorted(completed_set)
+        task.view_progress = final_vp
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
@@ -1103,6 +1211,14 @@ def migrate_table(task_id, postgres_database=None):
         except Exception as close_err:
             log.append(f"关闭数据库连接时出错: {str(close_err)}")
         task.status = 'failed'
+        try:
+            final_vp = normalize_view_progress(task.view_progress)
+            final_vp.pop('resume', None)
+            if total_tables > 1:
+                final_vp['completed_tables'] = sorted(completed_set)
+            task.view_progress = final_vp
+        except NameError:
+            pass
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
@@ -1249,13 +1365,21 @@ def convert_oracle_to_pg_routine(oracle_routine_text):
 def migrate_all_tables(task_id, postgres_database=None):
     """迁移指定 schema 的所有表。在当前任务中依次迁移每张表，不创建子任务、不调用线程池，避免 interpreter shutdown 时 submit 报错。"""
     task = get_object_or_404(MigrationTask, pk=task_id)
-    
+
+    vp_init = normalize_view_progress(task.view_progress)
+    resume_mode = bool(vp_init.pop('resume', False))
+    completed_set = get_completed_tables(task) if resume_mode else set()
+
     # 更新任务状态
     task.status = 'running'
-    task.started_at = timezone.now()
+    if not task.started_at:
+        task.started_at = timezone.now()
     task.save()
-    
-    log = []
+
+    if resume_mode:
+        log = [ln for ln in (task.log or '').split('\n') if ln is not None]
+    else:
+        log = []
     log.append("【当前任务顺序迁移模式】不创建子任务，不使用线程池。")
     # 记录数据库信息
     if postgres_database:
@@ -1291,9 +1415,9 @@ def migrate_all_tables(task_id, postgres_database=None):
             sorted_names = raw_names
         if raw_names and [x.upper() for x in raw_names] != [x.upper() for x in sorted_names]:
             log.append("已根据外键依赖对表迁移顺序进行拓扑排序（父表优先）；存在环时剩余表按名字追加。")
-        tables = sorted_names
+        all_tables_sorted = sorted_names
 
-        if not tables:
+        if not all_tables_sorted:
             log.append(f"源schema '{task.source_schema}'中没有找到表")
             task.status = 'completed'
             task.log = '\n'.join(log)
@@ -1301,36 +1425,73 @@ def migrate_all_tables(task_id, postgres_database=None):
             task.save()
             return
 
-        total_tables = len(tables)
-        log.append(f"在源schema '{task.source_schema}'中找到 {total_tables} 个表，将在当前任务中依次迁移（不创建子任务）")
-        # 立即写入初始进度，便于前端在首张表迁移前就显示「第 0/N 张表」
-        first_table = tables[0] if tables else ""
-        task.progress = 0.0
-        task.view_progress = {
-            'current': 0,
-            'total': total_tables,
-            'current_table': first_table,
-            'failed_count': 0,
-        }
+        total_tables = len(all_tables_sorted)
+        base_done = len(completed_set)
+        if resume_mode:
+            tables = filter_pending_tables(all_tables_sorted, completed_set)
+            log.append(
+                f"【继续迁移】源 schema 共 {total_tables} 张表，已完成 {base_done} 张，"
+                f"剩余 {len(tables)} 张待迁移"
+            )
+            if not tables:
+                log.append("【继续迁移】所有表均已迁移完成")
+                task.status = 'completed'
+                task.progress = 100.0
+                task.view_progress = build_batch_view_progress(
+                    current_table='',
+                    current_index=total_tables,
+                    total_tables=total_tables,
+                    failed_count=0,
+                    completed_tables=sorted(completed_set),
+                )
+                task.log = '\n'.join(log)
+                task.completed_at = timezone.now()
+                task.save()
+                oracle_cursor.close()
+                oracle_conn.close()
+                pg_cursor.close()
+                pg_conn.close()
+                return
+        else:
+            tables = all_tables_sorted
+            completed_set = set()
+            base_done = 0
+            log.append(
+                f"在源schema '{task.source_schema}'中找到 {total_tables} 个表，"
+                f"将在当前任务中依次迁移（不创建子任务）"
+            )
+
+        first_table = tables[0] if tables else ''
+        if not resume_mode:
+            task.progress = 0.0
+        task.view_progress = build_batch_view_progress(
+            current_table=first_table,
+            current_index=base_done,
+            total_tables=total_tables,
+            failed_count=0,
+            completed_tables=sorted(completed_set),
+        )
         task.log = '\n'.join(log)
         task.save(update_fields=['progress', 'view_progress', 'log'])
 
         # 在当前任务中循环迁移每张表，不创建子任务
         failed_tables = []
-        for idx, table_name in enumerate(tables):
-            # 每张表开始前先更新「正在迁移：当前表名」，避免首张表耗时长时界面一直空白
-            task.view_progress = {
-                'current_table': table_name,
-                'current': idx,
-                'total': total_tables,
-                'failed_count': len(failed_tables),
-            }
-            task.save(update_fields=['view_progress'])
+        for loop_idx, table_name in enumerate(tables):
+            idx = base_done + loop_idx
+            log.append(f"【开始】第 {idx + 1}/{total_tables} 张表: {table_name}")
+            task.view_progress = build_batch_view_progress(
+                current_table=table_name,
+                current_index=idx,
+                total_tables=total_tables,
+                failed_count=len(failed_tables),
+                completed_tables=sorted(completed_set),
+            )
+            _persist_running_task_log(task, log, extra_update_fields={'view_progress'})
 
             # 支持用户取消
             task.refresh_from_db()
             if task.cancel_requested:
-                log.append(f"用户取消，已迁移 {idx}/{total_tables} 张表")
+                log.append(f"用户取消，已完成 {idx}/{total_tables} 张表")
                 task.status = 'partial'
                 break
             try:
@@ -1344,20 +1505,21 @@ def migrate_all_tables(task_id, postgres_database=None):
                         'failed_count': len(failed_tables),
                     },
                 )
+                completed_list = mark_table_completed(completed_set, table_name)
             except Exception as table_err:
                 err_msg = str(table_err)
                 log.append(f"表 {table_name} 迁移失败: {err_msg}")
                 failed_tables.append((table_name, err_msg))
-                # 继续迁移下一张表，最后标记为部分完成
-            # 更新当前任务进度与视图进度（供前端展示）
+                completed_list = sorted(completed_set)
             done = idx + 1
             task.progress = min(100.0, (done / total_tables) * 100)
-            task.view_progress = {
-                'current_table': table_name,
-                'current': done,
-                'total': total_tables,
-                'failed_count': len(failed_tables),
-            }
+            task.view_progress = build_batch_view_progress(
+                current_table=table_name,
+                current_index=done,
+                total_tables=total_tables,
+                failed_count=len(failed_tables),
+                completed_tables=completed_list,
+            )
             task.log = '\n'.join(log)
             task.save(update_fields=['progress', 'view_progress', 'log'])
 
@@ -1378,18 +1540,25 @@ def migrate_all_tables(task_id, postgres_database=None):
         else:
             task.status = 'completed'
             log.append(f"全部完成：共迁移 {total_tables} 张表")
+        final_vp = normalize_view_progress(task.view_progress)
+        final_vp.pop('resume', None)
+        final_vp['completed_tables'] = sorted(completed_set)
+        task.view_progress = final_vp
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
-        
+
     except Exception as e:
         error_msg = str(e)
         trace = traceback.format_exc()
         log.append(f"错误: {error_msg}")
         log.append(f"详细错误: {trace}")
-        
-        # 更新任务状态
+
         task.status = 'failed'
+        final_vp = normalize_view_progress(task.view_progress)
+        final_vp.pop('resume', None)
+        final_vp['completed_tables'] = sorted(completed_set) if completed_set else final_vp.get('completed_tables', [])
+        task.view_progress = final_vp
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()

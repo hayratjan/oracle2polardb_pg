@@ -132,8 +132,12 @@
                               class="btn btn-sm btn-warning" title="取消">
                         <i class="bi bi-x-circle-fill" style="font-size: 14px;"></i>
                       </button>
-                      <button v-if="canRerun(task.status) && task.id" @click="startTask(task.id)" 
-                              class="btn btn-sm btn-primary" title="重新运行">
+                      <button v-if="canResume(task) && task.id" @click="resumeTask(task.id)" 
+                              class="btn btn-sm btn-success" title="继续迁移">
+                        <i class="bi bi-skip-forward-fill" style="font-size: 14px;"></i>
+                      </button>
+                      <button v-if="canRerun(task.status) && task.id" @click="restartTask(task.id)" 
+                              class="btn btn-sm btn-primary" title="从头重新运行">
                         <i class="bi bi-arrow-repeat" style="font-size: 14px;"></i>
                       </button>
                       <button v-if="task.id" @click="deleteTask(task.id)" class="btn btn-sm btn-danger" title="删除">
@@ -214,7 +218,7 @@ const isIndeterminate = computed(() => {
 })
 
 // 批量运行：仅当存在可运行任务时可用（pending 或可重跑）
-const canRerunStatus = (status: string) => ['failed', 'completed', 'partial', 'canceled'].includes(status)
+const canRerunStatus = (status: string) => ['failed', 'completed', 'partial', 'canceled', 'aborted'].includes(status)
 const batchStartDisabled = computed(() =>
   ![...selectedIds.value].some(id => {
     const t = tasks.value.find(x => x.id === id)
@@ -261,6 +265,7 @@ const getStatusBadgeClass = (status: string) => {
     failed: 'bg-danger',
     partial: 'bg-warning',
     canceled: 'bg-dark',
+    aborted: 'bg-danger',
   }
   return classes[status] || 'bg-secondary'
 }
@@ -273,6 +278,7 @@ const getProgressBarClass = (status: string) => {
     failed: 'bg-danger',
     partial: 'bg-warning',
     canceled: 'bg-dark',
+    aborted: 'bg-danger',
   }
   return classes[status] || 'bg-secondary'
 }
@@ -285,6 +291,7 @@ const getStatusText = (status: string) => {
     failed: '失败',
     partial: '部分完成',
     canceled: '已取消',
+    aborted: '异常停止',
   }
   return texts[status] || status
 }
@@ -392,15 +399,41 @@ async function batchDelete() {
 }
 
 const canRerun = (status: string) =>
-  ['failed', 'completed', 'partial', 'canceled'].includes(status)
+  ['failed', 'completed', 'partial', 'canceled', 'aborted'].includes(status)
+
+const canResume = (t: MigrationTask) =>
+  ['failed', 'partial', 'canceled', 'aborted'].includes(t.status) &&
+  (t.task_type === 'all_tables' || t.task_type === 'table')
 
 const startTask = async (id: number) => {
   if (!id) return
   try {
-    await migrationTaskApi.start(id)
+    await migrationTaskApi.start(id, { resume: false })
     await loadTasks(currentPage.value)
   } catch (error) {
     console.error('Failed to start task:', error)
+  }
+}
+
+const resumeTask = async (id: number) => {
+  if (!id) return
+  if (!confirm('从上次断点继续迁移？已成功的表将跳过。')) return
+  try {
+    await migrationTaskApi.start(id, { resume: true })
+    await loadTasks(currentPage.value)
+  } catch (error) {
+    console.error('Failed to resume task:', error)
+  }
+}
+
+const restartTask = async (id: number) => {
+  if (!id) return
+  if (!confirm('确定从头重新运行？将清空已完成记录。')) return
+  try {
+    await migrationTaskApi.start(id, { resume: false })
+    await loadTasks(currentPage.value)
+  } catch (error) {
+    console.error('Failed to restart task:', error)
   }
 }
 

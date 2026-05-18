@@ -24,6 +24,12 @@
               </router-link>
             </li>
             <li class="nav-item">
+              <router-link class="nav-link" to="/monitor">
+                <i class="bi bi-activity me-1"></i>
+                实时任务监控
+              </router-link>
+            </li>
+            <li class="nav-item">
               <router-link class="nav-link" to="/task/create">
                 <i class="bi bi-plus-circle me-1"></i>
                 创建任务

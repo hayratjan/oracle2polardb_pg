@@ -22,16 +22,22 @@
     </div>
     
     <div v-else-if="task">
+      <div v-if="task.status === 'aborted'" class="alert alert-danger d-flex align-items-start mb-4" role="alert">
+        <i class="bi bi-exclamation-octagon-fill me-2 flex-shrink-0" style="font-size: 1.25rem;"></i>
+        <div>
+          <strong>异常停止</strong>
+          <p class="mb-0 small mt-1">
+            迁移进程已中断，任务未正常结束。常见原因：服务重启、进程被终止、Worker 异常退出或开发服务器热重载。可查看下方日志后重新运行。
+          </p>
+        </div>
+      </div>
       <div class="row g-4">
-        <div class="col-lg-8">
-          <div class="card mb-4">
-            <div class="card-header">
-              <h5 class="mb-0">
-                <i class="bi bi-info-circle me-1" style="font-size: 20px;"></i>
-                {{ task.name }}
-              </h5>
-            </div>
-            <div class="card-body">
+        <div class="col-12">
+          <section class="task-detail-section mb-4">
+            <h5 class="section-title mb-3">
+              <i class="bi bi-info-circle me-1" style="font-size: 20px;"></i>
+              {{ task.name }}
+            </h5>
               <div class="info-grid">
                 <div class="info-item">
                   <label class="info-label">
@@ -194,8 +200,36 @@
                   <div v-if="allTablesProgress.current_table" class="text-muted small">
                     正在迁移：<code>{{ allTablesProgress.current_table }}</code>
                   </div>
+                  <div v-if="completedTablesCount > 0" class="text-success small mt-1">
+                    已完成 {{ completedTablesCount }} 张表（继续迁移时将跳过）
+                  </div>
                   <div v-if="allTablesProgress.failed_count != null && allTablesProgress.failed_count > 0" class="text-warning small mt-1">
                     已失败 {{ allTablesProgress.failed_count }} 张表
+                  </div>
+                  <!-- 当前正在迁移的表：行级进度条 -->
+                  <div v-if="currentTableProgress" class="current-table-progress mt-3 pt-3 border-top">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                      <span class="small fw-medium">
+                        <i class="bi bi-table me-1 text-primary"></i>当前表进度
+                      </span>
+                      <span class="view-progress-stats text-muted small">
+                        <template v-if="currentTableProgress.total_rows != null">
+                          已迁移 <strong>{{ formatNumber(currentTableProgress.migrated_rows) }}</strong>
+                          / {{ formatNumber(currentTableProgress.total_rows) }} 行
+                        </template>
+                        <template v-else>
+                          已迁移 <strong>{{ formatNumber(currentTableProgress.migrated_rows) }}</strong> 行
+                        </template>
+                        · {{ (currentTableProgress.progress ?? 0).toFixed(1) }}%
+                      </span>
+                    </div>
+                    <div class="progress thin">
+                      <div
+                        class="progress-bar progress-bar-striped progress-bar-animated"
+                        :class="getProgressBarClass(task.status)"
+                        :style="{ width: (currentTableProgress.progress ?? 0) + '%' }"
+                      ></div>
+                    </div>
                   </div>
                 </div>
                 <!-- 表/视图级进度：非「所有表」汇总格式时显示各对象 progress、total_rows、migrated_rows -->
@@ -235,7 +269,12 @@
                   <i class="bi bi-x-circle me-2" style="font-size: 18px;"></i>
                   取消任务
                 </button>
-                <button v-if="canRerun(task.status)" @click="startTask" 
+                <button v-if="canResume(task.status)" @click="resumeTask" 
+                        class="btn btn-sm btn-success flex-grow-1">
+                  <i class="bi bi-skip-forward-fill me-2" style="font-size: 18px;"></i>
+                  继续迁移
+                </button>
+                <button v-if="canRerun(task.status)" @click="restartTask" 
                         class="btn btn-sm btn-primary flex-grow-1">
                   <i class="bi bi-arrow-repeat me-2" style="font-size: 18px;"></i>
                   重新运行
@@ -249,49 +288,17 @@
                   删除任务
                 </button>
               </div>
-            </div>
-          </div>
+          </section>
           
-          <div class="card">
-            <div class="card-header">
-              <h5 class="mb-0">
-                <i class="bi bi-terminal me-1" style="font-size: 20px;"></i>
-                日志
-              </h5>
+          <section class="task-detail-section mb-4">
+            <h5 class="section-title mb-3">
+              <i class="bi bi-terminal me-1" style="font-size: 20px;"></i>
+              日志
+            </h5>
+            <div class="log-container">
+              <pre class="log-content">{{ task.log || '暂无日志' }}</pre>
             </div>
-            <div class="card-body">
-              <div class="log-container">
-                <pre class="log-content">{{ task.log || '暂无日志' }}</pre>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <div class="col-lg-4">
-          <div class="card">
-            <div class="card-header">
-              <h5 class="mb-0">
-                <i class="bi bi-gear me-1" style="font-size: 20px;"></i>
-                任务操作
-              </h5>
-            </div>
-            <div class="card-body">
-              <div class="mb-4">
-                <label class="form-label">
-                  <i class="bi bi-arrow-repeat me-1" style="font-size: 16px;"></i>
-                  切换目标数据库
-                </label>
-                <select v-model="selectedDatabase" class="form-select-sm mb-3">
-                  <option value="">请选择数据库</option>
-                  <option v-for="db in databases" :key="db" :value="db">{{ db }}</option>
-                </select>
-                <button @click="switchDatabase" class="btn btn-sm btn-primary w-100">
-                  <i class="bi bi-arrow-repeat me-1" style="font-size: 16px;"></i>
-                  确认切换
-                </button>
-              </div>
-            </div>
-          </div>
+          </section>
         </div>
       </div>
     </div>
@@ -299,18 +306,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { migrationTaskApi, databaseApi } from '@/api'
+import { migrationTaskApi } from '@/api'
 import type { MigrationTask } from '@/api'
 
 const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
 const task = ref<MigrationTask | null>(null)
-const databases = ref<string[]>([])
-const selectedDatabase = ref('')
-let statusInterval: number | null = null
+let statusInterval: ReturnType<typeof setInterval> | null = null
+/** 执行中任务自动刷新间隔（毫秒） */
+const POLL_INTERVAL_MS = 3000
 
 // 源对象列表（表/视图）：来自 source_objects 或 source_object
 const sourceListInlineMax = 40
@@ -327,7 +334,7 @@ const sourceObjectsList = computed(() => {
 const sourceObjectsMonolist = computed(() => sourceObjectsList.value.join('\n'))
 
 // 「所有表」任务进度：view_progress 为 { current, total, current_table, failed_count } 时使用
-const ALL_TABLES_KEYS = ['current', 'total', 'current_table', 'failed_count']
+const ALL_TABLES_KEYS = ['current', 'total', 'current_table', 'failed_count', 'completed_tables']
 const allTablesProgress = computed(() => {
   const vp = task.value?.view_progress
   if (vp == null || typeof vp !== 'object' || Array.isArray(vp)) return null
@@ -342,6 +349,42 @@ const allTablesProgress = computed(() => {
     }
   }
   return null
+})
+
+const completedTablesCount = computed(() => {
+  let vp = task.value?.view_progress
+  if (vp == null) return 0
+  if (typeof vp === 'string') {
+    try { vp = JSON.parse(vp) } catch { return 0 }
+  }
+  if (typeof vp !== 'object' || Array.isArray(vp)) return 0
+  const list = (vp as Record<string, unknown>).completed_tables
+  return Array.isArray(list) ? list.length : 0
+})
+
+/** 当前正在迁移的表行级进度（所有表 / 多表批量任务） */
+const currentTableProgress = computed(() => {
+  const at = allTablesProgress.value
+  if (!at?.current_table) return null
+  let vp = task.value?.view_progress
+  if (vp == null) return null
+  if (typeof vp === 'string') {
+    try {
+      vp = JSON.parse(vp)
+    } catch {
+      return null
+    }
+  }
+  if (typeof vp !== 'object' || Array.isArray(vp)) return null
+  const info = (vp as Record<string, unknown>)[at.current_table]
+  if (!info || typeof info !== 'object' || Array.isArray(info)) return null
+  const row = info as Record<string, number | undefined>
+  return {
+    name: at.current_table,
+    progress: row.progress ?? 0,
+    total_rows: row.total_rows,
+    migrated_rows: row.migrated_rows ?? 0,
+  }
 })
 
 // view_progress 条目列表，用于展示每个表/视图的 progress、total_rows、migrated_rows（排除「所有表」汇总字段）
@@ -385,6 +428,7 @@ const getStatusBadgeClass = (status: string) => {
     failed: 'bg-danger',
     partial: 'bg-warning',
     canceled: 'bg-dark',
+    aborted: 'bg-danger',
   }
   return classes[status] || 'bg-secondary'
 }
@@ -397,6 +441,7 @@ const getProgressBarClass = (status: string) => {
     failed: 'bg-danger',
     partial: 'bg-warning',
     canceled: 'bg-dark',
+    aborted: 'bg-danger',
   }
   return classes[status] || 'bg-secondary'
 }
@@ -409,6 +454,7 @@ const getStatusText = (status: string) => {
     failed: '失败',
     partial: '部分完成',
     canceled: '已取消',
+    aborted: '异常停止',
   }
   return texts[status] || status
 }
@@ -450,6 +496,7 @@ const loadTask = async (showLoading = true) => {
     } else {
       task.value = data
     }
+    ensureStatusPolling()
   } catch (error) {
     console.error('Failed to load task:', error)
   } finally {
@@ -457,46 +504,102 @@ const loadTask = async (showLoading = true) => {
   }
 }
 
-/** 轻量轮询：仅拉取状态/进度，不拉取完整 log，减少长时间任务时的响应体积与带宽 */
-const loadTaskStatusLight = async () => {
+/** 将接口返回的进度/状态合并到当前任务（轮询共用） */
+const applyTaskPollData = (data: Record<string, unknown>) => {
+  if (!task.value || !data) return
+  if (data.status != null) task.value.status = String(data.status)
+  if (data.progress != null) task.value.progress = Number(data.progress)
+  if (data.view_progress != null) task.value.view_progress = data.view_progress
+  if (data.log) task.value.log = String(data.log)
+  if (data.started_at != null) task.value.started_at = String(data.started_at)
+  if (data.completed_at != null) task.value.completed_at = String(data.completed_at)
+  if (data.cancel_requested != null) task.value.cancel_requested = Boolean(data.cancel_requested)
+}
+
+/** 轻量轮询：/api/tasks/{id}/status/?light=1；失败时回退 GET /api/tasks/{id}/ */
+const pollTaskStatus = async () => {
+  const taskId = Number(route.params.id)
+  if (!taskId || Number.isNaN(taskId)) return
   try {
-    const res = await migrationTaskApi.statusLight(Number(route.params.id))
-    const data = res.data
-    if (task.value && data) {
-      task.value.status = data.status
-      task.value.progress = data.progress ?? task.value.progress
-      task.value.view_progress = data.view_progress ?? task.value.view_progress
-      task.value.started_at = data.started_at
-      task.value.completed_at = data.completed_at
-      task.value.cancel_requested = data.cancel_requested
-    }
+    const res = await migrationTaskApi.statusLight(taskId)
+    applyTaskPollData(res.data as Record<string, unknown>)
   } catch (error) {
-    console.error('Failed to load task status:', error)
+    console.warn('轻量状态轮询失败，回退完整详情:', error)
+    try {
+      const res = await migrationTaskApi.get(taskId)
+      applyTaskPollData(res.data as Record<string, unknown>)
+    } catch (e2) {
+      console.error('任务详情轮询失败:', e2)
+    }
   }
 }
 
-const loadDatabases = async () => {
-  if (!task.value?.postgres_connection) return
-  
-  try {
-    const res = await databaseApi.getPostgresDatabases({
-      connection_id: task.value.postgres_connection,
-    })
-    databases.value = res.data.databases || []
-  } catch (error) {
-    console.error('Failed to load databases:', error)
+const stopStatusPolling = () => {
+  if (statusInterval) {
+    clearInterval(statusInterval)
+    statusInterval = null
   }
+}
+
+/** 任务为 running 时启动定时轮询 */
+const startStatusPolling = () => {
+  if (statusInterval || task.value?.status !== 'running') return
+  void pollTaskStatus()
+  statusInterval = setInterval(async () => {
+    await pollTaskStatus()
+    if (task.value?.status !== 'running') {
+      stopStatusPolling()
+      await loadTask(false)
+    }
+  }, POLL_INTERVAL_MS)
+}
+
+const ensureStatusPolling = () => {
+  if (task.value?.status === 'running') startStatusPolling()
+  else stopStatusPolling()
 }
 
 const canRerun = (status: string) =>
-  ['failed', 'completed', 'partial', 'canceled'].includes(status)
+  ['failed', 'completed', 'partial', 'canceled', 'aborted'].includes(status)
+
+/** 可断点续传：未正常结束的多表/所有表任务 */
+const canResume = (status: string) => {
+  if (!['failed', 'partial', 'canceled', 'aborted'].includes(status)) return false
+  const t = task.value
+  if (!t) return false
+  return t.task_type === 'all_tables' || t.task_type === 'table'
+}
 
 const startTask = async () => {
   try {
-    await migrationTaskApi.start(Number(route.params.id))
+    await migrationTaskApi.start(Number(route.params.id), { resume: false })
     await loadTask()
+    ensureStatusPolling()
   } catch (error) {
     console.error('Failed to start task:', error)
+  }
+}
+
+const resumeTask = async () => {
+  if (!confirm('从上次断点继续迁移？已成功的表将跳过，未完成的表会重新迁移。')) return
+  try {
+    await migrationTaskApi.start(Number(route.params.id), { resume: true })
+    await loadTask()
+    ensureStatusPolling()
+  } catch (error) {
+    console.error('Failed to resume task:', error)
+    alert('继续迁移失败，请查看控制台或任务日志')
+  }
+}
+
+const restartTask = async () => {
+  if (!confirm('确定从头重新运行？将清空已完成记录并重新迁移全部表。')) return
+  try {
+    await migrationTaskApi.start(Number(route.params.id), { resume: false })
+    await loadTask()
+    ensureStatusPolling()
+  } catch (error) {
+    console.error('Failed to restart task:', error)
   }
 }
 
@@ -525,48 +628,29 @@ const refreshStatus = async () => {
   await loadTask(false)
 }
 
-const switchDatabase = async () => {
-  if (!selectedDatabase.value) {
-    alert('请选择数据库')
-    return
-  }
-  
-  try {
-    await migrationTaskApi.switchDatabase(Number(route.params.id), {
-      postgres_database: selectedDatabase.value,
-    })
+watch(
+  () => route.params.id,
+  async (newId, oldId) => {
+    if (!newId || newId === oldId) return
+    stopStatusPolling()
     await loadTask()
-    alert('切换成功')
-  } catch (error) {
-    console.error('Failed to switch database:', error)
-    alert('切换失败')
-  }
-}
+  },
+)
+
+watch(
+  () => task.value?.status,
+  (status) => {
+    if (status === 'running') startStatusPolling()
+    else stopStatusPolling()
+  },
+)
 
 onMounted(async () => {
   await loadTask()
-  await loadDatabases()
-  // 同步当前任务的目标数据库到切换下拉框
-  if (task.value?.postgres_database) selectedDatabase.value = task.value.postgres_database
-  
-  if (task.value?.status === 'running') {
-    // 使用轻量状态接口轮询（5 秒），减少大任务时的响应体积与服务器压力
-    statusInterval = window.setInterval(async () => {
-      await loadTaskStatusLight()
-      if (task.value?.status !== 'running' && statusInterval) {
-        clearInterval(statusInterval)
-        statusInterval = null
-        // 任务结束拉一次完整详情以拿到最终 log
-        await loadTask(false)
-      }
-    }, 5000)
-  }
 })
 
 onUnmounted(() => {
-  if (statusInterval) {
-    clearInterval(statusInterval)
-  }
+  stopStatusPolling()
 })
 </script>
 
@@ -597,28 +681,11 @@ onUnmounted(() => {
   font-size: 1rem;
 }
 
-.card {
-  border: none;
-  border-radius: 1rem;
-  box-shadow: 0 10px 40px var(--shadow);
-  overflow: hidden;
-}
-
-.card-header {
-  background: var(--gradient);
-  color: white;
-  font-weight: 600;
-  border: none;
-  padding: 1rem 1.5rem;
-}
-
-.card-header h5 {
+.section-title {
   display: flex;
   align-items: center;
-}
-
-.card-body {
-  padding: 1.5rem;
+  font-weight: 600;
+  color: var(--text);
 }
 
 .info-grid {
@@ -749,6 +816,10 @@ onUnmounted(() => {
   height: 0.5rem;
   border-radius: 0.25rem;
   background: var(--border);
+}
+
+.current-table-progress .border-top {
+  border-color: var(--border) !important;
 }
 
 .action-buttons {

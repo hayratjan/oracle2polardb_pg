@@ -1,6 +1,11 @@
 from django.shortcuts import render, get_object_or_404
 from django.http import JsonResponse
 from .models import MigrationTask
+from .batch_config import (
+    MIGRATION_COMMIT_EVERY_BATCHES,
+    MIGRATION_FETCH_BATCH_SIZE,
+    MIGRATION_PROGRESS_SAVE_ROWS,
+)
 from django.views.decorators.csrf import csrf_exempt
 import logging
 import json
@@ -176,6 +181,11 @@ def task_status(request, task_id):
     
     task = get_object_or_404(MigrationTask, pk=task_id)
     light = request.GET.get('light') == '1'
+    # 轻量轮询仅读进度，不做孤儿修正（避免多 Worker/跨进程时误标 aborted 导致前端停止刷新）
+    if not light:
+        from .task_lifecycle import reconcile_orphan_running_task
+        if reconcile_orphan_running_task(task):
+            task.refresh_from_db()
     logger.debug(f"获取任务状态: 任务ID={task_id}, 当前状态={task.status}, 进度={task.progress}%, light={light}")
     
     # 构建响应数据
@@ -189,6 +199,9 @@ def task_status(request, task_id):
     }
     if not light:
         response_data['log'] = task.log
+    elif task.status == 'running' and task.log:
+        # 轻量轮询仍返回日志尾部，便于展示分批迁移进度
+        response_data['log'] = task.log[-12000:]
     
     # 添加视图进度信息；light 模式下不包含 log，减小响应体积
     if hasattr(task, 'view_progress') and task.view_progress:
@@ -199,12 +212,18 @@ def task_status(request, task_id):
                 view_progress = task.view_progress
             if isinstance(view_progress, dict):
                 if light:
-                    # 「所有表」任务：view_progress 为 { current_table, current, total, failed_count }，原样返回便于前端展示
+                    # 「所有表」任务：汇总字段 + 当前表行级进度（供进度条展示）
                     if 'current' in view_progress and 'total' in view_progress:
                         response_data['view_progress'] = {
                             k: v for k, v in view_progress.items()
-                            if k in ('current_table', 'current', 'total', 'failed_count')
+                            if k in ('current_table', 'current', 'total', 'failed_count', 'completed_tables')
                         }
+                        ct = view_progress.get('current_table')
+                        if ct and isinstance(view_progress.get(ct), dict):
+                            response_data['view_progress'][ct] = {
+                                kk: vv for kk, vv in view_progress[ct].items()
+                                if kk in ('progress', 'total_rows', 'migrated_rows')
+                            }
                     else:
                         # 表/视图级进度：只保留 progress、total_rows、migrated_rows
                         response_data['view_progress'] = {
@@ -243,17 +262,27 @@ def start_task(request, task_id):
             # 从请求中获取参数，如果请求中未提供则使用任务原有设置
             new_conflict_strategy = None
             postgres_database = None
+            resume = False
             try:
                 if request.method == 'POST' and request.body:
                     data = json.loads(request.body)
                     new_conflict_strategy = data.get('conflict_strategy')
                     postgres_database = data.get('postgres_database')
-            except:
+                    resume = bool(data.get('resume', False))
+            except Exception:
                 pass
 
             if new_conflict_strategy:
                 task.conflict_strategy = new_conflict_strategy
                 logger.info(f"更新冲突处理策略为: {new_conflict_strategy}")
+
+            from .resume import can_resume_task, get_completed_tables, normalize_view_progress
+
+            if resume and not can_resume_task(task):
+                return JsonResponse({
+                    'status': 'error',
+                    'message': f'当前状态 {task.status} 不支持继续迁移，请使用重新运行',
+                }, status=400)
             
             if task.task_type != 'view_to_sqlite':
                 if not postgres_database:
@@ -275,22 +304,40 @@ def start_task(request, task_id):
                         task.save()
                         logger.info(f"从多个源对象中选取第一个视图: {task.source_object}")
             
-            # 重置任务状态
+            # 继续迁移：保留进度、日志与已完成表；重新运行：清空后从头执行
             task.status = 'pending'
             task.cancel_requested = False
-            task.progress = 0
-            
-            if task.task_type == 'view_to_sqlite':
-                task.log = f"SQLite文件: {task.sqlite_path or '未配置'}"
-            elif postgres_database:
-                task.log = f"目标PostgreSQL数据库: {postgres_database}"
-            else:
-                task.log = ''
-                
-            task.started_at = None
             task.completed_at = None
+
+            if resume:
+                vp = normalize_view_progress(task.view_progress)
+                completed = get_completed_tables(task)
+                vp['resume'] = True
+                vp['completed_tables'] = sorted(completed)
+                task.view_progress = vp
+                if not task.started_at:
+                    task.started_at = timezone.now()
+                prev_log = (task.log or '').strip()
+                resume_head = (
+                    f"\n---\n【继续迁移】从断点恢复，已完成 {len(completed)} 张表，"
+                    f"进度 {task.progress:.1f}%"
+                )
+                task.log = (prev_log + resume_head) if prev_log else resume_head.strip()
+                logger.info(f"继续迁移任务: 任务ID={task_id}, 已完成表数={len(completed)}")
+            else:
+                task.progress = 0
+                if task.task_type == 'view_to_sqlite':
+                    task.log = f"SQLite文件: {task.sqlite_path or '未配置'}"
+                elif postgres_database:
+                    task.log = f"目标PostgreSQL数据库: {postgres_database}"
+                else:
+                    task.log = ''
+                task.started_at = None
+                task.view_progress = {}
+                logger.info(f"重新运行任务（从头开始）: 任务ID={task_id}")
+
             task.save()
-            logger.info(f"任务状态已重置为待执行: 任务ID={task_id}")
+            logger.info(f"任务状态已置为待执行: 任务ID={task_id}, resume={resume}")
             
             # 确保任务状态已被更新并可以被客户端查询到
             from django.db import connection
@@ -298,6 +345,7 @@ def start_task(request, task_id):
             
             # 导入视图模块以调用迁移函数
             from . import views
+            from .task_lifecycle import run_with_lifecycle
             from django.conf import settings as dj_settings
 
             valid_task_types = [
@@ -328,22 +376,22 @@ def start_task(request, task_id):
                 # 提交任务到线程池
                 if task.task_type == 'table':
                     logger.info(f"提交表迁移任务: {task.source_schema}.{task.source_object}")
-                    executor.submit(views.migrate_table, task.id, postgres_database)
+                    executor.submit(run_with_lifecycle, task.id, views.migrate_table, task.id, postgres_database)
                 elif task.task_type == 'materialized_view':
                     logger.info(f"提交物化视图迁移任务: {task.source_schema}.{task.source_object}")
-                    executor.submit(views.migrate_materialized_view, task.id, postgres_database)
+                    executor.submit(run_with_lifecycle, task.id, views.migrate_materialized_view, task.id, postgres_database)
                 elif task.task_type == 'view':
                     logger.info(f"提交视图迁移任务: {task.source_schema}.{task.source_object}")
-                    executor.submit(views.migrate_view, task.id, postgres_database)
+                    executor.submit(run_with_lifecycle, task.id, views.migrate_view, task.id, postgres_database)
                 elif task.task_type == 'routine':
                     logger.info(f"提交存储过程/函数迁移任务: {task.source_schema}.{task.source_object}")
-                    executor.submit(views.migrate_routine, task.id, postgres_database)
+                    executor.submit(run_with_lifecycle, task.id, views.migrate_routine, task.id, postgres_database)
                 elif task.task_type == 'trigger':
                     logger.info(f"提交触发器迁移任务: {task.source_schema}.{task.source_object}")
-                    executor.submit(views.migrate_trigger, task.id, postgres_database)
+                    executor.submit(run_with_lifecycle, task.id, views.migrate_trigger, task.id, postgres_database)
                 elif task.task_type == 'sequence':
                     logger.info(f"提交序列迁移任务: {task.source_schema}.{task.source_object}")
-                    executor.submit(views.migrate_sequence, task.id, postgres_database)
+                    executor.submit(run_with_lifecycle, task.id, views.migrate_sequence, task.id, postgres_database)
                 elif task.task_type == 'full_schema':
                     logger.info(f"提交全 Schema 编排任务: {task.source_schema}")
                     def run_full_schema():
@@ -353,7 +401,7 @@ def start_task(request, task_id):
                             v.migrate_schema_orchestration(task.id, postgres_database)
                         except Exception as ex:
                             logger.error(f"编排迁移异常: {str(ex)}", exc_info=True)
-                    t2 = threading.Thread(target=run_full_schema)
+                    t2 = threading.Thread(target=lambda: run_with_lifecycle(task.id, run_full_schema))
                     t2.daemon = True
                     t2.start()
                 elif task.task_type == 'all_tables':
@@ -366,15 +414,15 @@ def start_task(request, task_id):
                             v.migrate_all_tables(task.id, postgres_database)
                         except Exception as e:
                             logger.error(f"全部表迁移任务异常: {str(e)}", exc_info=True)
-                    t = threading.Thread(target=run_all_tables)
+                    t = threading.Thread(target=lambda: run_with_lifecycle(task.id, run_all_tables))
                     t.daemon = True
                     t.start()
                 elif task.task_type == 'view_to_table':
                     logger.info(f"提交视图数据迁移到表任务（线程池异步）: {task.source_schema}.{task.source_object}")
-                    executor.submit(migrate_view_to_table, task.id, postgres_database)
+                    executor.submit(run_with_lifecycle, task.id, migrate_view_to_table, task.id, postgres_database)
                 elif task.task_type == 'view_to_sqlite':
                     logger.info(f"提交视图迁移到SQLite任务: {task.source_schema}")
-                    migrate_view_to_sqlite(task.id)
+                    run_with_lifecycle(task.id, migrate_view_to_sqlite, task.id)
 
                 logger.info(f"任务已成功提交执行: 任务ID={task_id}")
             except (RuntimeError, AttributeError) as e:
@@ -422,7 +470,7 @@ def start_task(request, task_id):
                         logger.error(f"任务执行时发生异常: {str(e)}", exc_info=True)
 
                 # 启动后台线程
-                task_thread = threading.Thread(target=run_task)
+                task_thread = threading.Thread(target=lambda: run_with_lifecycle(task.id, run_task))
                 task_thread.daemon = True  # 设置为守护线程，不会阻止主程序退出
                 task_thread.start()
                 logger.info(f"任务已在独立线程中启动: 任务ID={task_id}")
@@ -1288,9 +1336,9 @@ def migrate_view_to_table(task_id, postgres_database=None):
                         logger.warning(f"获取总行数失败，将按已迁移行数显示进度: {count_err}")
                         view_log.append(f"提示: 未获取到总行数，进度按已迁移行数估算")
                     
-                    # 使用游标分批获取数据（大批次 + 每 N 批提交一次，与表迁移一致，提高吞吐）
-                    fetch_batch_size = 10000  # 每批从 Oracle 拉取行数，减少往返
-                    commit_every_batches = 5   # 每 5 批提交一次 PostgreSQL，即约每 5 万行 commit，减少磁盘/事务开销
+                    # 使用游标分批获取数据（与表迁移 batch_config 一致）
+                    fetch_batch_size = MIGRATION_FETCH_BATCH_SIZE
+                    commit_every_batches = MIGRATION_COMMIT_EVERY_BATCHES
                     oracle_cursor.arraysize = fetch_batch_size
                     oracle_cursor.execute(oracle_query)
                     
@@ -1306,7 +1354,7 @@ def migrate_view_to_table(task_id, postgres_database=None):
                     total_rows = 0
                     last_saved_pct = -1
                     last_saved_rows = 0
-                    progress_save_interval_rows = 50000  # 至少每5万行保存一次进度
+                    progress_save_interval_rows = MIGRATION_PROGRESS_SAVE_ROWS
                     batches_since_commit = 0
                     canceled_in_loop = False
                     while True:

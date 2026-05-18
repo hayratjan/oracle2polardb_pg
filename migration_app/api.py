@@ -142,6 +142,16 @@ class MigrationTaskViewSet(viewsets.ModelViewSet):
     # 按创建时间倒序，避免分页时 UnorderedObjectListWarning
     queryset = MigrationTask.objects.all().order_by('-created_at')
     serializer_class = MigrationTaskSerializer
+
+    def retrieve(self, request, *args, **kwargs):
+        """任务详情；仅当 ?reconcile=1 时修正孤儿 running（避免频繁 GET 误杀仍在其它进程执行的任务）。"""
+        instance = self.get_object()
+        if request.query_params.get('reconcile') == '1':
+            from .task_lifecycle import reconcile_orphan_running_task
+            if reconcile_orphan_running_task(instance):
+                instance.refresh_from_db()
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -230,6 +240,31 @@ class MigrationTaskViewSet(viewsets.ModelViewSet):
             return self._response_from_dashboard(result)
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'], url_path='monitor')
+    def monitor(self, request):
+        """实时任务监控聚合：状态汇总、运行中任务、对比快照、日志与最近操作。"""
+        from .monitor import build_monitor_payload
+
+        try:
+            task_limit = int(request.query_params.get('task_limit', 40))
+        except (TypeError, ValueError):
+            task_limit = 40
+        try:
+            log_limit = int(request.query_params.get('log_limit', 60))
+        except (TypeError, ValueError):
+            log_limit = 60
+        try:
+            compare_limit = int(request.query_params.get('compare_limit', 25))
+        except (TypeError, ValueError):
+            compare_limit = 25
+        return Response(
+            build_monitor_payload(
+                task_limit=task_limit,
+                log_limit=log_limit,
+                compare_limit=compare_limit,
+            )
+        )
 
     @action(detail=True, methods=['post'])
     def switch_database(self, request, pk=None):

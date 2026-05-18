@@ -18,6 +18,11 @@ const routes: Array<RouteRecordRaw> = [
     component: () => import('@/views/TaskListView.vue')
   },
   {
+    path: '/monitor',
+    name: 'TaskMonitor',
+    component: () => import('@/views/TaskMonitorView.vue')
+  },
+  {
     path: '/task/create',
     name: 'CreateTask',
     component: () => import('@/views/CreateTaskView.vue')
