@@ -29,7 +29,10 @@ def _light_view_progress(view_progress: Any) -> Dict[str, Any]:
     if 'current' in view_progress and 'total' in view_progress:
         slim = {
             k: view_progress[k]
-            for k in ('current_table', 'current', 'total', 'failed_count')
+            for k in (
+                'current_table', 'current', 'total', 'failed_count',
+                'completed_tables', 'running_tables', 'parallel_workers',
+            )
             if k in view_progress
         }
         ct = view_progress.get('current_table')

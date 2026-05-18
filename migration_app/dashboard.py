@@ -6,6 +6,7 @@ from .batch_config import (
     MIGRATION_FETCH_BATCH_SIZE,
     MIGRATION_PROGRESS_SAVE_ROWS,
 )
+from .oracle_row_adapter import adapt_oracle_rows
 from django.views.decorators.csrf import csrf_exempt
 import logging
 import json
@@ -216,7 +217,10 @@ def task_status(request, task_id):
                     if 'current' in view_progress and 'total' in view_progress:
                         response_data['view_progress'] = {
                             k: v for k, v in view_progress.items()
-                            if k in ('current_table', 'current', 'total', 'failed_count', 'completed_tables')
+                            if k in (
+                                'current_table', 'current', 'total', 'failed_count',
+                                'completed_tables', 'running_tables', 'parallel_workers',
+                            )
                         }
                         ct = view_progress.get('current_table')
                         if ct and isinstance(view_progress.get(ct), dict):
@@ -1344,6 +1348,7 @@ def migrate_view_to_table(task_id, postgres_database=None):
                     
                     # 获取列名（小写）
                     column_names = [col[0].lower() for col in oracle_cursor.description]
+                    column_oracle_types = [col[1] for col in columns]
                     
                     # 创建INSERT语句
                     placeholders = ", ".join(["%s"] * len(column_names))
@@ -1362,8 +1367,8 @@ def migrate_view_to_table(task_id, postgres_database=None):
                         if not rows:
                             break
                         
-                        # 批量插入数据
-                        pg_cursor.executemany(insert_sql, rows)
+                        # 批量插入数据（LOB 转 Python 原生类型）
+                        pg_cursor.executemany(insert_sql, adapt_oracle_rows(rows, column_oracle_types))
                         batches_since_commit += 1
                         if batches_since_commit >= commit_every_batches:
                             pg_conn.commit()
@@ -1680,6 +1685,7 @@ def migrate_view_to_sqlite(task_id):
                 oracle_cursor.arraysize = 5000
                 oracle_cursor.execute(oracle_query)
                 column_names = [col[0] for col in oracle_cursor.description]
+                column_oracle_types_sqlite = [col[1] for col in columns]
                 placeholders = ", ".join(["?"] * len(column_names))
                 quoted_columns = ", ".join([f'"{col}"' for col in column_names])
                 insert_sql = f'INSERT INTO "{object_name}" ({quoted_columns}) VALUES ({placeholders})'
@@ -1691,6 +1697,7 @@ def migrate_view_to_sqlite(task_id):
                     rows = oracle_cursor.fetchmany()
                     if not rows:
                         break
+                    rows = adapt_oracle_rows(rows, column_oracle_types_sqlite)
                     try:
                         sqlite_cursor.executemany(insert_sql, rows)
                     except sqlite3.IntegrityError as integrity_err:

@@ -205,13 +205,15 @@ def run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log, sourc
     # 全列顺序与全量迁移一致：ALL_TAB_COLUMNS COLUMN_ID
     oracle_cursor.execute(
         """
-        SELECT column_name FROM all_tab_columns
+        SELECT column_name, data_type FROM all_tab_columns
         WHERE owner = :o AND table_name = :t
         ORDER BY column_id
         """,
         {"o": _safe_oracle_ident(source_schema), "t": _safe_oracle_ident(table_name)},
     )
-    all_cols = [_safe_oracle_ident(r[0]) for r in oracle_cursor.fetchall()]
+    col_meta = oracle_cursor.fetchall()
+    all_cols = [_safe_oracle_ident(r[0]) for r in col_meta]
+    column_oracle_types = [r[1] for r in col_meta]
     col_names_lower = [c.lower() for c in all_cols]
     quoted_cols = ", ".join(_quote_pg_ident(c) for c in col_names_lower)
     placeholders = ", ".join(["%s"] * len(all_cols))
@@ -255,9 +257,11 @@ def run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log, sourc
             q = f"SELECT {', '.join(all_cols)} FROM {_safe_oracle_ident(source_schema)}.{_safe_oracle_ident(table_name)} WHERE {wh}"
             oracle_cursor.execute(q, bind)
 
+        from .oracle_row_adapter import adapt_oracle_rows
+
         rows = oracle_cursor.fetchall()
         if rows:
-            pg_cursor.executemany(insert_sql, rows)
+            pg_cursor.executemany(insert_sql, adapt_oracle_rows(rows, column_oracle_types))
             pg_conn.commit()
 
     log.append(f"【主键对齐】本轮处理插入批次结束（计划插入 {len(to_insert_norm)} 行）。")

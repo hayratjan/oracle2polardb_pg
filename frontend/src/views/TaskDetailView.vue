@@ -200,6 +200,11 @@
                   <div v-if="allTablesProgress.current_table" class="text-muted small">
                     正在迁移：<code>{{ allTablesProgress.current_table }}</code>
                   </div>
+                  <div v-if="parallelRunningTables.length" class="text-primary small mt-1">
+                    <i class="bi bi-layers me-1"></i>
+                    并行进行中（{{ parallelRunningTables.length }} 张）：
+                    <code>{{ parallelRunningPreview }}</code>
+                  </div>
                   <div v-if="completedTablesCount > 0" class="text-success small mt-1">
                     已完成 {{ completedTablesCount }} 张表（继续迁移时将跳过）
                   </div>
@@ -334,7 +339,10 @@ const sourceObjectsList = computed(() => {
 const sourceObjectsMonolist = computed(() => sourceObjectsList.value.join('\n'))
 
 // 「所有表」任务进度：view_progress 为 { current, total, current_table, failed_count } 时使用
-const ALL_TABLES_KEYS = ['current', 'total', 'current_table', 'failed_count', 'completed_tables']
+const ALL_TABLES_KEYS = [
+  'current', 'total', 'current_table', 'failed_count', 'completed_tables',
+  'running_tables', 'parallel_workers',
+]
 const allTablesProgress = computed(() => {
   const vp = task.value?.view_progress
   if (vp == null || typeof vp !== 'object' || Array.isArray(vp)) return null
@@ -349,6 +357,24 @@ const allTablesProgress = computed(() => {
     }
   }
   return null
+})
+
+const parallelRunningTables = computed(() => {
+  let vp = task.value?.view_progress
+  if (vp == null) return [] as string[]
+  if (typeof vp === 'string') {
+    try { vp = JSON.parse(vp) } catch { return [] }
+  }
+  if (typeof vp !== 'object' || Array.isArray(vp)) return []
+  const rt = (vp as Record<string, unknown>).running_tables
+  return Array.isArray(rt) ? rt.map(String) : []
+})
+
+const parallelRunningPreview = computed(() => {
+  const list = parallelRunningTables.value
+  if (!list.length) return ''
+  if (list.length <= 4) return list.join(', ')
+  return `${list.slice(0, 4).join(', ')} …`
 })
 
 const completedTablesCount = computed(() => {

@@ -11,3 +11,6 @@ MIGRATION_COMMIT_EVERY_BATCHES = 2
 
 # 进度与【分批】日志写库间隔（行），与提交粒度接近便于界面刷新
 MIGRATION_PROGRESS_SAVE_ROWS = 10000
+
+# 「所有表」任务并行迁移表数量（每张表独立连接）；设为 1 则退化为顺序迁移
+MIGRATION_PARALLEL_TABLE_WORKERS = 16

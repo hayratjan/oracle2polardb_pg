@@ -81,6 +81,8 @@ def build_batch_view_progress(
     failed_count: int,
     completed_tables: List[str],
     table_detail: Dict[str, Any] | None = None,
+    running_tables: Optional[List[str]] = None,
+    parallel_workers: Optional[int] = None,
 ) -> Dict[str, Any]:
     """构建「所有表/多表」任务的 view_progress。"""
     vp: Dict[str, Any] = {
@@ -90,6 +92,10 @@ def build_batch_view_progress(
         'failed_count': failed_count,
         'completed_tables': completed_tables,
     }
+    if running_tables:
+        vp['running_tables'] = running_tables
+    if parallel_workers is not None:
+        vp['parallel_workers'] = parallel_workers
     if table_detail and current_table:
         vp[current_table] = table_detail
     return vp
