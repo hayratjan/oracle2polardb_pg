@@ -60,11 +60,15 @@ def filter_pending_tables(all_tables: List[str], completed: Set[str]) -> List[st
     return [t for t in all_tables if t.upper() not in done_upper]
 
 
+# 支持按表断点续传的任务类型
+RESUMABLE_TASK_TYPES = ('all_tables', 'table', 'full_schema')
+
+
 def can_resume_task(task) -> bool:
     """是否允许断点续传（未正常结束的任务）。"""
     if task.status not in ('partial', 'aborted', 'canceled', 'failed'):
         return False
-    return task.task_type in ('all_tables', 'table')
+    return task.task_type in RESUMABLE_TASK_TYPES
 
 
 def mark_table_completed(completed: Set[str], table_name: str) -> List[str]:

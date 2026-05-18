@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 def _migrate_one_table_job(
     *,
+    task,
     oracle_connection_id: int,
     postgres_connection_id: int,
     postgres_database: Optional[str],
@@ -57,7 +58,7 @@ def _migrate_one_table_job(
             table_name,
             conflict_strategy,
             table_log,
-            task=None,
+            task=task,
             all_tables_context=None,
         )
         return {'table': table_name, 'ok': True, 'error': None, 'log_lines': table_log, 'rows': 0}
@@ -93,15 +94,18 @@ def run_parallel_table_migrations(
     postgres_database: Optional[str],
     on_progress: Callable[[], None],
     should_cancel: Callable[[], bool],
+    state_lock: threading.RLock,
 ) -> None:
     """
-    线程池并行迁移表列表；结果写入 failed_tables / completed_set / log（调用方与 on_progress 共享锁）。
+    线程池并行迁移表列表；结果写入 failed_tables / completed_set / log。
+    须与调用方共用 state_lock，且在持锁期间调用 on_progress，避免与 _flush_parallel_progress 竞态。
     """
     workers = max(1, int(MIGRATION_PARALLEL_TABLE_WORKERS))
-    log.append(f"【并行迁移】最多同时 {workers} 张表（每张表独立数据库连接）")
-    lock = threading.Lock()
+    with state_lock:
+        log.append(f"【并行迁移】最多同时 {workers} 张表（每张表独立数据库连接）")
 
     def _sync_progress() -> None:
+        """调用方已持有 state_lock。"""
         on_progress()
 
     oracle_id = task.oracle_connection_id
@@ -114,13 +118,15 @@ def run_parallel_table_migrations(
         futures = {}
         for table_name in tables:
             if should_cancel():
-                log.append("用户取消，停止提交新的并行迁移任务")
+                with state_lock:
+                    log.append("用户取消，停止提交新的并行迁移任务")
                 break
-            with lock:
+            with state_lock:
                 running_tables.add(table_name)
-            _sync_progress()
+                _sync_progress()
             fut = executor.submit(
                 _migrate_one_table_job,
+                task=task,
                 oracle_connection_id=oracle_id,
                 postgres_connection_id=pg_id,
                 postgres_database=postgres_database,
@@ -142,7 +148,7 @@ def run_parallel_table_migrations(
                     'error': str(e),
                     'log_lines': [f"表 {table_name} 执行异常: {e}"],
                 }
-            with lock:
+            with state_lock:
                 running_tables.discard(table_name)
                 log.extend(result.get('log_lines') or [])
                 if result.get('ok'):

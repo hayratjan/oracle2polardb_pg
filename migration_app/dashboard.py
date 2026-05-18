@@ -1262,8 +1262,12 @@ def migrate_view_to_table(task_id, postgres_database=None):
                         logger.warning(f"列 {column_name} 的VARCHAR长度为0，已自动调整为VARCHAR(255)")
                         pg_type = "VARCHAR(255)"
                     
-                    not_null = "" if nullable == 'Y' else " NOT NULL"
-                    column_defs.append(f"    {column_name} {pg_type}{not_null}")
+                    from .views import apply_identifier_case, quote_identifier
+                    pg_col = apply_identifier_case(column_name, getattr(task, 'identifier_case', 'lower') or 'lower')
+                    col_parts = [quote_identifier(pg_col), pg_type]
+                    if nullable != 'Y':
+                        col_parts.append('NOT NULL')
+                    column_defs.append('    ' + ' '.join(col_parts))
                 
                 create_table_sql += ",\n".join(column_defs)
                 create_table_sql += "\n)"

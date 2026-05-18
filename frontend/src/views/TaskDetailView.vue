@@ -27,7 +27,30 @@
         <div>
           <strong>异常停止</strong>
           <p class="mb-0 small mt-1">
-            迁移进程已中断，任务未正常结束。常见原因：服务重启、进程被终止、Worker 异常退出或开发服务器热重载。可查看下方日志后重新运行。
+            迁移进程已中断，任务未正常结束。常见原因：服务重启、进程被终止、Worker 异常退出或开发服务器热重载。
+            <template v-if="showResumeHint">可点击「继续迁移」从断点恢复，或「重新运行」从头执行。</template>
+            <template v-else>可查看下方日志后重新运行。</template>
+          </p>
+        </div>
+      </div>
+      <div v-else-if="task.status === 'partial'" class="alert alert-warning d-flex align-items-start mb-4" role="alert">
+        <i class="bi bi-pause-circle-fill me-2 flex-shrink-0" style="font-size: 1.25rem;"></i>
+        <div>
+          <strong>迁移已中断</strong>
+          <p class="mb-0 small mt-1">
+            任务未全部完成（可能为用户取消、部分表失败或进程退出）。
+            <template v-if="showResumeHint">已完成的表将跳过，可点击「继续迁移」从断点恢复。</template>
+            <template v-else>可查看日志后使用「重新运行」。</template>
+          </p>
+        </div>
+      </div>
+      <div v-else-if="task.status === 'canceled'" class="alert alert-secondary d-flex align-items-start mb-4" role="alert">
+        <i class="bi bi-slash-circle me-2 flex-shrink-0" style="font-size: 1.25rem;"></i>
+        <div>
+          <strong>已取消</strong>
+          <p class="mb-0 small mt-1">
+            任务已被手动取消。
+            <template v-if="showResumeHint">若需保留已迁移数据并继续，可点击「继续迁移」。</template>
           </p>
         </div>
       </div>
@@ -433,6 +456,9 @@ const formatNumber = (n?: number | null) => {
   return Number(n).toLocaleString('zh-CN')
 }
 
+/** 支持断点续传的任务类型 */
+const RESUMABLE_TASK_TYPES = ['all_tables', 'table', 'full_schema'] as const
+
 const getTaskTypeText = (type: string) => {
   const texts: Record<string, string> = {
     table: '表',
@@ -440,6 +466,7 @@ const getTaskTypeText = (type: string) => {
     view: '视图',
     routine: '例程',
     all_tables: '所有表',
+    full_schema: '全Schema编排',
     view_to_table: '视图数据迁移到表',
     view_to_sqlite: '视图数据迁移到SQLite',
   }
@@ -478,7 +505,7 @@ const getStatusText = (status: string) => {
     running: '执行中',
     completed: '已完成',
     failed: '失败',
-    partial: '部分完成',
+    partial: '已中断',
     canceled: '已取消',
     aborted: '异常停止',
   }
@@ -508,7 +535,7 @@ const formatDate = (dateString?: string) => {
 const loadTask = async (showLoading = true) => {
   if (showLoading) loading.value = true
   try {
-    const res = await migrationTaskApi.get(Number(route.params.id))
+    const res = await migrationTaskApi.get(Number(route.params.id), { reconcile: true })
     const data = res.data
     // 若已有任务数据且为后台刷新：只更新会变的字段，减少整块 DOM 重绘
     if (!showLoading && task.value && data) {
@@ -588,13 +615,19 @@ const ensureStatusPolling = () => {
 const canRerun = (status: string) =>
   ['failed', 'completed', 'partial', 'canceled', 'aborted'].includes(status)
 
-/** 可断点续传：未正常结束的多表/所有表任务 */
+/** 是否展示「继续迁移」按钮 */
 const canResume = (status: string) => {
   if (!['failed', 'partial', 'canceled', 'aborted'].includes(status)) return false
   const t = task.value
   if (!t) return false
-  return t.task_type === 'all_tables' || t.task_type === 'table'
+  return RESUMABLE_TASK_TYPES.includes(t.task_type as (typeof RESUMABLE_TASK_TYPES)[number])
 }
+
+/** 详情页提示条是否说明可继续迁移 */
+const showResumeHint = computed(() => {
+  if (!task.value) return false
+  return canResume(task.value.status)
+})
 
 const startTask = async () => {
   try {

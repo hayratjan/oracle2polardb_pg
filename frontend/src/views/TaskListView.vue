@@ -289,7 +289,7 @@ const getStatusText = (status: string) => {
     running: '执行中',
     completed: '已完成',
     failed: '失败',
-    partial: '部分完成',
+    partial: '已中断',
     canceled: '已取消',
     aborted: '异常停止',
   }
@@ -403,7 +403,7 @@ const canRerun = (status: string) =>
 
 const canResume = (t: MigrationTask) =>
   ['failed', 'partial', 'canceled', 'aborted'].includes(t.status) &&
-  (t.task_type === 'all_tables' || t.task_type === 'table')
+  ['all_tables', 'table', 'full_schema'].includes(t.task_type)
 
 const startTask = async (id: number) => {
   if (!id) return

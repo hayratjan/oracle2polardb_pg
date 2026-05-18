@@ -733,22 +733,29 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
     if not columns:
         raise Exception(f"找不到表 {source_schema}.{table_name}")
 
-    # 仅当目标表不存在或刚被 replace 掉时创建表（PG 中未加引号标识符存为小写）
+    # 仅当目标表不存在或刚被 replace 掉时创建表；列名加双引号，避免 ISNULL 等与 PG 关键字冲突
+    id_case = (getattr(task, 'identifier_case', None) or 'lower') if task else 'lower'
+    pg_table = apply_identifier_case(table_name, id_case)
+    qualified_table = build_qualified_table_name(target_schema, pg_table)
+
     if not table_exists or strategy == 'replace':
-        create_table_sql = f"CREATE TABLE {target_schema}.{table_name} (\n"
+        create_table_sql = f"CREATE TABLE {qualified_table} (\n"
         column_definitions = []
         for column in columns:
             col_name, data_type, data_length, data_precision, data_scale, nullable = (
                 column[0], column[1], column[2], column[3], column[4], column[5]
             )
+            pg_col = apply_identifier_case(col_name, id_case)
             pg_type = convert_oracle_to_pg_type(data_type, data_length, data_precision, data_scale)
             if pg_type.startswith('VARCHAR('):
                 match = re.search(r'VARCHAR\((\d+)\)', pg_type)
                 if match and int(match.group(1)) < 1:
                     pg_type = 'VARCHAR(255)'
                     log_list.append(f"警告: 列 {col_name} 的 VARCHAR 长度为0，已调整为 VARCHAR(255)")
-            not_null = "NOT NULL" if nullable == 'N' else ""
-            column_definitions.append(f"    {col_name} {pg_type} {not_null}")
+            col_parts = [quote_identifier(pg_col), pg_type]
+            if nullable == 'N':
+                col_parts.append('NOT NULL')
+            column_definitions.append('    ' + ' '.join(col_parts))
         create_table_sql += ",\n".join(column_definitions) + "\n)"
         pg_cursor.execute(create_table_sql)
         pg_conn.commit()
@@ -805,12 +812,12 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
         )
     else:
         oracle_cursor.execute(f"SELECT * FROM {source_schema}.{table_name}")
-    column_names = [col[0].lower() for col in oracle_cursor.description]
+    column_names = [apply_identifier_case(col[0], id_case) for col in oracle_cursor.description]
     # 与 SELECT * 列顺序一致，供 LOB 按列类型转换（BLOB 保持 bytes，CLOB 转 str）
     column_oracle_types = [col[1] for col in columns]
     placeholders = ", ".join(["%s"] * len(column_names))
-    quoted_cols = [f'"{c}"' for c in column_names]
-    insert_sql = f"INSERT INTO {target_schema}.{table_name.lower()} ({', '.join(quoted_cols)}) VALUES ({placeholders})"
+    quoted_cols = [quote_identifier(c) for c in column_names]
+    insert_sql = f"INSERT INTO {qualified_table} ({', '.join(quoted_cols)}) VALUES ({placeholders})"
 
     total_rows = 0
     last_saved_pct = -1
@@ -1488,13 +1495,15 @@ def migrate_all_tables(task_id, postgres_database=None):
         task.save(update_fields=['progress', 'view_progress', 'log'])
 
         failed_tables = []
-        state_lock = threading.Lock()
+        # 可重入：parallel_tables 持锁调用本函数时避免死锁
+        state_lock = threading.RLock()
         running_tables: set = set()
 
         def _flush_parallel_progress() -> None:
             with state_lock:
                 done = len(completed_set)
-                rt = sorted(running_tables)
+                # 快照，避免迭代 set 时与其它线程 add/discard 交错
+                rt = sorted(set(running_tables))
                 if rt:
                     hint = rt[0] if len(rt) == 1 else f"{rt[0]} 等 {len(rt)} 张"
                 elif completed_set:
@@ -1539,6 +1548,7 @@ def migrate_all_tables(task_id, postgres_database=None):
                 postgres_database=postgres_database,
                 on_progress=_flush_parallel_progress,
                 should_cancel=_should_cancel,
+                state_lock=state_lock,
             )
             if _should_cancel():
                 task.status = 'partial'
@@ -1781,24 +1791,93 @@ def migrate_trigger(task_id, postgres_database=None):
 def migrate_schema_orchestration(task_id, postgres_database=None):
     """
     全 Schema 编排：先迁移序列，再复用「所有表」逻辑迁移全部表；其余对象请单独建任务。
+    继续迁移时保留 resume 标记与已完成表，跳过序列阶段直接进入迁表。
     """
+    from .resume import get_completed_tables, normalize_view_progress
     from .task_logging import append_migration_log
 
     task = get_object_or_404(MigrationTask, pk=task_id)
+    vp_init = normalize_view_progress(task.view_progress)
+    resume_mode = bool(vp_init.pop('resume', False))
+    completed_set = get_completed_tables(task) if resume_mode else set()
+    # 已有表级进度或日志中已完成表 → 续传时跳过序列阶段
+    skip_sequences = resume_mode and (
+        bool(completed_set)
+        or vp_init.get('current') is not None
+        or vp_init.get('total') is not None
+        or vp_init.get('phase') in ('all_tables', 'done')
+        or int(vp_init.get('phase_index') or 0) >= 1
+    )
+
     task.status = 'running'
-    task.started_at = timezone.now()
-    task.progress = 0
+    if not task.started_at:
+        task.started_at = timezone.now()
     phases = ['sequences', 'all_tables', 'done']
-    task.view_progress = {
-        'orchestration': True,
-        'phase': phases[0],
-        'phase_index': 0,
-        'phases': phases,
-    }
+    if not resume_mode:
+        task.progress = 0
+    if resume_mode:
+        vp_init['resume'] = True
+        if completed_set:
+            vp_init['completed_tables'] = sorted(completed_set)
+        task.view_progress = vp_init
+    else:
+        task.view_progress = {
+            'orchestration': True,
+            'phase': phases[0],
+            'phase_index': 0,
+            'phases': phases,
+        }
     task.save()
 
     phase1_log = []
     try:
+        if skip_sequences:
+            phase1_log.append(
+                f"【继续迁移】【编排】跳过序列阶段，直接进入迁表（已完成 {len(completed_set)} 张表）"
+            )
+            task.view_progress = {
+                'orchestration': True,
+                'phase': phases[1],
+                'phase_index': 1,
+                'phases': phases,
+                'resume': True,
+                **({} if not completed_set else {'completed_tables': sorted(completed_set)}),
+            }
+            task.save(update_fields=['view_progress'])
+            if phase1_log:
+                task.refresh_from_db()
+                head = '\n'.join(phase1_log)
+                task.log = f"{head}\n{task.log}" if task.log else head
+                task.save(update_fields=['log'])
+            migrate_all_tables(task_id, postgres_database)
+            task.refresh_from_db()
+            if task.status == 'failed':
+                task.view_progress = {
+                    'orchestration': True,
+                    'phase': phases[1],
+                    'phase_index': 1,
+                    'phases': phases,
+                    'tables_phase_failed': True,
+                }
+            else:
+                task.view_progress = {
+                    'orchestration': True,
+                    'phase': phases[2],
+                    'phase_index': 2,
+                    'phases': phases,
+                }
+            task.save(update_fields=['view_progress'])
+            try:
+                append_migration_log(
+                    task,
+                    '【编排】物化视图、普通视图、例程、触发器请通过对应任务类型分别迁移。',
+                )
+            except Exception:
+                task.refresh_from_db()
+                task.log = (task.log or '') + '\n【编排】物化视图、普通视图、例程、触发器请通过对应任务类型分别迁移。'
+                task.save(update_fields=['log'])
+            return
+
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
         pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)

@@ -112,7 +112,11 @@ export const migrationTaskApi = {
   /** 获取任务列表，支持分页：params.page、params.page_size */
   list: (params?: { page?: number; page_size?: number }) =>
     apiClient.get<TaskListResponse>('/api/tasks/', { params: params || {} }),
-  get: (id: number) => apiClient.get(`/api/tasks/${id}/`),
+  /** reconcile=1 时修正孤儿 running（进程已退出但库中仍为执行中） */
+  get: (id: number, options?: { reconcile?: boolean }) =>
+    apiClient.get(`/api/tasks/${id}/`, {
+      params: options?.reconcile ? { reconcile: 1 } : undefined,
+    }),
   create: (data: MigrationTask) => apiClient.post('/api/tasks/', data),
   update: (id: number, data: MigrationTask) => apiClient.put(`/api/tasks/${id}/`, data),
   delete: (id: number) => apiClient.delete(`/api/tasks/${id}/`),
