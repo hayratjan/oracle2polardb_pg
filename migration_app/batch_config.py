@@ -14,3 +14,6 @@ MIGRATION_PROGRESS_SAVE_ROWS = 10000
 
 # 「所有表」任务并行迁移表数量（每张表独立连接）；设为 1 则退化为顺序迁移
 MIGRATION_PARALLEL_TABLE_WORKERS = 16
+
+# 超过此行数时数据写入走 execute_values / COPY 快速通道
+MIGRATION_COPY_ROW_THRESHOLD = 100_000

@@ -134,6 +134,50 @@ class DatabaseObjectsViewToSqliteAPITest(TestCase):
                 self.assertIsInstance(data['objects'], list)
 
 
+class OracleSqlConverterTest(TestCase):
+    """Oracle SQL 转换器单元测试。"""
+
+    def test_convert_nvl_and_sysdate(self):
+        from migration_app.oracle_sql_converter import convert_oracle_to_pg_view
+
+        sql = "SELECT NVL(a, SYSDATE) FROM DUAL"
+        pg_sql, manual = convert_oracle_to_pg_view(sql)
+        self.assertIn('COALESCE', pg_sql)
+        self.assertIn('CURRENT_TIMESTAMP', pg_sql)
+        self.assertNotIn('DUAL', pg_sql.upper())
+
+    def test_detect_rownum_manual_review(self):
+        from migration_app.oracle_sql_converter import convert_oracle_to_pg_view
+
+        _, manual = convert_oracle_to_pg_view("SELECT * FROM t WHERE ROWNUM <= 10")
+        self.assertTrue(any('ROWNUM' in m for m in manual))
+
+
+class ConvertOracleTypeTest(TestCase):
+    """Oracle 类型映射测试。"""
+
+    def test_date_maps_to_timestamp(self):
+        from migration_app.views import convert_oracle_to_pg_type
+
+        self.assertEqual(convert_oracle_to_pg_type('DATE'), 'TIMESTAMP(0)')
+
+
+class TriggerExportTest(TestCase):
+    """触发器导出模板测试。"""
+
+    def test_plpgsql_template_contains_execute_function(self):
+        from migration_app.trigger_export import build_plpgsql_trigger_template
+
+        tpl = build_plpgsql_trigger_template(
+            trigger_name='TRG_TEST',
+            table_name='ORDERS',
+            trigger_type='BEFORE EACH ROW',
+            triggering_event='INSERT OR UPDATE',
+        )
+        self.assertIn('EXECUTE FUNCTION', tpl)
+        self.assertIn('RETURNS TRIGGER', tpl)
+
+
 class PgIdentifiersTest(TestCase):
     """PostgreSQL 列名引号，避免 ISNULL 等保留字建表失败。"""
 

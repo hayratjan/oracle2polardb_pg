@@ -218,7 +218,7 @@ const isIndeterminate = computed(() => {
 })
 
 // 批量运行：仅当存在可运行任务时可用（pending 或可重跑）
-const canRerunStatus = (status: string) => ['failed', 'completed', 'partial', 'canceled', 'aborted'].includes(status)
+const canRerunStatus = (status: string) => ['failed', 'completed', 'partial', 'canceled', 'aborted', 'exported'].includes(status)
 const batchStartDisabled = computed(() =>
   ![...selectedIds.value].some(id => {
     const t = tasks.value.find(x => x.id === id)
@@ -266,6 +266,7 @@ const getStatusBadgeClass = (status: string) => {
     partial: 'bg-warning',
     canceled: 'bg-dark',
     aborted: 'bg-danger',
+    exported: 'bg-info',
   }
   return classes[status] || 'bg-secondary'
 }
@@ -279,6 +280,7 @@ const getProgressBarClass = (status: string) => {
     partial: 'bg-warning',
     canceled: 'bg-dark',
     aborted: 'bg-danger',
+    exported: 'bg-info',
   }
   return classes[status] || 'bg-secondary'
 }
@@ -292,6 +294,7 @@ const getStatusText = (status: string) => {
     partial: '已中断',
     canceled: '已取消',
     aborted: '异常停止',
+    exported: '已导出待处理',
   }
   return texts[status] || status
 }
@@ -399,7 +402,7 @@ async function batchDelete() {
 }
 
 const canRerun = (status: string) =>
-  ['failed', 'completed', 'partial', 'canceled', 'aborted'].includes(status)
+  ['failed', 'completed', 'partial', 'canceled', 'aborted', 'exported'].includes(status)
 
 const canResume = (t: MigrationTask) =>
   ['failed', 'partial', 'canceled', 'aborted'].includes(t.status) &&

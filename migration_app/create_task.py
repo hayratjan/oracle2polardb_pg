@@ -171,6 +171,7 @@ def create_task_validated(request):
             task.sqlite_file_name = validated_data.get('sqlite_file_name')
             task.selected_fields = validated_data.get('selected_fields')
             task.identifier_case = validated_data.get('identifier_case') or 'lower'
+            task.view_migration_mode = validated_data.get('view_migration_mode') or 'materialize'
             task.is_batch = bool(validated_data.get('is_batch', False))
             
             # 设置目标 PolarDB 数据库名（可选，不填则用连接默认库）

@@ -28,13 +28,10 @@ def _migrate_one_table_job(
     conflict_strategy: str,
 ) -> Dict[str, Any]:
     """
-    在线程中迁移单张表（独立连接，不写 task 进度，避免并发写库冲突）。
+    在线程中迁移单张表（独立连接，不传 task 避免多线程写进度竞态）。
     返回 {table, ok, error, log_lines, rows}。
     """
-    # 热重载 views，避免长驻进程仍执行未加引号列名的旧建表逻辑
-    import importlib
     from . import views as views_mod
-    importlib.reload(views_mod)
 
     close_old_connections()
     table_log: List[str] = []
@@ -48,7 +45,7 @@ def _migrate_one_table_job(
         oracle_cursor = oracle_conn.cursor()
         pg_conn = views_mod.get_postgres_connection(postgres_connection_id, postgres_database)
         pg_cursor = pg_conn.cursor()
-        views_mod._migrate_single_table(
+        ok, rows = views_mod._migrate_single_table(
             oracle_cursor,
             pg_conn,
             pg_cursor,
@@ -57,10 +54,16 @@ def _migrate_one_table_job(
             table_name,
             conflict_strategy,
             table_log,
-            task=task,
+            task=None,
             all_tables_context=None,
         )
-        return {'table': table_name, 'ok': True, 'error': None, 'log_lines': table_log, 'rows': 0}
+        return {
+            'table': table_name,
+            'ok': ok,
+            'error': None if ok else '行数校验失败或迁移异常',
+            'log_lines': table_log,
+            'rows': rows,
+        }
     except Exception as e:
         table_log.append(f"表 {table_name} 迁移失败: {e}")
         logger.exception('并行迁移表 %s 失败', table_name)

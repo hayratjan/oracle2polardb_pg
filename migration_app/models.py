@@ -84,6 +84,12 @@ class MigrationTask(models.Model):
         ('partial', '部分完成'),
         ('canceled', '已取消'),
         ('aborted', '异常停止'),
+        ('exported', '已导出待人工处理'),
+    ]
+
+    VIEW_MIGRATION_MODE_CHOICES = [
+        ('materialize', '物化到表（快照）'),
+        ('definition', '创建视图定义'),
     ]
 
     CONFLICT_STRATEGY_CHOICES = [
@@ -121,6 +127,14 @@ class MigrationTask(models.Model):
     source_objects = models.TextField(verbose_name="多个源对象", blank=True, null=True, help_text="用逗号分隔的多个源对象名称")
     selected_fields = models.TextField(blank=True, null=True, verbose_name="字段过滤", help_text="逗号或换行分隔的字段名，可选")
     identifier_case = models.CharField(max_length=10, choices=IDENTIFIER_CASE_CHOICES, default='lower', verbose_name="标识符大小写策略")
+    view_migration_mode = models.CharField(
+        max_length=20,
+        choices=VIEW_MIGRATION_MODE_CHOICES,
+        default='materialize',
+        blank=True,
+        verbose_name="视图迁移模式",
+        help_text="materialize=将视图数据写入目标表；definition=在目标库创建 CREATE VIEW",
+    )
     is_batch = models.BooleanField(default=False, verbose_name="批量迁移")
     parent_task = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='subtasks', verbose_name="父任务")
     conflict_strategy = models.CharField(max_length=20, choices=CONFLICT_STRATEGY_CHOICES, default='error', verbose_name="冲突处理策略")

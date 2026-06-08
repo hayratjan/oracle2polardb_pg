@@ -44,6 +44,15 @@
           </p>
         </div>
       </div>
+      <div v-else-if="task.status === 'exported'" class="alert alert-info d-flex align-items-start mb-4" role="alert">
+        <i class="bi bi-file-earmark-code me-2 flex-shrink-0" style="font-size: 1.25rem;"></i>
+        <div>
+          <strong>已导出待人工处理</strong>
+          <p class="mb-0 small mt-1">
+            触发器源码与 PL/pgSQL 改写模板已写入下方日志，目标库未自动创建触发器。请人工完成改写后在 PolarDB-PG 执行。
+          </p>
+        </div>
+      </div>
       <div v-else-if="task.status === 'canceled'" class="alert alert-secondary d-flex align-items-start mb-4" role="alert">
         <i class="bi bi-slash-circle me-2 flex-shrink-0" style="font-size: 1.25rem;"></i>
         <div>
@@ -482,6 +491,7 @@ const getStatusBadgeClass = (status: string) => {
     partial: 'bg-warning',
     canceled: 'bg-dark',
     aborted: 'bg-danger',
+    exported: 'bg-info',
   }
   return classes[status] || 'bg-secondary'
 }
@@ -495,6 +505,7 @@ const getProgressBarClass = (status: string) => {
     partial: 'bg-warning',
     canceled: 'bg-dark',
     aborted: 'bg-danger',
+    exported: 'bg-info',
   }
   return classes[status] || 'bg-secondary'
 }
@@ -508,6 +519,7 @@ const getStatusText = (status: string) => {
     partial: '已中断',
     canceled: '已取消',
     aborted: '异常停止',
+    exported: '已导出待处理',
   }
   return texts[status] || status
 }
@@ -613,7 +625,7 @@ const ensureStatusPolling = () => {
 }
 
 const canRerun = (status: string) =>
-  ['failed', 'completed', 'partial', 'canceled', 'aborted'].includes(status)
+  ['failed', 'completed', 'partial', 'canceled', 'aborted', 'exported'].includes(status)
 
 /** 是否展示「继续迁移」按钮 */
 const canResume = (status: string) => {
