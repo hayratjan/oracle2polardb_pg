@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Oracle → PolarDB 开发环境一键启动脚本
+# Oracle → PolarDB 开发环境一键启动脚本（macOS / Linux）
 # 同时启动 Django 后端 (默认 8000) 与 Vue/Vite 前端 (默认 5173)
 # 用法: ./start_dev.sh [--migrate] [--install] [--celery] [--help]
+# Windows 请使用 start_dev.bat 或 start_dev.ps1
 # =============================================================================
 
 set -euo pipefail
