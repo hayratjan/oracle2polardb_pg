@@ -26,8 +26,11 @@ _ORACLE_SYSTEM_USERS = (
     'ORDDATA', 'ORDSYS', 'REMOTE_SCHEDULER_AGENT', 'WMSYS', 'XDB',
 )
 
-# 编排阶段顺序
-PHASES = ['prepare', 'sequences', 'tables', 'views', 'materialized_views', 'triggers', 'routines', 'done']
+# 编排阶段顺序（外键在表数据导入完成后回放）
+PHASES = [
+    'prepare', 'sequences', 'tables', 'foreign_keys',
+    'views', 'materialized_views', 'triggers', 'routines', 'done',
+]
 
 _OBJECT_QUERIES = {
     'tables': ("SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER = :schema ORDER BY TABLE_NAME", None),
@@ -67,12 +70,47 @@ def discover_oracle_instance(connection_id: int) -> dict[str, Any]:
             stats[key] = len(cur.fetchall())
         result_schemas.append({'name': schema, 'stats': stats})
 
+    # 未自动迁移的对象类型统计（Discovery 告警）
+    unsupported: dict[str, int] = {}
+    _UNSUPPORTED_QUERIES = {
+        'synonyms': (
+            "SELECT COUNT(*) FROM ALL_SYNONYMS WHERE OWNER = :schema",
+        ),
+        'packages': (
+            "SELECT COUNT(*) FROM ALL_OBJECTS WHERE OWNER = :schema "
+            "AND OBJECT_TYPE IN ('PACKAGE', 'PACKAGE BODY')",
+        ),
+        'db_links': (
+            "SELECT COUNT(*) FROM ALL_DB_LINKS WHERE OWNER = :schema",
+        ),
+        'partitioned_tables': (
+            "SELECT COUNT(*) FROM ALL_PART_TABLES WHERE OWNER = :schema",
+        ),
+    }
+    for schema in schemas:
+        for key, (query,) in _UNSUPPORTED_QUERIES.items():
+            cur.execute(query, {'schema': schema})
+            cnt = int(cur.fetchone()[0])
+            unsupported[key] = unsupported.get(key, 0) + cnt
+
     cur.close()
     conn.close()
+    warnings = []
+    if unsupported.get('synonyms', 0):
+        warnings.append(f"发现 {unsupported['synonyms']} 个同义词，当前不支持自动迁移")
+    if unsupported.get('packages', 0):
+        warnings.append(f"发现 {unsupported['packages']} 个包对象，需人工迁移")
+    if unsupported.get('db_links', 0):
+        warnings.append(f"发现 {unsupported['db_links']} 个 DB Link，需人工处理")
+    if unsupported.get('partitioned_tables', 0):
+        warnings.append(f"发现 {unsupported['partitioned_tables']} 个分区表，将按普通表迁移（不含分区 DDL）")
+
     return {
         'connection_id': connection_id,
         'schema_count': len(result_schemas),
         'schemas': result_schemas,
+        'unsupported_stats': unsupported,
+        'warnings': warnings,
     }
 
 
@@ -235,6 +273,25 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                         except Exception as e:
                             failed_objects.append({'object': obj_id, 'phase': phase, 'error': str(e)})
                             log.append(f'    表 {tbl} 失败: {e}')
+
+                elif phase == 'foreign_keys':
+                    from .schema_converter import apply_foreign_keys_for_schema
+                    fk_log: list[str] = []
+                    fk_phase_id = f'__fk__{src_schema}'
+                    if fk_phase_id in completed_objects:
+                        continue
+                    try:
+                        n = apply_foreign_keys_for_schema(
+                            oracle_cur, pg_cur, pg_conn,
+                            src_schema, tgt_schema, fk_log,
+                            id_case=id_case, schema_mappings=schema_mappings,
+                        )
+                        completed_objects.add(fk_phase_id)
+                        log.extend([f'    {ln}' for ln in fk_log])
+                        log.append(f'    Schema {src_schema} 外键回放 {n} 个')
+                    except Exception as e:
+                        failed_objects.append({'object': fk_phase_id, 'phase': phase, 'error': str(e)})
+                        log.append(f'    Schema {src_schema} 外键回放失败: {e}')
 
                 elif phase == 'views':
                     for vname in _list_objects(oracle_cur, src_schema, 'views'):

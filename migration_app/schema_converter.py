@@ -348,3 +348,134 @@ def apply_post_table_schema(
         oracle_cursor, pg_cursor, pg_conn,
         source_schema, target_schema, table_name, log_list, id_case=id_case,
     )
+
+
+def fetch_foreign_keys_for_schema(oracle_cursor, source_schema: str) -> List[dict]:
+    """读取 Schema 下全部外键约束（含引用表/列）。"""
+    oracle_cursor.execute(
+        """
+        SELECT fk.CONSTRAINT_NAME, fk.TABLE_NAME,
+               fkc.COLUMN_NAME, fkc.POSITION,
+               pk.OWNER AS REF_OWNER, pk.TABLE_NAME AS REF_TABLE,
+               pkc.COLUMN_NAME AS REF_COLUMN
+        FROM ALL_CONSTRAINTS fk
+        JOIN ALL_CONS_COLUMNS fkc
+          ON fk.OWNER = fkc.OWNER AND fk.CONSTRAINT_NAME = fkc.CONSTRAINT_NAME
+        JOIN ALL_CONSTRAINTS pk
+          ON fk.R_OWNER = pk.OWNER AND fk.R_CONSTRAINT_NAME = pk.CONSTRAINT_NAME
+        JOIN ALL_CONS_COLUMNS pkc
+          ON pk.OWNER = pkc.OWNER AND pk.CONSTRAINT_NAME = pkc.CONSTRAINT_NAME
+         AND fkc.POSITION = pkc.POSITION
+        WHERE fk.OWNER = :schema AND fk.CONSTRAINT_TYPE = 'R' AND fk.STATUS = 'ENABLED'
+        ORDER BY fk.TABLE_NAME, fk.CONSTRAINT_NAME, fkc.POSITION
+        """,
+        {'schema': source_schema.upper()},
+    )
+    fk_map: Dict[str, dict] = {}
+    for row in oracle_cursor.fetchall():
+        cname, tbl, col, _pos, ref_owner, ref_tbl, ref_col = row
+        key = f'{source_schema.upper()}.{cname}'
+        if key not in fk_map:
+            fk_map[key] = {
+                'name': cname,
+                'table': tbl,
+                'ref_owner': ref_owner,
+                'ref_table': ref_tbl,
+                'columns': [],
+                'ref_columns': [],
+            }
+        fk_map[key]['columns'].append(col)
+        fk_map[key]['ref_columns'].append(ref_col)
+    return list(fk_map.values())
+
+
+def _map_schema_name(source_schema: str, schema_mappings: List[dict], id_case: str) -> str:
+    """Oracle Schema → 目标 Schema 映射。"""
+    for m in schema_mappings or []:
+        if m.get('source_schema', '').upper() == source_schema.upper():
+            return m.get('target_schema') or apply_identifier_case(source_schema, id_case)
+    return apply_identifier_case(source_schema, id_case)
+
+
+def apply_foreign_keys_for_schema(
+    oracle_cursor,
+    pg_cursor,
+    pg_conn,
+    source_schema: str,
+    target_schema: str,
+    log_list: List[str],
+    *,
+    id_case: str = 'lower',
+    schema_mappings: Optional[List[dict]] = None,
+) -> int:
+    """
+    在目标库回放外键约束（需在表结构与数据导入完成后执行）。
+    返回成功创建的外键数量。
+    """
+    fks = fetch_foreign_keys_for_schema(oracle_cursor, source_schema)
+    if not fks:
+        return 0
+    created = 0
+    for fk in fks:
+        tbl = apply_identifier_case(fk['table'], id_case)
+        ref_owner = fk['ref_owner']
+        ref_tbl = apply_identifier_case(fk['ref_table'], id_case)
+        ref_tgt_schema = _map_schema_name(ref_owner, schema_mappings or [], id_case)
+        if ref_owner.upper() == source_schema.upper():
+            ref_tgt_schema = target_schema
+
+        child_qualified = build_qualified_table_name(target_schema, tbl)
+        parent_qualified = build_qualified_table_name(ref_tgt_schema, ref_tbl)
+        child_cols = ', '.join(
+            quote_identifier(apply_identifier_case(c, id_case)) for c in fk['columns']
+        )
+        ref_cols = ', '.join(
+            quote_identifier(apply_identifier_case(c, id_case)) for c in fk['ref_columns']
+        )
+        cname = apply_identifier_case(fk['name'], id_case)
+        ddl = (
+            f"ALTER TABLE {child_qualified} ADD CONSTRAINT {quote_identifier(cname)} "
+            f"FOREIGN KEY ({child_cols}) REFERENCES {parent_qualified} ({ref_cols})"
+        )
+        try:
+            pg_cursor.execute(ddl)
+            pg_conn.commit()
+            log_list.append(f"已创建外键 {fk['name']} 于表 {fk['table']}")
+            created += 1
+        except Exception as e:
+            pg_conn.rollback()
+            log_list.append(f"创建外键 {fk['name']} 失败（可人工补建）: {e}")
+    return created
+
+
+def apply_foreign_keys_batch(
+    oracle_cursor,
+    pg_cursor,
+    pg_conn,
+    schema_mappings: List[dict],
+    log_list: List[str],
+    *,
+    id_case: str = 'lower',
+) -> int:
+    """对多个 Schema 映射批量回放外键。"""
+    from .batch_config import get_enable_fk_replay
+
+    if not get_enable_fk_replay():
+        log_list.append('【外键回放】已在平台配置中关闭，跳过')
+        return 0
+    log_list.append('【外键回放】开始创建外键约束…')
+    total = 0
+    seen: set[str] = set()
+    for mapping in schema_mappings or []:
+        src = mapping.get('source_schema') or ''
+        if not src or src in seen:
+            continue
+        seen.add(src)
+        tgt = mapping.get('target_schema') or apply_identifier_case(src, id_case)
+        total += apply_foreign_keys_for_schema(
+            oracle_cursor, pg_cursor, pg_conn,
+            src, tgt, log_list,
+            id_case=id_case, schema_mappings=schema_mappings,
+        )
+    log_list.append(f'【外键回放】完成，成功 {total} 个外键')
+    return total

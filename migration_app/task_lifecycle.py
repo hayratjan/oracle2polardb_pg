@@ -76,6 +76,20 @@ def run_with_lifecycle(task_id: int, fn: Callable[..., T], *args, **kwargs) -> T
         raise
     finally:
         mark_task_inactive(task_id)
+        _persist_report_if_terminal(task_id)
+
+
+def _persist_report_if_terminal(task_id: int) -> None:
+    """任务进入终态时写入结构化迁移报告。"""
+    try:
+        from .models import MigrationTask
+        from .migration_report import persist_migration_report
+
+        task = MigrationTask.objects.get(pk=task_id)
+        if task.status in ('completed', 'partial', 'failed', 'exported', 'aborted', 'canceled'):
+            persist_migration_report(task)
+    except Exception as exc:
+        logger.debug('写入迁移报告失败 task_id=%s: %s', task_id, exc)
 
 
 def _append_aborted_log(task) -> None:

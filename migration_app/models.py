@@ -172,6 +172,10 @@ class MigrationTask(models.Model):
         null=True, blank=True, verbose_name="目标环境配置",
         help_text="表级/整库迁移向导中的目标库、表空间、用户、Schema 配置",
     )
+    # 任务完成后结构化迁移报告（成功/失败对象、行数校验、需人工审查项）
+    migration_report = models.JSONField(
+        null=True, blank=True, verbose_name="迁移报告",
+    )
 
     def __str__(self):
         return self.name
@@ -229,3 +233,46 @@ class MigrationTaskLog(models.Model):
 
     def __str__(self):
         return f"{self.task_id} {self.level} {self.created_at}"
+
+
+class PlatformConfig(models.Model):
+    """平台全局配置单例（pk 固定为 1）。"""
+
+    IDENTIFIER_CASE_CHOICES = MigrationTask.IDENTIFIER_CASE_CHOICES
+    CONFLICT_STRATEGY_CHOICES = MigrationTask.CONFLICT_STRATEGY_CHOICES
+
+    # 迁移默认策略
+    default_identifier_case = models.CharField(
+        max_length=10, choices=IDENTIFIER_CASE_CHOICES, default='lower',
+        verbose_name="默认标识符大小写",
+    )
+    default_conflict_strategy = models.CharField(
+        max_length=20, choices=CONFLICT_STRATEGY_CHOICES, default='error',
+        verbose_name="默认冲突策略",
+    )
+    enable_batch_migration = models.BooleanField(default=True, verbose_name="启用分批迁移")
+    batch_size = models.PositiveIntegerField(default=5000, verbose_name="每批拉取行数")
+    commit_every_batches = models.PositiveIntegerField(default=2, verbose_name="每N批提交一次")
+    progress_save_rows = models.PositiveIntegerField(default=10000, verbose_name="进度写库间隔(行)")
+    parallel_table_workers = models.PositiveIntegerField(default=16, verbose_name="多表并行线程数")
+    copy_row_threshold = models.PositiveIntegerField(default=100_000, verbose_name="快速写入行数阈值")
+    enable_fk_replay = models.BooleanField(default=True, verbose_name="启用外键约束回放")
+
+    # 系统参数
+    log_level = models.CharField(max_length=16, default='INFO', verbose_name="日志级别")
+    max_concurrent_tasks = models.PositiveIntegerField(default=5, verbose_name="最大并发任务数")
+    task_timeout = models.PositiveIntegerField(default=3600, verbose_name="任务超时(秒)")
+    enable_auto_retry = models.BooleanField(default=False, verbose_name="启用自动重试")
+    max_retry_count = models.PositiveIntegerField(default=3, verbose_name="最大重试次数")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    class Meta:
+        verbose_name = "平台配置"
+        verbose_name_plural = "平台配置"
+
+    def __str__(self):
+        return "平台全局配置"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)

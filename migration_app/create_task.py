@@ -7,9 +7,13 @@ from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from .models import MigrationTask, OracleConnection, PostgresConnection
 from .target_provisioning import prepare_target_env
+from .platform_config import apply_task_creation_defaults
+
 
 def validate_task_data(data):
     """验证任务数据的完整性和有效性"""
+    # 合并平台默认策略（标识符大小写、冲突策略等）
+    data = apply_task_creation_defaults(dict(data))
     errors = []
     
     # 检查必要字段

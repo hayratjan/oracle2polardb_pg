@@ -763,77 +763,42 @@ class PgUsersAPIView(APIView):
 
 
 class MigrationSettingsAPIView(APIView):
-    """迁移配置读写接口"""
+    """迁移配置读写接口（持久化至 PlatformConfig）"""
     permission_classes = [permissions.IsAuthenticated]
-
-    @staticmethod
-    def _default_migration_settings():
-        return {
-            'default_identifier_case': 'lower',
-            'default_conflict_strategy': 'error',
-            'enable_batch_migration': False,
-            'batch_size': 100,
-        }
 
     def get(self, request):
         try:
-            # 直接返回扁平结构，与前端 v-model 字段一致
-            return Response(self._default_migration_settings())
+            from .platform_config import get_migration_settings
+            return Response(get_migration_settings())
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     def post(self, request):
         try:
+            from .platform_config import save_migration_settings
             data = request.data or {}
-            # 校验并归一化配置项
-            settings = self._default_migration_settings()
-            if 'default_identifier_case' in data:
-                settings['default_identifier_case'] = data['default_identifier_case']
-            if 'default_conflict_strategy' in data:
-                settings['default_conflict_strategy'] = data['default_conflict_strategy']
-            if 'enable_batch_migration' in data:
-                settings['enable_batch_migration'] = bool(data['enable_batch_migration'])
-            if 'batch_size' in data:
-                settings['batch_size'] = max(1, int(data['batch_size']))
+            settings = save_migration_settings(data)
             return Response({'status': 'success', 'message': '保存成功', 'data': settings})
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class SystemSettingsAPIView(APIView):
-    """系统设置读写接口"""
+    """系统设置读写接口（持久化至 PlatformConfig）"""
     permission_classes = [permissions.IsAuthenticated]
-
-    @staticmethod
-    def _default_system_settings():
-        return {
-            'log_level': 'INFO',
-            'max_concurrent_tasks': 5,
-            'task_timeout': 3600,
-            'enable_auto_retry': False,
-            'max_retry_count': 3,
-        }
 
     def get(self, request):
         try:
-            return Response(self._default_system_settings())
+            from .platform_config import get_system_settings
+            return Response(get_system_settings())
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     def post(self, request):
         try:
+            from .platform_config import save_system_settings
             data = request.data or {}
-            settings = self._default_system_settings()
-            if 'log_level' in data:
-                settings['log_level'] = data['log_level']
-            if 'max_concurrent_tasks' in data:
-                settings['max_concurrent_tasks'] = max(1, int(data['max_concurrent_tasks']))
-            if 'task_timeout' in data:
-                settings['task_timeout'] = max(1, int(data['task_timeout']))
-            if 'enable_auto_retry' in data:
-                settings['enable_auto_retry'] = bool(data['enable_auto_retry'])
-            if 'max_retry_count' in data:
-                settings['max_retry_count'] = max(0, int(data['max_retry_count']))
+            settings = save_system_settings(data)
             return Response({'status': 'success', 'message': '保存成功', 'data': settings})
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -883,11 +848,56 @@ class MigrationLogsAPIView(APIView):
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class HelpDocsAPIView(APIView):
+class CeleryStatusAPIView(APIView):
+    """Celery / Beat 配置状态（供前端提示定时增量依赖）"""
+    permission_classes = [permissions.IsAuthenticated]
+
     def get(self, request):
+        try:
+            from .platform_config import get_celery_status
+            return Response({'status': 'success', **get_celery_status()})
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class HelpDocsAPIView(APIView):
+    """帮助文档索引（供前端 Help 页渲染）"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        sections = [
+            {
+                'title': '快速开始',
+                'items': [
+                    {'label': '产品概述与 v2 亮点', 'path': 'README.md', 'anchor': '亮点功能--v2'},
+                    {'label': '环境要求与一键启动', 'path': 'README.md', 'anchor': '快速开始'},
+                    {'label': '表级迁移向导', 'path': 'README.md', 'anchor': '表级迁移向导'},
+                    {'label': '整库一键迁移', 'path': 'README.md', 'anchor': '整库一键迁移'},
+                ],
+            },
+            {
+                'title': '子文档',
+                'items': [
+                    {'label': '文档索引', 'path': 'docs/文档索引.md'},
+                    {'label': '迁移进度与监控', 'path': 'docs/迁移进度与监控.md'},
+                    {'label': '路由与前后端配置', 'path': 'docs/路由与前后端配置.md'},
+                    {'label': '需求与版本说明', 'path': 'docs/需求与版本说明.md'},
+                ],
+            },
+            {
+                'title': '运维提示',
+                'items': [
+                    {'label': 'Celery Worker + Beat + Redis 三件套（定时增量必需）', 'hint': True},
+                    {'label': '触发器/复杂 PL/SQL 需人工改写后在目标库执行', 'hint': True},
+                    {'label': '外键约束在表数据导入完成后回放（可在系统配置关闭）', 'hint': True},
+                ],
+            },
+        ]
         return Response({
             'status': 'success',
-            'message': 'Help documentation available'
+            'title': 'Oracle → PolarDB 迁移平台帮助',
+            'version': 'v2.0',
+            'sections': sections,
         })
 
 

@@ -1733,7 +1733,7 @@ def migrate_schema_orchestration(task_id, postgres_database=None):
     task.status = 'running'
     if not task.started_at:
         task.started_at = timezone.now()
-    phases = ['sequences', 'all_tables', 'done']
+    phases = ['sequences', 'all_tables', 'foreign_keys', 'done']
     if not resume_mode:
         task.progress = 0
     if resume_mode:
@@ -1772,6 +1772,9 @@ def migrate_schema_orchestration(task_id, postgres_database=None):
                 task.save(update_fields=['log'])
             migrate_all_tables(task_id, postgres_database)
             task.refresh_from_db()
+            if task.status != 'failed':
+                _replay_schema_foreign_keys(task, postgres_database)
+                task.refresh_from_db()
             if task.status == 'failed':
                 task.view_progress = {
                     'orchestration': True,

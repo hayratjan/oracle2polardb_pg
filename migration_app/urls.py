@@ -45,6 +45,7 @@ urlpatterns = [
     path('postgres/edit-connection/', views.edit_pg_connection, name='api_edit_pg_connection'),
     path('config/migration/', api.MigrationSettingsAPIView.as_view(), name='api_migration_settings'),
     path('config/system/', api.SystemSettingsAPIView.as_view(), name='api_system_settings'),
+    path('config/celery-status/', api.CeleryStatusAPIView.as_view(), name='api_celery_status'),
     path('logs/', api.MigrationLogsAPIView.as_view(), name='api_migration_logs'),
     path('help/', api.HelpDocsAPIView.as_view(), name='api_help'),
     path('create-task/', api.CreateTaskAPIView.as_view(), name='api_create_task'),

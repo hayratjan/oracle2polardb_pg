@@ -262,6 +262,17 @@ def start_task(request, task_id):
             logger.info(f"开始处理启动任务: 任务ID={task_id}")
             task = get_object_or_404(MigrationTask, pk=task_id)
             logger.info(f"任务信息: {task.name}, 当前状态: {task.status}")
+
+            if task.status == 'running':
+                return JsonResponse({
+                    'status': 'error',
+                    'message': '任务已在执行中',
+                }, status=400)
+
+            from .platform_config import can_start_new_task
+            allowed, limit_msg = can_start_new_task()
+            if not allowed:
+                return JsonResponse({'status': 'error', 'message': limit_msg}, status=400)
             
             # 从请求中获取参数，如果请求中未提供则使用任务原有设置
             new_conflict_strategy = None
