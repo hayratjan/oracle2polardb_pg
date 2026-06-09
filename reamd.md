@@ -1,10 +1,6 @@
 <!-- 项目简介页 · 完整文档见 README.md -->
-<p align="center">
-  <img src="frontend/src/assets/logo.svg" alt="迁移平台图标" width="64" height="64" />
-</p>
-
-<h2 align="center">甲骨文 11g 至 云原生 PostgreSQL</h2>
-<h4 align="center">第十五版兼容引擎 · 企业级数据迁移</h4>
+<h2 align="center">Oracle 11g 至 PolarDB-PG</h2>
+<h4 align="center">PostgreSQL v15 企业级数据迁移</h4>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python" />
@@ -120,5 +116,5 @@ flowchart TB
 ---
 
 <p align="center">
-  <sub>© 2025–2026 · <a href="README.md">甲骨文至云数据库迁移平台</a></sub>
+  <sub>© 2025–2026 · <a href="README.md">Oracle 至 PolarDB 迁移平台</a></sub>
 </p>

@@ -1,9 +1,5 @@
 <!-- 文档版本：v2 · 企业级迁移平台 -->
-<p align="center">
-  <img src="frontend/src/assets/logo.svg" alt="甲骨文至云数据库迁移平台图标" width="80" height="80" />
-</p>
-
-<h1 align="center">甲骨文 至 云原生 PostgreSQL</h1>
+<h1 align="center">Oracle 至 PolarDB PostgreSQL</h1>
 <h3 align="center">企业级数据库迁移与同步平台</h3>
 
 <p align="center">
@@ -828,11 +824,7 @@ pnpm build      # 生产构建
 <br/>
 
 <p align="center">
-  <img src="frontend/src/assets/logo.svg" alt="平台图标" width="48" height="48" />
-</p>
-
-<p align="center">
-  <strong>甲骨文 至 云原生 PostgreSQL</strong><br/>
+  <strong>Oracle 至 PolarDB PostgreSQL</strong><br/>
   <sub>企业级迁移平台 · 表级精迁 · 整库编排 · 目标环境自动就绪</sub>
 </p>
 
