@@ -1709,6 +1709,43 @@ def migrate_trigger(task_id, postgres_database=None):
         task.save()
 
 
+def _replay_schema_foreign_keys(task, postgres_database=None) -> None:
+    """全 Schema 编排：表数据导入完成后回放外键。"""
+    from .batch_config import get_enable_fk_replay
+    from .schema_converter import apply_foreign_keys_for_schema
+
+    if not get_enable_fk_replay():
+        append_line = '【外键回放】已在平台配置中关闭，跳过'
+        task.log = (task.log or '') + '\n' + append_line
+        task.save(update_fields=['log'])
+        return
+    if not task.postgres_connection_id:
+        return
+    oracle_conn = oracle_cursor = pg_conn = pg_cursor = None
+    fk_log: list[str] = []
+    try:
+        oracle_conn = get_oracle_connection(task.oracle_connection.id)
+        oracle_cursor = oracle_conn.cursor()
+        pgdb = postgres_database or task.postgres_database or task.postgres_connection.database
+        pg_conn = get_postgres_connection(task.postgres_connection.id, pgdb)
+        pg_cursor = pg_conn.cursor()
+        id_case = getattr(task, 'identifier_case', 'lower') or 'lower'
+        apply_foreign_keys_for_schema(
+            oracle_cursor, pg_cursor, pg_conn,
+            task.source_schema, task.target_schema or task.source_schema,
+            fk_log, id_case=id_case,
+        )
+        if fk_log:
+            task.log = (task.log or '') + '\n' + '\n'.join(fk_log)
+            task.save(update_fields=['log'])
+    except Exception as e:
+        task.log = (task.log or '') + f'\n【外键回放】失败: {e}'
+        task.save(update_fields=['log'])
+    finally:
+        from .migration_errors import safe_close_db_resources
+        safe_close_db_resources(oracle_cursor, oracle_conn, pg_cursor, pg_conn)
+
+
 def migrate_schema_orchestration(task_id, postgres_database=None):
     """
     全 Schema 编排：先迁移序列，再复用「所有表」逻辑迁移全部表；其余对象请单独建任务。
@@ -1841,6 +1878,9 @@ def migrate_schema_orchestration(task_id, postgres_database=None):
         migrate_all_tables(task_id, postgres_database)
 
         task.refresh_from_db()
+        if task.status != 'failed':
+            _replay_schema_foreign_keys(task, postgres_database)
+            task.refresh_from_db()
         merged = '\n'.join(phase1_log) + '\n\n' + (task.log or '')
         task.log = merged
         # 全表阶段失败时不把编排进度标为 done，避免界面误以为编排已成功收尾

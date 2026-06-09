@@ -27,10 +27,13 @@ cx_Oracle.init_oracle_client(lib_dir=r"/Users/xiaohaige/Downloads/instantclient_
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-2uyh))dkylum=(+u!6@)b#6lf7c4qt7ttz1j1jr8^um9079m+8'
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-2uyh))dkylum=(+u!6@)b#6lf7c4qt7ttz1j1jr8^um9079m+8',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DJANGO_DEBUG', 'true').lower() in ('1', 'true', 'yes')
 
 ALLOWED_HOSTS = ['*']
 

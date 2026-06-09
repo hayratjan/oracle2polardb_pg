@@ -2,7 +2,7 @@
 # =============================================================================
 # Oracle → PolarDB 开发环境一键启动脚本（macOS / Linux）
 # 同时启动 Django 后端 (默认 8000) 与 Vue/Vite 前端 (默认 5173)
-# 用法: ./start_dev.sh [--migrate] [--install] [--celery] [--help]
+# 用法: ./start_dev.sh [--migrate] [--install] [--celery] [--beat] [--help]
 # Windows 请使用 start_dev.bat 或 start_dev.ps1
 # =============================================================================
 
@@ -24,6 +24,7 @@ PIDS=()
 RUN_MIGRATE=false
 RUN_INSTALL=false
 RUN_CELERY=false
+RUN_BEAT=false
 
 # -----------------------------------------------------------------------------
 # 工具函数
@@ -50,6 +51,7 @@ usage() {
   --migrate   启动前执行 uv run manage.py migrate
   --install   启动前安装后端与前端依赖
   --celery    若已配置 CELERY_BROKER_URL，额外启动 Celery Worker
+  --beat      与 --celery 配合启动 Celery Beat（定时增量必需）
   --help      显示本帮助
 
 环境变量:
@@ -61,7 +63,7 @@ usage() {
 示例:
   ./start_dev.sh
   ./start_dev.sh --migrate --install
-  CELERY_BROKER_URL=redis://127.0.0.1:6379/0 ./start_dev.sh --celery
+  CELERY_BROKER_URL=redis://127.0.0.1:6379/0 ./start_dev.sh --celery --beat
 EOF
 }
 
@@ -114,6 +116,11 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --celery)
+      RUN_CELERY=true
+      shift
+      ;;
+    --beat)
+      RUN_BEAT=true
       RUN_CELERY=true
       shift
       ;;
@@ -193,6 +200,12 @@ if [[ "$RUN_CELERY" == true ]]; then
   else
     start_process "Celery Worker" \
       uv run celery -A oracle2polardb_pg worker -l info
+    if [[ "$RUN_BEAT" == true ]]; then
+      start_process "Celery Beat" \
+        uv run celery -A oracle2polardb_pg beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    else
+      warn "未启动 Celery Beat；定时增量需使用 --beat 或单独运行 celery beat。"
+    fi
   fi
 fi
 

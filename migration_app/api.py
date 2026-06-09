@@ -234,6 +234,26 @@ class MigrationTaskViewSet(viewsets.ModelViewSet):
         })
 
     @action(detail=True, methods=['get'])
+    def report(self, request, pk=None):
+        """获取或生成结构化迁移报告。"""
+        from django.http import HttpResponse
+
+        from .migration_report import build_migration_report, persist_migration_report, report_to_json_text
+
+        task = self.get_object()
+        refresh = request.query_params.get('refresh') == '1'
+        if refresh or not task.migration_report:
+            report = persist_migration_report(task)
+        else:
+            report = task.migration_report
+        if request.query_params.get('format') == 'download':
+            filename = f'migration_report_task_{task.id}.json'
+            resp = HttpResponse(report_to_json_text(report), content_type='application/json; charset=utf-8')
+            resp['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return resp
+        return Response({'status': 'success', 'report': report})
+
+    @action(detail=True, methods=['get'])
     def info(self, request, pk=None):
         task = self.get_object()
         try:

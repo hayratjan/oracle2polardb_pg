@@ -1,25 +1,30 @@
 migration_app/__pycache__/*
-migrations/*
 *.pyc
 *.pyo
 *.pyd
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-__pycache__/
-*.pyc
-*.pyo
-migration_app/migrations/*
-static/*
 .DS_Store
 .vscode/launch.json
 .cursorignore
+
+# 本地 SQLite 数据库
+db.sqlite3
+*.sqlite3
+
+# 静态文件收集目录
+static/*
+
+# 前端构建与缓存
+frontend/dist/
+frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
+frontend/tsconfig.node.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Python 虚拟环境与锁文件缓存
+.venv/
+.env
+
+# IDE
+.idea/
