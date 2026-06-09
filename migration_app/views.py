@@ -810,7 +810,7 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
     # 迁移后行数校验
     wm_where = wm_sql_fragment.strip() if wm_sql_fragment else ''
     wm_params = {'wmv': watermark_min_exclusive} if wm_where else None
-    count_ok, _, _ = validate_row_counts(
+    count_ok, src_row_count, tgt_row_count = validate_row_counts(
         oracle_cursor,
         pg_cursor,
         source_schema,
@@ -841,7 +841,8 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
     if not count_ok:
         from .migration_errors import MigrationValidationError
         raise MigrationValidationError(
-            f'表 {source_schema}.{table_name} 行数校验未通过，源端与目标端行数不一致'
+            f'表 {source_schema}.{table_name} 行数校验未通过，'
+            f'源端 {src_row_count} 行 ≠ 目标端 {tgt_row_count} 行'
         )
     return True, total_rows
 

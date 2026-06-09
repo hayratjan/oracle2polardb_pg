@@ -104,8 +104,6 @@ def _copy_rows(
         buf.write(line + '\n')
     buf.seek(0)
     col_names = [c.strip('"') for c in quoted_columns]
-    try:
-        pg_cursor.copy_from(buf, table, sep='\t', null=r'\N', columns=col_names, schema=schema)
-    except psycopg2.Error as pg_err:
-        raise MigrationDataError(f'COPY 写入失败: {format_db_error(pg_err)}') from pg_err
+    # 不在此处捕获 psycopg2.Error，由 insert_rows_batch 统一回滚并包装异常
+    pg_cursor.copy_from(buf, table, sep='\t', null=r'\N', columns=col_names, schema=schema)
     return len(rows)
