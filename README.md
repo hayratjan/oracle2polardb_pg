@@ -1,13 +1,43 @@
-<p align="center">
-  <img src="frontend/src/assets/logo.svg" alt="Oracle to PolarDB 迁移工具 Logo" width="160" height="160" />
-</p>
+<!-- 文档版本：v2 · 企业级迁移平台 -->
+<table align="center">
+  <tr>
+    <td valign="middle" align="right" width="110">
+      <img src="frontend/src/assets/logo.svg" alt="Oracle 至 PolarDB 迁移工具图标" width="96" height="96" />
+    </td>
+    <td valign="middle" align="left">
+      <h1>Oracle 至 PolarDB PostgreSQL</h1>
+      <h3>企业级数据库迁移与同步平台</h3>
+    </td>
+  </tr>
+</table>
 
-<h1 align="center">Oracle → PolarDB PostgreSQL</h1>
-<h3 align="center">企业级迁移与同步平台</h3>
+<p align="center">
+  <img src="https://img.shields.io/badge/版本-v2.0-2563EB?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/状态-生产可用-22C55E?style=for-the-badge" alt="Status" />
+  <img src="https://img.shields.io/badge/许可-专有-64748B?style=for-the-badge" alt="License" />
+</p>
 
 <p align="center">
   <strong>一站式上云 · 表级精迁 · 整库编排 · 目标环境自动就绪</strong>
 </p>
+
+<p align="center">
+  <sub>将 Oracle 11g+ 的结构与数据，安全、可控地迁移至 PolarDB PostgreSQL · 支持增量同步与断点续传</sub>
+</p>
+
+<br/>
+
+<p align="center">
+  <a href="#-快速开始"><img src="https://img.shields.io/badge/快速开始-立即上手-2563EB?style=flat-square" alt="快速开始" /></a>
+  &nbsp;
+  <a href="#-亮点功能--v2"><img src="https://img.shields.io/badge/新功能-v2_亮点-7C3AED?style=flat-square" alt="v2 亮点" /></a>
+  &nbsp;
+  <a href="#-系统架构"><img src="https://img.shields.io/badge/架构-技术全景-0891B2?style=flat-square" alt="系统架构" /></a>
+  &nbsp;
+  <a href="docs/文档索引.md"><img src="https://img.shields.io/badge/文档-完整索引-64748B?style=flat-square" alt="文档索引" /></a>
+</p>
+
+<br/>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
@@ -18,31 +48,46 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Oracle-11g%2B-F80000?style=flat-square&logo=oracle&logoColor=white" alt="Oracle" />
-  <img src="https://img.shields.io/badge/PolarDB_PG-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PolarDB" />
+  <img src="https://img.shields.io/badge/PolarDB_PG-v15-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PolarDB" />
   <img src="https://img.shields.io/badge/Celery_Beat-增量同步-37814A?style=flat-square&logo=celery&logoColor=white" alt="Celery" />
   <img src="https://img.shields.io/badge/断点续传-支持-2563EB?style=flat-square" alt="Resume" />
+  <img src="https://img.shields.io/badge/JWT-安全认证-DC2626?style=flat-square" alt="JWT" />
 </p>
 
 <br/>
 
+<!-- 核心能力速览卡片 -->
 <table align="center">
   <tr>
     <td align="center" width="25%">
-      <strong>📋 表级迁移向导</strong><br/>
+      <h4>📋 表级迁移向导</h4>
       <sub>按表勾选 · 增量同步 · 目标环境配置</sub>
     </td>
     <td align="center" width="25%">
-      <strong>☁️ 整库一键迁移</strong><br/>
+      <h4>☁️ 整库一键迁移</h4>
       <sub>多 Schema · 全对象编排 · 阶段进度</sub>
     </td>
     <td align="center" width="25%">
-      <strong>🛠 目标环境 DDL</strong><br/>
+      <h4>🛠 目标环境 DDL</h4>
       <sub>建库 · 表空间 · 用户 · Schema</sub>
     </td>
     <td align="center" width="25%">
-      <strong>📡 实时监控</strong><br/>
+      <h4>📡 实时监控</h4>
       <sub>进度轮询 · 日志审计 · 主键对比</sub>
     </td>
+  </tr>
+</table>
+
+<br/>
+
+<!-- 平台核心指标 -->
+<table align="center">
+  <tr>
+    <td align="center"><strong>11+</strong><br/><sub>迁移对象类型</sub></td>
+    <td align="center"><strong>5</strong><br/><sub>表级向导步骤</sub></td>
+    <td align="center"><strong>6</strong><br/><sub>整库编排阶段</sub></td>
+    <td align="center"><strong>3</strong><br/><sub>增量同步模式</sub></td>
+    <td align="center"><strong>∞</strong><br/><sub>断点续传支持</sub></td>
   </tr>
 </table>
 
@@ -52,24 +97,28 @@
 
 ## 📋 目录
 
-<details open>
-<summary><strong>点击展开 / 收起导航</strong></summary>
+> [!TIP]
+> 建议首次阅读顺序：**产品概述** → **亮点功能 v2** → **快速开始** → **使用手册**
 
-- [产品概述](#-产品概述)
-- [亮点功能 · v2](#-亮点功能--v2)
-  - [表级迁移向导](#-表级迁移向导)
-  - [整库一键迁移](#-整库一键迁移)
-  - [目标环境自动就绪](#-目标环境自动就绪)
-- [适用场景与版本](#-适用场景与版本)
-- [核心功能矩阵](#-核心功能矩阵)
-- [系统架构](#-系统架构)
-- [导航与路由地图](#-导航与路由地图)
-- [快速开始](#-快速开始)
-- [使用手册](#-使用手册)
-- [API 速查 · 新增](#-api-速查--新增)
-- [开发指南](#-开发指南)
-- [文档与支持](#-文档与支持)
-- [许可证](#-许可证)
+<details open>
+<summary><b>📂 展开完整导航</b></summary>
+
+<br/>
+
+| 章节 | 说明 |
+|:-----|:-----|
+| [🎯 产品概述](#-产品概述) | 平台定位与核心能力矩阵 |
+| [✨ 亮点功能 · v2](#-亮点功能--v2) | 表级向导 · 整库编排 · 目标环境 DDL |
+| [📌 适用场景与版本](#-适用场景与版本) | 源端/目标端版本与典型场景 |
+| [✨ 核心功能矩阵](#-核心功能矩阵) | 连接、对象、策略、可观测性 |
+| [🏗 系统架构](#-系统架构) | 前后端分层与数据流 |
+| [🗺 导航与路由地图](#-导航与路由地图) | 菜单与路由对照表 |
+| [🚀 快速开始](#-快速开始) | 环境要求与一键启动 |
+| [📖 使用手册](#-使用手册) | 三条上手路径与策略速查 |
+| [🔌 API 速查](#-api-速查--新增) | v2 新增 REST 端点 |
+| [🔧 开发指南](#-开发指南) | 技术栈与关键模块 |
+| [📚 文档与支持](#-文档与支持) | 子文档索引 |
+| [📄 许可证](#-许可证) | 版权信息 |
 
 </details>
 
@@ -83,38 +132,94 @@
 mindmap
   root((迁移平台))
     连接层
-      Oracle 多源连接
-      PolarDB 多目标连接
+      Oracle多源连接
+      PolarDB多目标连接
       连接测试与健康检查
     迁移层
       表级精迁向导
       整库一键编排
       单对象任务创建
     目标层
-      选择已有库/Schema
+      选择已有库与Schema
       自动建库
-      自动建用户/Schema
+      自动建用户与Schema
       表空间管理
     运维层
       实时进度
       结构化日志
       断点续传
-      Celery 定时增量
+      定时增量同步
 ```
 
-| 能力维度 | 说明 |
-|:--------:|:-----|
-| **一站式** | 连接配置 → 对象选择 → 目标就绪 → 执行监控，全流程 Web 化 |
-| **可编排** | 单表、多表、整 Schema、**整实例多 Schema** 多粒度迁移 |
-| **可增量** | 水位列追加、主键对齐定时增删，配合 Celery Beat |
-| **可观测** | 任务/对象/阶段三级进度，日志审计与失败诊断 |
-| **可续传** | 大表、多表、整库编排均支持断点恢复 |
+<br/>
+
+<table>
+  <thead>
+    <tr>
+      <th align="center" width="18%">能力维度</th>
+      <th>说明</th>
+      <th align="center" width="12%">成熟度</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="center"><strong>一站式</strong></td>
+      <td>连接配置 → 对象选择 → 目标就绪 → 执行监控，全流程 Web 化</td>
+      <td align="center">✅ 生产</td>
+    </tr>
+    <tr>
+      <td align="center"><strong>可编排</strong></td>
+      <td>单表、多表、整 Schema、<strong>整实例多 Schema</strong> 多粒度迁移</td>
+      <td align="center">✅ 生产</td>
+    </tr>
+    <tr>
+      <td align="center"><strong>可增量</strong></td>
+      <td>水位列追加、主键对齐定时增删，配合 Celery Beat</td>
+      <td align="center">✅ 生产</td>
+    </tr>
+    <tr>
+      <td align="center"><strong>可观测</strong></td>
+      <td>任务/对象/阶段三级进度，日志审计与失败诊断</td>
+      <td align="center">✅ 生产</td>
+    </tr>
+    <tr>
+      <td align="center"><strong>可续传</strong></td>
+      <td>大表、多表、整库编排均支持断点恢复</td>
+      <td align="center">✅ 生产</td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 
 ## ✨ 亮点功能 · v2
 
-> 🆕 以下为本版本重点交付能力：**表级迁移向导**、**整库一键迁移**、**PolarDB 目标环境 DDL**。
+> [!IMPORTANT]
+> 本版本重点交付：**表级迁移向导** · **整库一键迁移** · **PolarDB 目标环境 DDL 自动就绪**
+
+<br/>
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h4>📋 表级迁移向导</h4>
+      <code>/task/table-migrate</code><br/><br/>
+      五步向导收敛选表、配目标、定增量，适合核心业务表分批上云。
+    </td>
+    <td width="33%" valign="top">
+      <h4>☁️ 整库一键迁移</h4>
+      <code>/migration/full-database</code><br/><br/>
+      自动发现多 Schema，按依赖顺序编排序列→表→视图→例程。
+    </td>
+    <td width="33%" valign="top">
+      <h4>🛠 目标环境 DDL</h4>
+      <code>TargetEnvWizard</code><br/><br/>
+      Web 端一键建库/表空间/用户/Schema，无需反复登录控制台。
+    </td>
+  </tr>
+</table>
+
+<br/>
 
 ### 📋 表级迁移向导
 
@@ -124,11 +229,11 @@ mindmap
 
 ```mermaid
 flowchart LR
-  S1["① 源端配置<br/>Oracle 连接 + Schema"]
-  S2["② 选择表<br/>多选 / 搜索 / 全选"]
-  S3["③ 目标环境<br/>库 · 表空间 · 用户 · Schema"]
-  S4["④ 增量策略<br/>全量 / 水位列 / 主键对齐"]
-  S5["⑤ 确认提交<br/>可选自动准备环境"]
+  S1["步骤1 源端配置<br>Oracle连接与Schema"]
+  S2["步骤2 选择表<br>多选、搜索、全选"]
+  S3["步骤3 目标环境<br>库、表空间、用户、Schema"]
+  S4["步骤4 增量策略<br>全量、水位列、主键对齐"]
+  S5["步骤5 确认提交<br>可选自动准备环境"]
   S1 --> S2 --> S3 --> S4 --> S5
 ```
 
@@ -140,7 +245,8 @@ flowchart LR
 | ④ | 增量 | `none` 全量 · `timestamp` 水位列 · `pk_mirror` 主键对齐 + 定时 |
 | ⑤ | 提交 | 可选 `prepare_target` 先执行 DDL，再创建 `table` 类型任务 |
 
-**典型场景**：核心业务表分批上云、按表增量同步、目标库尚未在 PolarDB 控制台手工创建。
+> [!NOTE]
+> **典型场景**：核心业务表分批上云、按表增量同步、目标库尚未在 PolarDB 控制台手工创建。
 
 ---
 
@@ -153,15 +259,15 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph discover [发现阶段]
-    D1["扫描 ALL_USERS"]
-    D2["统计 表/视图/序列/触发器/例程"]
-    D3["Schema → 目标 Schema 映射表"]
+    D1["扫描用户列表"]
+    D2["统计表视图序列触发器例程"]
+    D3["Schema映射配置"]
   end
-  subgraph prepare [准备阶段 · 可选]
-    P1["CREATE DATABASE"]
-    P2["CREATE TABLESPACE"]
-    P3["CREATE ROLE / SCHEMA"]
-    P4["GRANT 授权"]
+  subgraph prepare [准备阶段]
+    P1["创建数据库"]
+    P2["创建表空间"]
+    P3["创建用户与Schema"]
+    P4["授权"]
   end
   subgraph migrate [迁移阶段]
     M1["序列"]
@@ -171,7 +277,8 @@ flowchart TB
     M5["触发器导出"]
     M6["例程"]
   end
-  discover --> prepare --> migrate
+  D3 --> P1
+  P4 --> M1
   M1 --> M2 --> M3 --> M4 --> M5 --> M6
 ```
 
@@ -213,7 +320,8 @@ flowchart TB
 | 用户 | `skip` / `existing` / `create` | `CREATEROLE` 或超级用户 |
 | Schema | `existing` / `create` | 目标库 `CREATE` 权限 |
 
-> ⚠️ 表空间创建需 PolarDB 实例文件系统路径；无超级用户权限时，可回退「使用默认表空间」仅完成库/用户/Schema 准备。
+> [!WARNING]
+> 表空间创建需 PolarDB 实例文件系统路径；无超级用户权限时，可回退「使用默认表空间」仅完成库/用户/Schema 准备。
 
 ---
 
@@ -222,30 +330,36 @@ flowchart TB
 <table>
   <thead>
     <tr>
-      <th width="20%">维度</th>
+      <th width="18%">维度</th>
       <th>说明</th>
+      <th width="14%">推荐度</th>
     </tr>
   </thead>
   <tbody>
     <tr>
       <td><strong>源端</strong></td>
-      <td>Oracle Database <strong>11g+</strong>（如 11.2.0.4），Schema = <code>ALL_USERS.USERNAME</code></td>
+      <td>Oracle Database <strong>11g+</strong>（如 11.2.0.4 Enterprise Edition），Schema = <code>ALL_USERS.USERNAME</code></td>
+      <td>⭐⭐⭐⭐⭐</td>
     </tr>
     <tr>
       <td><strong>目标端</strong></td>
       <td>阿里云 <strong>PolarDB PostgreSQL</strong> 或兼容 PostgreSQL 15 的实例</td>
+      <td>⭐⭐⭐⭐⭐</td>
     </tr>
     <tr>
       <td><strong>精迁场景</strong></td>
       <td>按表选择、增量同步、目标库/用户/Schema 尚未就绪</td>
+      <td>⭐⭐⭐⭐</td>
     </tr>
     <tr>
       <td><strong>整库场景</strong></td>
       <td>单实例多 Schema、多对象类型一次性编排上云</td>
+      <td>⭐⭐⭐⭐</td>
     </tr>
     <tr>
       <td><strong>归档场景</strong></td>
       <td>视图数据导出 SQLite，便于离线分析</td>
+      <td>⭐⭐⭐</td>
     </tr>
   </tbody>
 </table>
@@ -256,39 +370,66 @@ flowchart TB
 
 ### 🔗 连接与配置
 
-| 模块 | 能力 |
-|:-----|:-----|
-| Oracle 连接 | 多源库 CRUD、连接测试、Schema/用户/对象枚举 |
-| PolarDB 连接 | 多实例、SSL、多库列表、Schema/用户/表空间查询 |
-| 任务级目标 | 连接 → 数据库 → Schema 三步选择；支持运行时切换目标库 |
-| 全局策略 | 默认大小写、冲突策略、批量大小（系统配置页） |
+| 模块 | 能力 | 标签 |
+|:-----|:-----|:-----|
+| Oracle 连接 | 多源库 CRUD、连接测试、Schema/用户/对象枚举 | `源端` |
+| PolarDB 连接 | 多实例、SSL、多库列表、Schema/用户/表空间查询 | `目标端` |
+| 任务级目标 | 连接 → 数据库 → Schema 三步选择；支持运行时切换目标库 | `编排` |
+| 全局策略 | 默认大小写、冲突策略、批量大小（系统配置页） | `策略` |
 
 ### 📦 对象迁移能力
 
-| 类型 | 标识 | 说明 |
-|:-----|:-----|:-----|
-| 表 | `table` | 结构+数据+约束+索引；支持多表单任务、增量、行数校验 |
-| 视图 | `view` | 物化到表 或 创建视图定义（NVL/SYSDATE 等基础转换） |
-| 物化视图 | `materialized_view` | MV 定义与刷新逻辑 |
-| 序列 | `sequence` | 先于表创建，保障主键自增 |
-| 触发器 | `trigger` | 导出 Oracle 源码 + PL/pgSQL 模板（人工改写） |
-| 例程 | `routine` | 存储过程/函数基础语法转换 |
-| 所有表 | `all_tables` | 单 Schema 全表批量，FK 拓扑排序 |
-| 全 Schema | `full_schema` | 序列 + 全表编排 |
-| **整库** | `full_database` | 🆕 多 Schema · 全对象类型编排 |
-| **表级批量** | `table_batch` | 🆕 向导创建的批量表任务（复用多表逻辑） |
-| SQLite 导出 | `view_to_sqlite` | 视图数据落地本地 SQLite |
+| 类型 | 标识 | 说明 | 版本 |
+|:-----|:-----|:-----|:----:|
+| 表 | `table` | 结构+数据+约束+索引；支持多表单任务、增量、行数校验 | — |
+| 视图 | `view` | 物化到表 或 创建视图定义（NVL/SYSDATE 等基础转换） | — |
+| 物化视图 | `materialized_view` | MV 定义与刷新逻辑 | — |
+| 序列 | `sequence` | 先于表创建，保障主键自增 | — |
+| 触发器 | `trigger` | 导出 Oracle 源码 + PL/pgSQL 模板（人工改写） | — |
+| 例程 | `routine` | 存储过程/函数基础语法转换 | — |
+| 所有表 | `all_tables` | 单 Schema 全表批量，FK 拓扑排序 | — |
+| 全 Schema | `full_schema` | 序列 + 全表编排 | — |
+| **整库** | `full_database` | 多 Schema · 全对象类型编排 | 🆕 |
+| **表级批量** | `table_batch` | 向导创建的批量表任务（复用多表逻辑） | 🆕 |
+| SQLite 导出 | `view_to_sqlite` | 视图数据落地本地 SQLite | — |
 
 ### ⚙️ 策略与增量
 
-| 策略 | 选项 |
-|:-----|:-----|
-| 冲突处理 | `error` · `replace` · `skip` · `append` · `truncate` |
-| 标识符大小写 | `lower` · `upper` · `preserve` |
-| 增量模式 | `none` 全量 · `timestamp` 水位列 · `pk_mirror` 主键对齐 |
-| 定时同步 | Celery Beat，最小间隔可配（分钟级） |
+<table>
+  <thead>
+    <tr>
+      <th width="22%">策略类别</th>
+      <th>可选项</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>冲突处理</strong></td>
+      <td><code>error</code> · <code>replace</code> · <code>skip</code> · <code>append</code> · <code>truncate</code></td>
+    </tr>
+    <tr>
+      <td><strong>标识符大小写</strong></td>
+      <td><code>lower</code> · <code>upper</code> · <code>preserve</code></td>
+    </tr>
+    <tr>
+      <td><strong>增量模式</strong></td>
+      <td><code>none</code> 全量 · <code>timestamp</code> 水位列 · <code>pk_mirror</code> 主键对齐</td>
+    </tr>
+    <tr>
+      <td><strong>定时同步</strong></td>
+      <td>Celery Beat，最小间隔可配（分钟级）</td>
+    </tr>
+  </tbody>
+</table>
 
 ### 📊 可观测性
+
+```
+任务总进度 ───────────────────────────────────────────── 100%
+  ├─ 对象/表级进度 ────────────────────────────────────  85%
+  │    └─ 行级进度（大表 COUNT + 分批写入）────────────  72%
+  └─ 整库阶段条：准备 → 序列 → 表 → 视图 → 触发器 → 例程
+```
 
 - **三级进度**：任务总进度 → 对象/表级进度 → 行级进度（大表 COUNT + 分批写入）
 - **整库阶段条**：准备 → 序列 → 表 → 视图 → 触发器 → 例程
@@ -301,36 +442,40 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-  subgraph FE ["🖥 Web 前端 · Vue 3 + TS + Bootstrap 5"]
+  subgraph FE [Web前端层]
+    direction TB
     Home["首页工作台"]
     TableWiz["表级迁移向导"]
     FullDB["整库一键迁移"]
     Create["创建任务"]
-    Tasks["任务列表 / 详情"]
+    Tasks["任务列表与详情"]
     Monitor["实时监控"]
-    TargetWiz["TargetEnvWizard"]
+    TargetWiz["目标环境向导"]
   end
 
-  subgraph API ["⚡ REST API · Django REST framework"]
-    Auth["JWT 认证"]
-    TaskAPI["任务 CRUD / 启停 / 续传"]
-    DDL["目标环境 DDL API"]
-    Discovery["Oracle Discovery"]
-    Meta["Schema / 对象枚举"]
+  subgraph API [接口层]
+    direction TB
+    Auth["身份认证"]
+    TaskAPI["任务增删改查与启停"]
+    DDL["目标环境接口"]
+    Discovery["库发现服务"]
+    Meta["Schema与对象枚举"]
   end
 
-  subgraph Core ["🔧 执行内核"]
-    Runner["runner.py 分发"]
-    Provision["target_provisioning.py"]
-    FullOrch["full_database.py 编排"]
-    Migrate["views.py migrate_*"]
-    Lifecycle["task_lifecycle + resume"]
+  subgraph Core [执行内核]
+    direction TB
+    Runner["任务分发模块"]
+    Provision["目标环境预置模块"]
+    FullOrch["整库编排模块"]
+    Migrate["对象迁移模块"]
+    Lifecycle["生命周期与续传"]
   end
 
-  subgraph Data ["💾 数据源"]
-    Oracle[("Oracle 11g+")]
-    PolarDB[("PolarDB-PG")]
-    SQLite[("SQLite 归档")]
+  subgraph Data [数据源]
+    direction LR
+    Oracle[("Oracle 11g及以上")]
+    PolarDB[("PolarDB PostgreSQL")]
+    SQLite[("SQLite归档库")]
   end
 
   TableWiz --> TaskAPI
@@ -347,19 +492,40 @@ flowchart TB
   Migrate --> SQLite
 ```
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  表现层   Vue 3 SPA · 侧边栏导航 · 主题切换 · 步骤条向导 · 阶段进度条     │
-├──────────────────────────────────────────────────────────────────────────┤
-│  接口层   /api/tasks · /api/create-table-migration · /api/target-env/... │
-├──────────────────────────────────────────────────────────────────────────┤
-│  领域层   任务模型 · 目标配置 JSON · 编排状态 view_progress              │
-├──────────────────────────────────────────────────────────────────────────┤
-│  执行层   Celery Worker / 线程池 · 分批读写 · 类型映射 · 约束回放        │
-├──────────────────────────────────────────────────────────────────────────┤
-│  数据层   Oracle (cx_Oracle)  ──►  PolarDB (psycopg2)  /  SQLite         │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+<br/>
+
+<table>
+  <tr>
+    <th width="20%">分层</th>
+    <th>职责</th>
+    <th width="28%">关键技术</th>
+  </tr>
+  <tr>
+    <td><strong>表现层</strong></td>
+    <td>Vue 3 SPA · 侧边栏导航 · 主题切换 · 步骤条向导 · 阶段进度条</td>
+    <td>Vue Router · Pinia · Bootstrap 5</td>
+  </tr>
+  <tr>
+    <td><strong>接口层</strong></td>
+    <td><code>/api/tasks</code> · <code>/api/create-table-migration</code> · <code>/api/target-env/...</code></td>
+    <td>DRF · JWT · CORS</td>
+  </tr>
+  <tr>
+    <td><strong>领域层</strong></td>
+    <td>任务模型 · 目标配置 JSON · 编排状态 <code>view_progress</code></td>
+    <td>Django ORM · JSONField</td>
+  </tr>
+  <tr>
+    <td><strong>执行层</strong></td>
+    <td>Celery Worker / 线程池 · 分批读写 · 类型映射 · 约束回放</td>
+    <td>Celery · cx_Oracle · psycopg2</td>
+  </tr>
+  <tr>
+    <td><strong>数据层</strong></td>
+    <td>Oracle (cx_Oracle) ──► PolarDB (psycopg2) / SQLite</td>
+    <td>连接池 · 凭据加密</td>
+  </tr>
+</table>
 
 ---
 
@@ -372,19 +538,20 @@ flowchart TB
       <th>菜单</th>
       <th>路由</th>
       <th>说明</th>
+      <th>标签</th>
     </tr>
   </thead>
   <tbody>
-    <tr><td rowspan="1">工作台</td><td>首页</td><td><code>/</code></td><td>统计卡片 · 快捷入口 · 最近任务</td></tr>
-    <tr><td rowspan="5">迁移管理</td><td>迁移任务</td><td><code>/tasks</code></td><td>分页列表 · 批量启停</td></tr>
-    <tr><td>实时监控</td><td><code>/monitor</code></td><td>运行中任务 · 日志 · 主键对比</td></tr>
-    <tr><td>创建任务</td><td><code>/task/create</code></td><td>通用多类型任务创建</td></tr>
-    <tr><td><strong>表级迁移</strong> 🆕</td><td><code>/task/table-migrate</code></td><td>五步向导 · 目标环境 · 增量</td></tr>
-    <tr><td><strong>整库一键迁移</strong> 🆕</td><td><code>/migration/full-database</code></td><td>Discovery · 映射 · 一键编排</td></tr>
-    <tr><td rowspan="2">数据连接</td><td>Oracle 数据库</td><td><code>/oracle</code></td><td>源端连接 CRUD · Schema 浏览</td></tr>
-    <tr><td>PolarDB-PG</td><td><code>/postgres</code></td><td>目标连接 CRUD · 库/Schema 浏览</td></tr>
-    <tr><td>系统</td><td>系统配置</td><td><code>/config</code></td><td>迁移策略 · 系统参数</td></tr>
-    <tr><td>—</td><td>任务详情</td><td><code>/task/:id</code></td><td>进度 · 日志 · 续传 · 阶段条</td></tr>
+    <tr><td rowspan="1">工作台</td><td>首页</td><td><code>/</code></td><td>统计卡片 · 快捷入口 · 最近任务</td><td>—</td></tr>
+    <tr><td rowspan="5">迁移管理</td><td>迁移任务</td><td><code>/tasks</code></td><td>分页列表 · 批量启停</td><td>—</td></tr>
+    <tr><td>实时监控</td><td><code>/monitor</code></td><td>运行中任务 · 日志 · 主键对比</td><td>—</td></tr>
+    <tr><td>创建任务</td><td><code>/task/create</code></td><td>通用多类型任务创建</td><td>—</td></tr>
+    <tr><td><strong>表级迁移</strong></td><td><code>/task/table-migrate</code></td><td>五步向导 · 目标环境 · 增量</td><td>🆕 v2</td></tr>
+    <tr><td><strong>整库一键迁移</strong></td><td><code>/migration/full-database</code></td><td>Discovery · 映射 · 一键编排</td><td>🆕 v2</td></tr>
+    <tr><td rowspan="2">数据连接</td><td>Oracle 数据库</td><td><code>/oracle</code></td><td>源端连接 CRUD · Schema 浏览</td><td>—</td></tr>
+    <tr><td>PolarDB-PG</td><td><code>/postgres</code></td><td>目标连接 CRUD · 库/Schema 浏览</td><td>—</td></tr>
+    <tr><td>系统</td><td>系统配置</td><td><code>/config</code></td><td>迁移策略 · 系统参数</td><td>—</td></tr>
+    <tr><td>—</td><td>任务详情</td><td><code>/task/:id</code></td><td>进度 · 日志 · 续传 · 阶段条</td><td>—</td></tr>
   </tbody>
 </table>
 
@@ -394,92 +561,165 @@ flowchart TB
 
 ### 环境要求
 
-| 类别 | 要求 |
-|:-----|:-----|
-| **运行环境** | Python 3.12+ · Node.js 18+ |
-| **数据库驱动** | cx_Oracle（Oracle）· psycopg2（PostgreSQL/PolarDB） |
-| **可选** | Redis + Celery（生产环境异步任务与定时增量） |
-| **包管理** | 后端 `uv` · 前端 `pnpm` |
+<table>
+  <thead>
+    <tr>
+      <th width="18%">类别</th>
+      <th>要求</th>
+      <th width="14%">必需</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>运行环境</strong></td>
+      <td>Python 3.12+ · Node.js 18+</td>
+      <td>✅</td>
+    </tr>
+    <tr>
+      <td><strong>数据库驱动</strong></td>
+      <td>cx_Oracle（Oracle）· psycopg2（PostgreSQL/PolarDB）</td>
+      <td>✅</td>
+    </tr>
+    <tr>
+      <td><strong>异步任务</strong></td>
+      <td>Redis + Celery（生产环境异步任务与定时增量）</td>
+      <td>可选</td>
+    </tr>
+    <tr>
+      <td><strong>包管理</strong></td>
+      <td>后端 <code>uv</code> · 前端 <code>pnpm</code></td>
+      <td>✅</td>
+    </tr>
+  </tbody>
+</table>
 
 ### 一键启动
 
 ```bash
-# ── 后端 ──────────────────────────────────────
+# ══════════════════════════════════════════════
+#  后端 · Django REST API
+# ══════════════════════════════════════════════
 uv pip install -r requirements.txt
 uv run manage.py migrate          # 含 target_provisioning 等新字段
-uv run manage.py createsuperuser  # 首次
+uv run manage.py createsuperuser  # 首次部署
 uv run manage.py runserver 0.0.0.0:8000
 
-# ── 前端 ──────────────────────────────────────
+# ══════════════════════════════════════════════
+#  前端 · Vue 3 SPA
+# ══════════════════════════════════════════════
 cd frontend && pnpm install && pnpm dev
+# → http://localhost:5173
 ```
+
+> [!TIP]
+> 生产环境建议同时启动 Celery Worker 与 Beat，以支持后台任务与定时增量同步。
 
 ### 推荐上手路径
 
 ```mermaid
 flowchart TD
-  A["① 配置 Oracle / PolarDB 连接并测试"] --> B{"迁移规模?"}
-  B -->|几张核心表| C["② 表级迁移向导<br/>/task/table-migrate"]
-  B -->|整实例多 Schema| D["② 整库一键迁移<br/>/migration/full-database"]
-  B -->|单视图/例程等| E["② 创建任务<br/>/task/create"]
-  C --> F["③ 准备目标环境（可选）"]
+  A["步骤1 配置Oracle与PolarDB连接并测试"] --> B{"迁移规模"}
+  B -->|几张核心表| C["步骤2 表级迁移向导"]
+  B -->|整实例多Schema| D["步骤2 整库一键迁移"]
+  B -->|单视图或例程| E["步骤2 通用创建任务"]
+  C --> F["步骤3 准备目标环境可选"]
   D --> F
-  F --> G["④ 启动任务 · 监控进度"]
-  G --> H["⑤ 日志排障 · 续传/校验"]
+  F --> G["步骤4 启动任务并监控进度"]
+  G --> H["步骤5 日志排障与续传校验"]
 ```
 
 ---
 
 ## 📖 使用手册
 
-### 路径 A · 表级迁移向导
+<table>
+  <tr>
+    <th width="28%">路径</th>
+    <th>适用场景</th>
+    <th>入口</th>
+  </tr>
+  <tr>
+    <td><strong>路径 A · 表级迁移向导</strong></td>
+    <td>按表精迁、增量同步、目标环境未就绪</td>
+    <td><code>/task/table-migrate</code></td>
+  </tr>
+  <tr>
+    <td><strong>路径 B · 整库一键迁移</strong></td>
+    <td>单实例多 Schema、全对象类型编排</td>
+    <td><code>/migration/full-database</code></td>
+  </tr>
+  <tr>
+    <td><strong>路径 C · 通用创建任务</strong></td>
+    <td>视图、例程、单序列、SQLite 导出</td>
+    <td><code>/task/create</code></td>
+  </tr>
+</table>
 
-1. 进入 **表级迁移**，选择 Oracle 连接与源 Schema。  
-2. 勾选需迁移的表（支持搜索与全选）。  
-3. 在 **目标环境** 面板选择 PolarDB 连接，按需**新建数据库/用户/Schema**，点击「测试并准备环境」。  
-4. 配置增量模式（可选水位列或主键对齐 + 定时）。  
+<br/>
+
+<details>
+<summary><b>📋 路径 A · 表级迁移向导（展开步骤）</b></summary>
+
+<br/>
+
+1. 进入 **表级迁移**，选择 Oracle 连接与源 Schema。
+2. 勾选需迁移的表（支持搜索与全选）。
+3. 在 **目标环境** 面板选择 PolarDB 连接，按需**新建数据库/用户/Schema**，点击「测试并准备环境」。
+4. 配置增量模式（可选水位列或主键对齐 + 定时）。
 5. 确认后创建任务，在详情页启动并观察多表进度。
 
-### 路径 B · 整库一键迁移
+</details>
 
-1. 进入 **整库一键迁移**，选择 Oracle 连接，点击 **刷新发现**。  
-2. 查看各 Schema 对象统计，编辑 **Oracle Schema → 目标 Schema** 映射。  
-3. 配置 PolarDB 目标环境，勾选需迁移的对象类型（默认全选）。  
-4. 点击 **创建并立即启动**，在详情页查看阶段进度条。  
+<details>
+<summary><b>☁️ 路径 B · 整库一键迁移（展开步骤）</b></summary>
+
+<br/>
+
+1. 进入 **整库一键迁移**，选择 Oracle 连接，点击 **刷新发现**。
+2. 查看各 Schema 对象统计，编辑 **Oracle Schema → 目标 Schema** 映射。
+3. 配置 PolarDB 目标环境，勾选需迁移的对象类型（默认全选）。
+4. 点击 **创建并立即启动**，在详情页查看阶段进度条。
 5. 触发器阶段完成后，从日志复制 PL/pgSQL 模板，人工改写后于目标库执行。
 
-### 路径 C · 通用创建任务
+</details>
 
-适用于视图、例程、单序列、SQLite 导出等场景 → `/task/create`。
+<br/>
 
 ### 冲突策略速查
 
-| 策略 | 行为 | 适用 |
-|:-----|:-----|:-----|
-| `error` | 已存在则失败 | 首次迁移、严格校验 |
-| `replace` | 删除后重建 | 结构变更需覆盖 |
-| `skip` | 跳过已存在对象 | 增量补迁 |
-| `append` | 仅追加数据 | 增量同步（主键对齐必选） |
-| `truncate` | 清空后重导 | 周期性全量刷新 |
+| 策略 | 行为 | 适用 | 风险 |
+|:-----|:-----|:-----|:----:|
+| `error` | 已存在则失败 | 首次迁移、严格校验 | 低 |
+| `replace` | 删除后重建 | 结构变更需覆盖 | 中 |
+| `skip` | 跳过已存在对象 | 增量补迁 | 低 |
+| `append` | 仅追加数据 | 增量同步（主键对齐必选） | 中 |
+| `truncate` | 清空后重导 | 周期性全量刷新 | 高 |
 
 ---
 
 ## 🔌 API 速查 · 新增
 
-<details>
-<summary><strong>展开完整新增端点列表</strong></summary>
+> [!IMPORTANT]
+> 所有 API 均需 JWT 认证。凭据经 Fernet 加密存储，请勿在日志中输出明文密码。
 
-| 方法 | 端点 | 说明 |
-|:-----|:-----|:-----|
-| `GET` | `/api/oracle/discovery/?connection_id=` | 整库 Schema 与对象统计 |
-| `POST` | `/api/create-table-migration/` | 表级向导创建任务 |
-| `POST` | `/api/create-full-database-migration/` | 整库编排创建任务 |
-| `POST` | `/api/target-env/prepare/` | 一键准备目标环境 |
-| `GET` | `/api/polardb/tablespaces/?connection_id=` | 列出表空间 |
-| `POST` | `/api/polardb/databases/create/` | 创建数据库 |
-| `POST` | `/api/polardb/tablespaces/create/` | 创建表空间 |
-| `POST` | `/api/polardb/users/create/` | 创建用户/角色 |
-| `POST` | `/api/polardb/schemas/create/` | 创建 Schema |
+<details>
+<summary><b>展开完整新增端点列表</b></summary>
+
+<br/>
+
+| 方法 | 端点 | 说明 | 场景 |
+|:-----|:-----|:-----|:-----|
+| `GET` | `/api/oracle/discovery/?connection_id=` | 整库 Schema 与对象统计 | 整库发现 |
+| `POST` | `/api/create-table-migration/` | 表级向导创建任务 | 表级精迁 |
+| `POST` | `/api/create-full-database-migration/` | 整库编排创建任务 | 整库编排 |
+| `POST` | `/api/target-env/prepare/` | 一键准备目标环境 | DDL 预置 |
+| `GET` | `/api/polardb/tablespaces/?connection_id=` | 列出表空间 | 目标配置 |
+| `POST` | `/api/polardb/databases/create/` | 创建数据库 | DDL |
+| `POST` | `/api/polardb/tablespaces/create/` | 创建表空间 | DDL |
+| `POST` | `/api/polardb/users/create/` | 创建用户/角色 | DDL |
+| `POST` | `/api/polardb/schemas/create/` | 创建 Schema | DDL |
+
+<br/>
 
 **`target_provisioning` 配置示例**（存于 `MigrationTask.target_provisioning`）：
 
@@ -508,32 +748,43 @@ flowchart TD
 ### 技术栈
 
 <table>
-  <tr><td width="50%"><strong>后端</strong></td><td><strong>前端</strong></td></tr>
-  <tr>
-    <td>
-      Python 3.12 · Django 5.2 · DRF<br/>
-      cx_Oracle · psycopg2 · Celery<br/>
-      JWT · Fernet 凭据加密
-    </td>
-    <td>
-      Vue 3 · TypeScript · Vite<br/>
-      Bootstrap 5 · Vue Router<br/>
-      Pinia · 主题 CSS 变量
-    </td>
-  </tr>
+  <thead>
+    <tr>
+      <th width="50%">后端</th>
+      <th>前端</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td valign="top">
+        <ul>
+          <li>Python 3.12 · Django 5.2 · DRF</li>
+          <li>cx_Oracle · psycopg2 · Celery</li>
+          <li>JWT · Fernet 凭据加密</li>
+        </ul>
+      </td>
+      <td valign="top">
+        <ul>
+          <li>Vue 3 · TypeScript · Vite</li>
+          <li>Bootstrap 5 · Vue Router</li>
+          <li>Pinia · 主题 CSS 变量</li>
+        </ul>
+      </td>
+    </tr>
+  </tbody>
 </table>
 
-### 关键模块（新功能）
+### 关键模块（v2 新功能）
 
-| 文件 | 职责 |
-|:-----|:-----|
-| `migration_app/target_provisioning.py` | PolarDB DDL：库/表空间/用户/Schema/授权 |
-| `migration_app/full_database.py` | 整库多阶段编排与 Discovery |
-| `migration_app/create_task.py` | `create_table_migration_plan` / `create_full_database_migration_plan` |
-| `frontend/src/components/TargetEnvWizard.vue` | 目标环境配置 UI |
-| `frontend/src/composables/useMigrationSource.ts` | 源端连接/Schema/对象复用逻辑 |
-| `frontend/src/views/TableMigrationView.vue` | 表级五步向导 |
-| `frontend/src/views/FullDatabaseMigrationView.vue` | 整库一键迁移页 |
+| 文件 | 职责 | 层级 |
+|:-----|:-----|:-----|
+| `migration_app/target_provisioning.py` | PolarDB DDL：库/表空间/用户/Schema/授权 | 后端 |
+| `migration_app/full_database.py` | 整库多阶段编排与 Discovery | 后端 |
+| `migration_app/create_task.py` | `create_table_migration_plan` / `create_full_database_migration_plan` | 后端 |
+| `frontend/src/components/TargetEnvWizard.vue` | 目标环境配置 UI | 前端 |
+| `frontend/src/composables/useMigrationSource.ts` | 源端连接/Schema/对象复用逻辑 | 前端 |
+| `frontend/src/views/TableMigrationView.vue` | 表级五步向导 | 前端 |
+| `frontend/src/views/FullDatabaseMigrationView.vue` | 整库一键迁移页 | 前端 |
 
 ### 前端命令
 
@@ -548,14 +799,47 @@ pnpm build      # 生产构建
 
 ## 📚 文档与支持
 
-| 文档 | 说明 |
-|:-----|:-----|
-| [文档索引](docs/文档索引.md) | 全部说明文档导航 |
-| [迁移进度与监控](docs/迁移进度与监控.md) | 进度计算、大表优化、轮询接口 |
-| [路由与前后端配置](docs/路由与前后端配置.md) | API 端点、部署与代理 |
-| [颜色系统使用说明](docs/颜色系统使用说明.md) | 主题变量与 UI 规范 |
-| [需求与版本说明](docs/需求与版本说明.md) | 版本背景与技术选型 |
-| **本 README** | 产品概述、v2 新功能、架构与上手路径 |
+<table>
+  <thead>
+    <tr>
+      <th>文档</th>
+      <th>说明</th>
+      <th>受众</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="docs/文档索引.md">文档索引</a></td>
+      <td>全部说明文档导航</td>
+      <td>全员</td>
+    </tr>
+    <tr>
+      <td><a href="docs/迁移进度与监控.md">迁移进度与监控</a></td>
+      <td>进度计算、大表优化、轮询接口</td>
+      <td>运维</td>
+    </tr>
+    <tr>
+      <td><a href="docs/路由与前后端配置.md">路由与前后端配置</a></td>
+      <td>API 端点、部署与代理</td>
+      <td>开发</td>
+    </tr>
+    <tr>
+      <td><a href="docs/颜色系统使用说明.md">颜色系统使用说明</a></td>
+      <td>主题变量与 UI 规范</td>
+      <td>前端</td>
+    </tr>
+    <tr>
+      <td><a href="docs/需求与版本说明.md">需求与版本说明</a></td>
+      <td>版本背景与技术选型</td>
+      <td>产品</td>
+    </tr>
+    <tr>
+      <td><strong>本 README</strong></td>
+      <td>产品概述、v2 新功能、架构与上手路径</td>
+      <td>全员</td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 
@@ -565,15 +849,26 @@ pnpm build      # 生产构建
 
 ---
 
+<br/>
+
+<table align="center">
+  <tr>
+    <td valign="middle" align="right" width="72">
+      <img src="frontend/src/assets/logo.svg" alt="平台图标" width="56" height="56" />
+    </td>
+    <td valign="middle" align="left">
+      <strong>Oracle 至 PolarDB PostgreSQL</strong><br/>
+      <sub>企业级迁移平台 · 表级精迁 · 整库编排 · 目标环境自动就绪</sub>
+    </td>
+  </tr>
+</table>
+
+<br/>
+
 <p align="center">
-  <img src="frontend/src/assets/logo.svg" alt="Logo" width="72" height="72" />
+  <code>表级迁移</code> &nbsp;·&nbsp; <code>整库一键</code> &nbsp;·&nbsp; <code>增量同步</code> &nbsp;·&nbsp; <code>断点续传</code>
 </p>
 
 <p align="center">
-  <strong>Oracle → PolarDB PostgreSQL</strong><br/>
-  <sub>企业级迁移平台 · 表级精迁 · 整库编排 · 目标环境自动就绪</sub>
-</p>
-
-<p align="center">
-  <code>表级迁移</code> · <code>整库一键</code> · <code>增量同步</code> · <code>断点续传</code>
+  <sub>基于 Django、Vue 3 与 PolarDB PostgreSQL 构建</sub>
 </p>

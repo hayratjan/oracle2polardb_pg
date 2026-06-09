@@ -85,6 +85,9 @@ def validate_row_counts(
         )
         return False, src_count, tgt_count
     except Exception as e:
+        from .migration_errors import format_db_error
         logger.warning('行数校验异常: %s', e)
-        log_list.append(f"【校验跳过】{source_object}: 行数对比失败 ({e})")
-        return True, -1, -1  # 校验失败不阻塞迁移，仅记日志
+        log_list.append(
+            f"【校验失败】{source_object}: 行数对比异常 ({format_db_error(e)})，请检查连接与权限"
+        )
+        return False, -1, -1

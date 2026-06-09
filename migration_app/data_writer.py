@@ -7,9 +7,11 @@ import io
 import logging
 from typing import List, Optional, Sequence
 
+import psycopg2
 from psycopg2.extras import execute_values
 
 from .batch_config import MIGRATION_COPY_ROW_THRESHOLD, MIGRATION_FETCH_BATCH_SIZE
+from .migration_errors import MigrationDataError, format_db_error, rollback_quietly
 from .oracle_row_adapter import adapt_oracle_rows
 
 logger = logging.getLogger(__name__)
@@ -60,18 +62,24 @@ def insert_rows_batch(
     if fast is None:
         fast = total_rows_hint >= MIGRATION_COPY_ROW_THRESHOLD
 
-    if fast and len(adapted) > 0:
-        # execute_values 比 executemany 快，COPY 需要额外格式化，超大批量时再走 COPY
-        if total_rows_hint >= MIGRATION_COPY_ROW_THRESHOLD * 10:
-            return _copy_rows(pg_cursor, qualified_table, quoted_columns, adapted)
-        execute_values(
-            pg_cursor,
-            f"INSERT INTO {qualified_table} ({col_list}) VALUES %s",
-            adapted,
-            page_size=MIGRATION_FETCH_BATCH_SIZE,
-        )
-    else:
-        pg_cursor.executemany(insert_sql, adapted)
+    try:
+        if fast and len(adapted) > 0:
+            # execute_values 比 executemany 快，COPY 需要额外格式化，超大批量时再走 COPY
+            if total_rows_hint >= MIGRATION_COPY_ROW_THRESHOLD * 10:
+                return _copy_rows(pg_cursor, qualified_table, quoted_columns, adapted)
+            execute_values(
+                pg_cursor,
+                f"INSERT INTO {qualified_table} ({col_list}) VALUES %s",
+                adapted,
+                page_size=MIGRATION_FETCH_BATCH_SIZE,
+            )
+        else:
+            pg_cursor.executemany(insert_sql, adapted)
+    except psycopg2.Error as pg_err:
+        rollback_quietly(pg_conn)
+        raise MigrationDataError(
+            f'批量写入目标表失败: {format_db_error(pg_err)}'
+        ) from pg_err
 
     return len(adapted)
 
@@ -96,5 +104,8 @@ def _copy_rows(
         buf.write(line + '\n')
     buf.seek(0)
     col_names = [c.strip('"') for c in quoted_columns]
-    pg_cursor.copy_from(buf, table, sep='\t', null=r'\N', columns=col_names, schema=schema)
+    try:
+        pg_cursor.copy_from(buf, table, sep='\t', null=r'\N', columns=col_names, schema=schema)
+    except psycopg2.Error as pg_err:
+        raise MigrationDataError(f'COPY 写入失败: {format_db_error(pg_err)}') from pg_err
     return len(rows)
