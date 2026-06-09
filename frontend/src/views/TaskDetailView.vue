@@ -1,20 +1,17 @@
 <template>
   <div class="task-detail-view">
-    <div class="page-header mb-4">
-      <div class="d-flex justify-content-between align-items-center">
-        <div>
-          <h1>
-            <i class="bi bi-file-earmark-text me-2" style="font-size: 32px;"></i>
-            任务详情
-          </h1>
-          <p class="text-muted mb-0">查看和管理迁移任务的详细信息</p>
-        </div>
+    <PageHeader
+      title="任务详情"
+      subtitle="查看和管理迁移任务的详细信息"
+      icon="bi-file-earmark-text"
+    >
+      <template #actions>
         <router-link to="/tasks" class="btn btn-sm btn-outline-secondary">
-          <i class="bi bi-arrow-left me-1"></i>
+          <i class="bi bi-arrow-left"></i>
           返回列表
         </router-link>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
     
     <div v-if="loading" class="text-center py-5">
       <div class="spinner-border text-primary" role="status"></div>
@@ -269,6 +266,39 @@
                     </div>
                   </div>
                 </div>
+                <!-- 整库一键迁移：多阶段编排进度 -->
+                <div v-else-if="fullDatabaseProgress" class="full-db-progress mt-3 p-3 rounded bg-light">
+                  <div class="d-flex align-items-center mb-2">
+                    <i class="bi bi-diagram-3 me-2 text-primary"></i>
+                    <strong>整库编排进度</strong>
+                  </div>
+                  <div class="d-flex flex-wrap gap-2 mb-2">
+                    <span
+                      v-for="ph in fullDatabaseProgress.phases"
+                      :key="ph"
+                      class="badge"
+                      :class="phaseBadgeClass(ph)"
+                    >{{ phaseLabel(ph) }}</span>
+                  </div>
+                  <div v-if="fullDatabaseProgress.currentSchema" class="text-muted small">
+                    当前 Schema：<code>{{ fullDatabaseProgress.currentSchema }}</code>
+                    （{{ (fullDatabaseProgress.schemaIndex ?? 0) + 1 }} / {{ fullDatabaseProgress.schemaTotal }}）
+                  </div>
+                  <div v-if="fullDatabaseProgress.completedCount" class="text-success small mt-1">
+                    已完成对象 {{ fullDatabaseProgress.completedCount }} 个（续传时将跳过）
+                  </div>
+                  <div v-if="fullDatabaseProgress.failedCount" class="text-warning small mt-1">
+                    失败对象 {{ fullDatabaseProgress.failedCount }} 个
+                  </div>
+                  <ul v-if="fullDatabaseProgress.failedObjects?.length" class="small text-danger mb-0 mt-2 ps-3">
+                    <li v-for="(fo, i) in fullDatabaseProgress.failedObjects.slice(0, 5)" :key="i">
+                      [{{ fo.phase }}] {{ fo.object }}: {{ fo.error }}
+                    </li>
+                    <li v-if="fullDatabaseProgress.failedObjects.length > 5" class="text-muted">
+                      … 另有 {{ fullDatabaseProgress.failedObjects.length - 5 }} 个
+                    </li>
+                  </ul>
+                </div>
                 <!-- 表/视图级进度：非「所有表」汇总格式时显示各对象 progress、total_rows、migrated_rows -->
                 <div v-else-if="viewProgressEntries.length" class="view-progress-list mt-3">
                   <div v-for="[objName, info] in viewProgressEntries" :key="objName" class="view-progress-item">
@@ -347,6 +377,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { migrationTaskApi } from '@/api'
 import type { MigrationTask } from '@/api'
+import PageHeader from '@/components/PageHeader.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -466,7 +497,18 @@ const formatNumber = (n?: number | null) => {
 }
 
 /** 支持断点续传的任务类型 */
-const RESUMABLE_TASK_TYPES = ['all_tables', 'table', 'full_schema'] as const
+const RESUMABLE_TASK_TYPES = ['all_tables', 'table', 'full_schema', 'full_database', 'table_batch'] as const
+
+const FULL_DB_PHASE_LABELS: Record<string, string> = {
+  prepare: '准备环境',
+  sequences: '序列',
+  tables: '物理表',
+  views: '视图',
+  materialized_views: '物化视图',
+  triggers: '触发器',
+  routines: '例程',
+  done: '完成',
+}
 
 const getTaskTypeText = (type: string) => {
   const texts: Record<string, string> = {
@@ -476,10 +518,54 @@ const getTaskTypeText = (type: string) => {
     routine: '例程',
     all_tables: '所有表',
     full_schema: '全Schema编排',
+    full_database: '整库一键迁移',
+    table_batch: '表级批量迁移',
     view_to_table: '视图数据迁移到表',
     view_to_sqlite: '视图数据迁移到SQLite',
+    sequence: '序列',
+    trigger: '触发器',
   }
   return texts[type] || type
+}
+
+/** 整库迁移多阶段进度 */
+const fullDatabaseProgress = computed(() => {
+  if (task.value?.task_type !== 'full_database') return null
+  let vp = task.value?.view_progress
+  if (vp == null) return null
+  if (typeof vp === 'string') {
+    try { vp = JSON.parse(vp) } catch { return null }
+  }
+  if (typeof vp !== 'object' || Array.isArray(vp)) return null
+  const row = vp as Record<string, unknown>
+  if (row.orchestration !== 'full_database') return null
+  const schemas = row.schemas as string[] | undefined
+  const schemaIndex = row.schema_index as number | undefined
+  const completed = row.completed_objects as string[] | undefined
+  const failed = row.failed_objects as { object: string; phase: string; error: string }[] | undefined
+  return {
+    phase: String(row.phase || ''),
+    phases: (row.phases as string[]) || Object.keys(FULL_DB_PHASE_LABELS),
+    currentSchema: schemaIndex != null && schemas ? schemas[schemaIndex] : null,
+    schemaIndex,
+    schemaTotal: schemas?.length ?? 0,
+    completedCount: completed?.length ?? 0,
+    failedCount: failed?.length ?? 0,
+    failedObjects: failed || [],
+  }
+})
+
+const phaseLabel = (ph: string) => FULL_DB_PHASE_LABELS[ph] || ph
+
+const phaseBadgeClass = (ph: string) => {
+  const cur = fullDatabaseProgress.value?.phase
+  if (ph === cur) return 'bg-primary'
+  const phases = fullDatabaseProgress.value?.phases || []
+  const curIdx = phases.indexOf(cur || '')
+  const idx = phases.indexOf(ph)
+  if (idx >= 0 && curIdx >= 0 && idx < curIdx) return 'bg-success'
+  if (ph === 'done' && cur === 'done') return 'bg-success'
+  return 'bg-secondary'
 }
 
 const getStatusBadgeClass = (status: string) => {

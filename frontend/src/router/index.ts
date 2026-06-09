@@ -28,6 +28,16 @@ const routes: Array<RouteRecordRaw> = [
     component: () => import('@/views/CreateTaskView.vue')
   },
   {
+    path: '/task/table-migrate',
+    name: 'TableMigration',
+    component: () => import('@/views/TableMigrationView.vue')
+  },
+  {
+    path: '/migration/full-database',
+    name: 'FullDatabaseMigration',
+    component: () => import('@/views/FullDatabaseMigrationView.vue')
+  },
+  {
     path: '/task/:id',
     name: 'TaskDetail',
     component: () => import('@/views/TaskDetailView.vue')

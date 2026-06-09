@@ -8,13 +8,11 @@
       </div>
     </div>
     
-    <div class="page-header mb-4">
-      <h1>
-        <i class="bi bi-database me-2"></i>
-        Oracle数据库管理
-      </h1>
-      <p class="text-muted mb-0">管理Oracle数据库连接和查看数据库信息</p>
-    </div>
+    <PageHeader
+      title="Oracle 数据库管理"
+      subtitle="管理 Oracle 数据库连接和查看数据库信息"
+      icon="bi-database-gear"
+    />
     
     <div class="row g-4">
       <div class="col-lg-6">
@@ -267,6 +265,7 @@
 import { ref, onMounted } from 'vue'
 import { oracleConnectionApi, databaseApi } from '@/api'
 import type { OracleConnection } from '@/api'
+import PageHeader from '@/components/PageHeader.vue'
 
 const loading = ref(false)
 const creating = ref(false)

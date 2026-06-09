@@ -790,82 +790,121 @@ class PgUsersAPIView(APIView):
 
 
 class MigrationSettingsAPIView(APIView):
+    """迁移配置读写接口"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @staticmethod
+    def _default_migration_settings():
+        return {
+            'default_identifier_case': 'lower',
+            'default_conflict_strategy': 'error',
+            'enable_batch_migration': False,
+            'batch_size': 100,
+        }
+
     def get(self, request):
         try:
-            migration_data = {
-                'default_identifier_case': 'lower',
-                'default_conflict_strategy': 'error',
-                'enable_batch_migration': False,
-                'batch_size': 100,
-            }
-            
-            system_data = {
-                'log_level': 'INFO',
-                'max_concurrent_tasks': 5,
-                'task_timeout': 3600,
-                'enable_auto_retry': False,
-                'max_retry_count': 3,
-            }
-            
-            return Response({
-                'migration_settings': migration_data,
-                'system_settings': system_data
-            })
+            # 直接返回扁平结构，与前端 v-model 字段一致
+            return Response(self._default_migration_settings())
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     def post(self, request):
         try:
-            data = request.data
-            
-            return Response({'status': 'success', 'message': '保存成功'})
+            data = request.data or {}
+            # 校验并归一化配置项
+            settings = self._default_migration_settings()
+            if 'default_identifier_case' in data:
+                settings['default_identifier_case'] = data['default_identifier_case']
+            if 'default_conflict_strategy' in data:
+                settings['default_conflict_strategy'] = data['default_conflict_strategy']
+            if 'enable_batch_migration' in data:
+                settings['enable_batch_migration'] = bool(data['enable_batch_migration'])
+            if 'batch_size' in data:
+                settings['batch_size'] = max(1, int(data['batch_size']))
+            return Response({'status': 'success', 'message': '保存成功', 'data': settings})
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class SystemSettingsAPIView(APIView):
+    """系统设置读写接口"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @staticmethod
+    def _default_system_settings():
+        return {
+            'log_level': 'INFO',
+            'max_concurrent_tasks': 5,
+            'task_timeout': 3600,
+            'enable_auto_retry': False,
+            'max_retry_count': 3,
+        }
+
     def get(self, request):
         try:
-            system_data = {
-                'log_level': 'INFO',
-                'max_concurrent_tasks': 5,
-                'task_timeout': 3600,
-                'enable_auto_retry': False,
-                'max_retry_count': 3,
-            }
-            
-            return Response(system_data)
+            return Response(self._default_system_settings())
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    
+
     def post(self, request):
         try:
-            data = request.data
-            
-            return Response({'status': 'success', 'message': '保存成功'})
+            data = request.data or {}
+            settings = self._default_system_settings()
+            if 'log_level' in data:
+                settings['log_level'] = data['log_level']
+            if 'max_concurrent_tasks' in data:
+                settings['max_concurrent_tasks'] = max(1, int(data['max_concurrent_tasks']))
+            if 'task_timeout' in data:
+                settings['task_timeout'] = max(1, int(data['task_timeout']))
+            if 'enable_auto_retry' in data:
+                settings['enable_auto_retry'] = bool(data['enable_auto_retry'])
+            if 'max_retry_count' in data:
+                settings['max_retry_count'] = max(0, int(data['max_retry_count']))
+            return Response({'status': 'success', 'message': '保存成功', 'data': settings})
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class MigrationLogsAPIView(APIView):
+    """迁移日志查询（限制条数与体积，避免前端卡顿）"""
+    permission_classes = [permissions.IsAuthenticated]
+
     def get(self, request):
         try:
-            from .models import MigrationTask
-            tasks = MigrationTask.objects.all().order_by('-created_at')[:100]
-            
-            logs = []
-            for task in tasks:
-                logs.append({
-                    'id': task.id,
-                    'name': task.name,
-                    'status': task.status,
-                    'created_at': task.created_at.isoformat() if task.created_at else None,
-                    'log': task.log or ''
-                })
-            
+            from .models import MigrationTask, MigrationTaskLog
+
+            max_lines = min(int(request.query_params.get('limit', 200)), 500)
+            log_text_parts = []
+
+            # 优先读取结构化日志表
+            structured = (
+                MigrationTaskLog.objects.select_related('task')
+                .order_by('-created_at')[:max_lines]
+            )
+            if structured.exists():
+                for entry in structured:
+                    ts = entry.created_at.strftime('%Y-%m-%d %H:%M:%S') if entry.created_at else '-'
+                    task_name = entry.task.name if entry.task_id else '未知任务'
+                    log_text_parts.append(f"[{ts}] [{entry.level}] {task_name}: {entry.message}")
+            else:
+                # 回退：仅取最近任务的日志尾部，避免一次性加载超大文本
+                tasks = (
+                    MigrationTask.objects.order_by('-created_at')
+                    .only('name', 'status', 'log', 'created_at')[:20]
+                )
+                for task in tasks:
+                    raw_log = (task.log or '').strip()
+                    if not raw_log:
+                        continue
+                    tail = raw_log[-3000:] if len(raw_log) > 3000 else raw_log
+                    log_text_parts.append(f"=== {task.name} ({task.status}) ===\n{tail}")
+
+            log_text = '\n'.join(log_text_parts) if log_text_parts else '暂无日志'
+
             return Response({
                 'status': 'success',
-                'logs': logs
+                'logs': log_text,
             })
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -896,5 +935,159 @@ class CreateTaskAPIView(APIView):
             else:
                 return Response({'status': 'error', 'message': 'Invalid response from create_task_validated'})
                 
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PgTablespacesAPIView(APIView):
+    """列出 PolarDB-PG 表空间"""
+
+    def get(self, request):
+        try:
+            connection_id = request.query_params.get('connection_id')
+            database = request.query_params.get('database')
+            if not connection_id:
+                return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
+            from .target_provisioning import list_tablespaces
+            names = list_tablespaces(int(connection_id), database)
+            return Response({'status': 'success', 'tablespaces': names})
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PgCreateDatabaseAPIView(APIView):
+    """创建 PolarDB-PG 数据库"""
+
+    def post(self, request):
+        try:
+            from .target_provisioning import create_database
+            data = request.data or {}
+            connection_id = data.get('connection_id')
+            name = data.get('name')
+            if not connection_id or not name:
+                return Response({'status': 'error', 'message': '缺少 connection_id 或 name'}, status=status.HTTP_400_BAD_REQUEST)
+            result = create_database(
+                int(connection_id), name,
+                owner=data.get('owner'),
+                encoding=data.get('encoding') or 'UTF8',
+            )
+            return Response({'status': 'success', **result})
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PgCreateTablespaceAPIView(APIView):
+    """创建 PolarDB-PG 表空间"""
+
+    def post(self, request):
+        try:
+            from .target_provisioning import create_tablespace
+            data = request.data or {}
+            connection_id = data.get('connection_id')
+            name = data.get('name')
+            location = data.get('location')
+            if not connection_id or not name:
+                return Response({'status': 'error', 'message': '缺少 connection_id 或 name'}, status=status.HTTP_400_BAD_REQUEST)
+            result = create_tablespace(int(connection_id), name, location or '')
+            return Response({'status': 'success', **result})
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PgCreateUserAPIView(APIView):
+    """创建 PolarDB-PG 用户/角色"""
+
+    def post(self, request):
+        try:
+            from .target_provisioning import create_role, grant_connect_on_database
+            data = request.data or {}
+            connection_id = data.get('connection_id')
+            username = data.get('username')
+            password = data.get('password')
+            if not connection_id or not username:
+                return Response({'status': 'error', 'message': '缺少 connection_id 或 username'}, status=status.HTTP_400_BAD_REQUEST)
+            result = create_role(
+                int(connection_id), username, password or '',
+                createdb=bool(data.get('createdb')),
+                database=data.get('database'),
+            )
+            if data.get('database') and result.get('status') == 'created':
+                grant_connect_on_database(int(connection_id), username, data['database'])
+            return Response({'status': 'success', **result})
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PgCreateSchemaAPIView(APIView):
+    """创建 PolarDB-PG Schema"""
+
+    def post(self, request):
+        try:
+            from .target_provisioning import create_schema
+            data = request.data or {}
+            connection_id = data.get('connection_id')
+            database = data.get('database')
+            schema = data.get('schema') or data.get('name')
+            if not connection_id or not database or not schema:
+                return Response({'status': 'error', 'message': '缺少 connection_id、database 或 schema'}, status=status.HTTP_400_BAD_REQUEST)
+            result = create_schema(int(connection_id), database, schema, owner=data.get('owner'))
+            return Response({'status': 'success', **result})
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TargetEnvPrepareAPIView(APIView):
+    """一次性准备目标环境（库/表空间/用户/Schema）"""
+
+    def post(self, request):
+        try:
+            from .target_provisioning import prepare_target_env
+            data = request.data or {}
+            if not data.get('connection_id'):
+                return Response({'status': 'error', 'message': '缺少 connection_id'}, status=status.HTTP_400_BAD_REQUEST)
+            result = prepare_target_env(data)
+            code = status.HTTP_400_BAD_REQUEST if result.get('status') == 'error' else status.HTTP_200_OK
+            return Response(result, status=code)
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class OracleDiscoveryAPIView(APIView):
+    """发现 Oracle 实例下所有 Schema 及对象统计"""
+
+    def get(self, request):
+        try:
+            connection_id = request.query_params.get('connection_id')
+            if not connection_id:
+                return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
+            from .full_database import discover_oracle_instance
+            result = discover_oracle_instance(int(connection_id))
+            return Response({'status': 'success', **result})
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CreateTableMigrationAPIView(APIView):
+    """表级迁移向导创建任务"""
+
+    def post(self, request):
+        try:
+            result = create_task.create_table_migration_plan(request.data or {})
+            if result.get('status') == 'error':
+                return Response(result, status=status.HTTP_400_BAD_REQUEST)
+            return Response(result)
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CreateFullDatabaseMigrationAPIView(APIView):
+    """整库一键迁移创建任务"""
+
+    def post(self, request):
+        try:
+            result = create_task.create_full_database_migration_plan(request.data or {})
+            if result.get('status') == 'error':
+                return Response(result, status=status.HTTP_400_BAD_REQUEST)
+            return Response(result)
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)

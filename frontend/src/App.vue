@@ -1,349 +1,264 @@
 <template>
-  <div id="app">
-    <nav v-if="!isLoginPage" class="navbar navbar-expand-lg navbar-dark">
-      <div class="container-fluid">
-        <a class="navbar-brand d-flex align-items-center" href="/">
-          <img src="@/assets/logo.svg" alt="Logo" width="35" height="35" style="margin: 8px;" />
-          <span>Oracle到PolarDB-PG迁移平台</span>
-        </a>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-          <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="navbarNav">
-          <ul class="navbar-nav ms-auto">
-            <li class="nav-item">
-              <router-link class="nav-link" to="/">
-                <i class="bi bi-house-door me-1"></i>
-                首页
-              </router-link>
-            </li>
-            <li class="nav-item">
-              <router-link class="nav-link" to="/tasks">
-                <i class="bi bi-list-task me-1"></i>
-                迁移任务
-              </router-link>
-            </li>
-            <li class="nav-item">
-              <router-link class="nav-link" to="/monitor">
-                <i class="bi bi-activity me-1"></i>
-                实时任务监控
-              </router-link>
-            </li>
-            <li class="nav-item">
-              <router-link class="nav-link" to="/task/create">
-                <i class="bi bi-plus-circle me-1"></i>
-                创建任务
-              </router-link>
-            </li>
-            <li class="nav-item">
-              <router-link class="nav-link" to="/oracle">
-                <i class="bi bi-database-gear me-1"></i>
-                Oracle数据库
-              </router-link>
-            </li>
-            <li class="nav-item">
-              <router-link class="nav-link" to="/postgres">
-                <i class="bi bi-server me-1"></i>
-                polardb-pg数据库管理
-              </router-link>
-            </li>
-            <li class="nav-item">
-              <router-link class="nav-link" to="/config">
-                <i class="bi bi-gear me-1"></i>
-                系统配置
-              </router-link>
-            </li>
-            <li class="nav-item ms-2">
-              <ThemeSwitcher />
-            </li>
-            <li class="nav-item ms-2">
-              <button class="btn btn-outline-light btn-sm" @click="handleLogout">
-                <i class="bi bi-box-arrow-right me-1"></i>
-                退出登录
-              </button>
-            </li>
-          </ul>
-        </div>
-      </div>
-    </nav>
-    
-    <div :class="['container-fluid', 'main-content', { 'login-page': isLoginPage }]">
-      <div class="content-wrapper">
-        <router-view />
-      </div>
-    </div>
-    
-    <footer v-if="!isLoginPage" class="footer mt-auto">
-      <div class="container">
-        <div class="row">
-          <div class="col-md-6 text-center text-md-start">
-            <p class="mb-0">&copy; 2025 Oracle到PolarDB-PG迁移平台. 保留所有权利.</p>
+  <div
+    id="app"
+    :class="{
+      'is-login-page': isLoginPage,
+      'sidebar-collapsed': sidebarCollapsed && !isLoginPage,
+      'sidebar-mobile-open': mobileSidebarOpen && !isLoginPage,
+    }"
+  >
+    <!-- 登录页：全屏展示 -->
+    <template v-if="isLoginPage">
+      <router-view />
+    </template>
+
+    <!-- 主布局：侧边栏 + 顶栏 + 内容区 -->
+    <template v-else>
+      <div
+        v-if="mobileSidebarOpen"
+        class="sidebar-overlay"
+        @click="closeMobileSidebar"
+      ></div>
+
+      <AppSidebar
+        :collapsed="sidebarCollapsed"
+        :mobile-open="mobileSidebarOpen"
+        @close-mobile="closeMobileSidebar"
+      />
+
+      <div class="app-main">
+        <AppHeader
+          :sidebar-collapsed="sidebarCollapsed"
+          @toggle-sidebar="toggleSidebar"
+          @toggle-mobile="toggleMobileSidebar"
+        />
+
+        <main class="app-content">
+          <div class="content-container">
+            <router-view />
           </div>
-          <div class="col-md-6 text-center text-md-end">
-            <p class="mb-0">高效、安全、可靠的数据库迁移解决方案</p>
-          </div>
-        </div>
+        </main>
+
+        <footer class="app-footer">
+          <span>&copy; 2025 Oracle到PolarDB-PG迁移平台</span>
+          <span class="footer-sep d-none d-sm-inline">·</span>
+          <span class="d-none d-sm-inline">高效、安全、可靠的数据库迁移解决方案</span>
+        </footer>
       </div>
-    </footer>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
-import { authApi } from '@/api/auth'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
+import AppSidebar from '@/components/AppSidebar.vue'
+import AppHeader from '@/components/AppHeader.vue'
 
 const route = useRoute()
-const router = useRouter()
 const isLoginPage = computed(() => route.path === '/login' || route.path === '/login/')
 
-const handleLogout = async () => {
-  try {
-    await authApi.logout()
-    localStorage.removeItem('rememberUser')
-    router.push('/login')
-  } catch (error) {
-    console.error('登出失败:', error)
-    router.push('/login')
+const sidebarCollapsed = ref(false)
+const mobileSidebarOpen = ref(false)
+
+/** 从 localStorage 恢复侧边栏折叠状态 */
+onMounted(() => {
+  const saved = localStorage.getItem('sidebarCollapsed')
+  if (saved === 'true') sidebarCollapsed.value = true
+})
+
+/** 路由切换时关闭移动端侧边栏 */
+watch(() => route.path, () => {
+  mobileSidebarOpen.value = false
+})
+
+const toggleSidebar = () => {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('sidebarCollapsed', String(sidebarCollapsed.value))
+}
+
+const toggleMobileSidebar = () => {
+  mobileSidebarOpen.value = !mobileSidebarOpen.value
+}
+
+const closeMobileSidebar = () => {
+  mobileSidebarOpen.value = false
+}
+
+/** 窗口变宽时自动关闭移动端抽屉 */
+const handleResize = () => {
+  if (window.innerWidth >= 992) {
+    mobileSidebarOpen.value = false
   }
 }
+
+onMounted(() => window.addEventListener('resize', handleResize))
+onUnmounted(() => window.removeEventListener('resize', handleResize))
 </script>
 
 <style>
+/* ===== 应用根布局 ===== */
 #app {
+  width: 100%;
   min-height: 100vh;
   display: flex;
-  flex-direction: column;
   background: var(--background);
-  background-attachment: fixed;
+  overflow-x: hidden;
 }
 
-.navbar {
-  background: var(--gradient) !important;
-  transition: background 0.3s ease;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+/* 登录页：占满全屏，避免 flex 子项收缩导致右侧空白 */
+#app.is-login-page {
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
-.navbar-dark .navbar-brand {
-  color: white !important;
-}
-
-.navbar-dark .nav-link {
-  color: rgba(255, 255, 255, 0.9) !important;
-}
-
-.navbar-dark .nav-link:hover,
-.navbar-dark .nav-link.router-link-active {
-  color: white !important;
-}
-
-.navbar-brand {
-  font-weight: 600;
-  font-size: 1.25rem;
-  letter-spacing: 0.5px;
-}
-
-.navbar-brand img {
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
-  transition: transform 0.3s ease;
-}
-
-.navbar-brand:hover img {
-  transform: scale(1.05);
-}
-
-.nav-link {
-  font-weight: 500;
-  padding: 0.5rem 1rem !important;
-  border-radius: 0.375rem;
-  transition: all 0.3s ease;
-  margin: 0 0.25rem;
-}
-
-.nav-link:hover,
-.nav-link.router-link-active {
-  background-color: rgba(255, 255, 255, 0.15);
-  transform: translateY(-2px);
-}
-
-.nav-link.router-link-active {
-  background-color: rgba(255, 255, 255, 0.2);
-  font-weight: 600;
-}
-
-.main-content {
+#app.is-login-page > * {
   flex: 1;
-  padding: 2rem 1rem;
+  width: 100%;
+  min-width: 0;
 }
 
-.main-content.login-page {
-  padding: 0;
+/* 主内容区：随侧边栏宽度偏移 */
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  margin-left: var(--sidebar-width, 240px);
+  transition: margin-left 0.25s ease;
+  min-width: 0;
 }
 
-.content-wrapper {
-  max-width: 100%;
-  margin: 0 auto;
+#app.sidebar-collapsed .app-main {
+  margin-left: var(--sidebar-collapsed-width, 64px);
 }
 
-.footer {
-  background: var(--gradient);
-  color: white;
-  padding: 1.5rem 0;
-  margin-top: 3rem;
-  backdrop-filter: blur(10px);
-  transition: background 0.3s ease;
+.app-content {
+  flex: 1;
+  padding: 20px 24px;
 }
 
-.footer p {
-  margin: 0;
-  font-size: 0.9rem;
-  opacity: 0.9;
+.content-container {
+  width: 100%;
+  max-width: none;
 }
 
+.app-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.footer-sep {
+  color: var(--border);
+}
+
+/* 移动端遮罩层 */
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1035;
+  background: var(--overlay, rgba(0, 0, 0, 0.45));
+}
+
+/* ===== 移动端布局 ===== */
+@media (max-width: 991.98px) {
+  .app-main {
+    margin-left: 0 !important;
+  }
+
+  .app-content {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 575.98px) {
+  .app-content {
+    padding: 12px;
+  }
+}
+
+/* ===== 企业级组件覆写（去除过度动效） ===== */
 .card {
-  border: none;
-  border-radius: 1rem;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
-  transition: all 0.3s ease;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px var(--shadow-light, rgba(0, 0, 0, 0.05));
+  transition: box-shadow 0.2s ease;
   overflow: hidden;
 }
 
 .card:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 12px var(--shadow-light, rgba(0, 0, 0, 0.08));
+  transform: none;
 }
 
 .card-header {
-  background: var(--gradient);
-  color: white;
+  background: var(--surface);
+  color: var(--text);
   font-weight: 600;
-  border: none;
-  padding: 1rem 1.5rem;
-  transition: background 0.3s ease;
+  border-bottom: 1px solid var(--border);
+  padding: 14px 20px;
+  font-size: 15px;
+}
+
+.card-header h5,
+.card-header h6 {
+  color: var(--text);
+  margin: 0;
 }
 
 .card-body {
-  padding: 1.5rem;
-}
-
-.btn {
-  border-radius: 0.5rem;
-  padding: 0.5rem 1.25rem;
-  font-weight: 500;
-  transition: all 0.3s ease;
-  border: none;
-}
-
-.btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
-}
-
-.btn-primary {
-  background: var(--gradient);
-  transition: background 0.3s ease;
-}
-
-.btn-success {
-  background: var(--success);
-}
-
-.btn-info {
-  background: var(--info);
-}
-
-.btn-warning {
-  background: var(--warning);
-}
-
-.btn-danger {
-  background: var(--danger);
-}
-
-.table {
-  border-radius: 0.75rem;
-  overflow: hidden;
+  padding: 20px;
 }
 
 .table thead {
-  background: var(--gradient);
-  color: white;
-  transition: background 0.3s ease;
+  background: var(--table-header-bg, var(--background));
+  color: var(--text);
 }
 
 .table thead th {
   border: none;
-  padding: 1rem;
+  padding: 12px 16px;
   font-weight: 600;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.table tbody td {
+  padding: 12px 16px;
+  vertical-align: middle;
+  border-color: var(--border);
+  font-size: 14px;
 }
 
 .table tbody tr {
-  transition: all 0.3s ease;
+  transition: background-color 0.15s ease;
 }
 
-/* 表格行悬停：仅改变背景色，不要用 opacity，否则整行（含文字）会变淡看不清 */
 .table tbody tr:hover {
-  background-color: var(--table-row-hover, rgba(0, 0, 0, 0.04));
-  transform: scale(1.01);
-}
-
-.form-control,
-.form-select {
-  border-radius: 0.5rem;
-  border: 2px solid var(--border);
-  padding: 0.75rem 1rem;
-  transition: all 0.3s ease;
-}
-
-.form-control:focus,
-.form-select:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 0.2rem var(--focus-ring, rgba(102, 126, 234, 0.22));
-}
-
-.badge {
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.5rem;
-  font-weight: 500;
-}
-
-.progress {
-  height: 0.75rem;
-  border-radius: 0.5rem;
-  background-color: var(--border);
-}
-
-.progress-bar {
-  border-radius: 0.5rem;
-  transition: width 0.6s ease;
-}
-
-.spinner-border {
-  width: 3rem;
-  height: 3rem;
-  border-width: 0.25em;
-}
-
-.list-group-item {
-  border: none;
-  border-radius: 0.5rem;
-  margin-bottom: 0.5rem;
-  transition: all 0.3s ease;
-}
-
-.list-group-item:hover {
-  background-color: var(--table-row-hover, rgba(0, 0, 0, 0.04));
-  transform: translateX(5px);
+  background-color: var(--table-row-hover);
+  transform: none;
 }
 
 h1, h2, h3, h4, h5, h6 {
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text);
 }
 
 .lead {
   color: var(--text-muted);
-  font-size: 1.25rem;
+  font-size: 1.1rem;
 }
 </style>

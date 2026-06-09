@@ -44,6 +44,11 @@ def run_migration_task(task_id: int, postgres_database=None) -> None:
             views.migrate_sequence(task_id, pgdb)
         elif tt == 'full_schema':
             views.migrate_schema_orchestration(task_id, pgdb)
+        elif tt == 'full_database':
+            from . import full_database as fd
+            fd.migrate_full_database(task_id, pgdb)
+        elif tt == 'table_batch':
+            views.migrate_table(task_id, pgdb)
         else:
             raise ValueError(f'未知任务类型: {tt}')
 

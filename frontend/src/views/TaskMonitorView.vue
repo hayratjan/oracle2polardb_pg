@@ -1,37 +1,35 @@
 <template>
   <div class="task-monitor-view">
-    <div class="page-header mb-4">
-      <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
-        <div>
-          <h1 class="mb-1">
-            <i class="bi bi-activity me-2" style="font-size: 32px;"></i>
-            实时任务监控
-          </h1>
-          <p class="text-muted mb-0">仅展示当前执行中的迁移任务及其对比、日志与操作记录</p>
+    <PageHeader
+      title="实时任务监控"
+      subtitle="仅展示当前执行中的迁移任务及其对比、日志与操作记录"
+      icon="bi-activity"
+    >
+      <template #actions>
+        <span v-if="lastRefresh" class="text-muted small d-none d-md-inline">
+          <i class="bi bi-clock me-1"></i>
+          更新于 {{ formatDate(lastRefresh) }}
+        </span>
+        <div class="form-check form-switch mb-0">
+          <input id="autoRefresh" v-model="autoRefresh" class="form-check-input" type="checkbox" />
+          <label class="form-check-label small" for="autoRefresh">自动刷新 ({{ refreshSec }}s)</label>
         </div>
-        <div class="d-flex align-items-center gap-2 flex-wrap">
-          <span v-if="lastRefresh" class="text-muted small">
-            <i class="bi bi-clock me-1"></i>
-            更新于 {{ formatDate(lastRefresh) }}
-          </span>
-          <div class="form-check form-switch mb-0">
-            <input id="autoRefresh" v-model="autoRefresh" class="form-check-input" type="checkbox" />
-            <label class="form-check-label small" for="autoRefresh">自动刷新 ({{ refreshSec }}s)</label>
-          </div>
-          <button type="button" class="btn btn-sm btn-outline-primary" :disabled="loading" @click="loadMonitor">
-            <i class="bi bi-arrow-clockwise me-1" :class="{ spin: loading }"></i>
-            立即刷新
-          </button>
-        </div>
-      </div>
-    </div>
+        <button type="button" class="btn btn-sm btn-outline-primary" :disabled="loading" @click="loadMonitor">
+          <i class="bi bi-arrow-clockwise" :class="{ spin: loading }"></i>
+          刷新
+        </button>
+      </template>
+    </PageHeader>
 
     <div v-if="data && !loading" class="row g-3 mb-4">
-      <div class="col-12 col-md-6 col-lg-3">
-        <div class="card stat-card h-100 border-primary">
-          <div class="card-body py-3 text-center">
-            <div class="stat-value">{{ data.summary.running }}</div>
-            <div class="stat-label">当前执行中</div>
+      <div class="col-6 col-md-3" v-for="item in summaryCards" :key="item.key">
+        <div class="stat-card-enterprise">
+          <div class="stat-card-icon" :style="{ background: item.bg, color: item.color }">
+            <i :class="['bi', item.icon]"></i>
+          </div>
+          <div>
+            <div class="stat-card-number">{{ data.summary[item.key as keyof typeof data.summary] }}</div>
+            <div class="stat-card-label">{{ item.label }}</div>
           </div>
         </div>
       </div>
@@ -256,6 +254,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { migrationTaskApi } from '@/api'
 import type { TaskMonitorResponse, TaskMonitorItem, TaskMonitorLogEntry } from '@/api'
+import PageHeader from '@/components/PageHeader.vue'
 
 const refreshSec = 4
 const loading = ref(false)
@@ -268,6 +267,14 @@ let timer: ReturnType<typeof setInterval> | null = null
 
 /** 当前执行中的实时任务列表 */
 const liveTasks = computed(() => data.value?.running_tasks ?? data.value?.tasks ?? [])
+
+/** 监控概览统计卡片配置 */
+const summaryCards = [
+  { key: 'running', label: '执行中', icon: 'bi-activity', bg: 'rgba(37, 99, 235, 0.1)', color: 'var(--primary)' },
+  { key: 'pending', label: '待执行', icon: 'bi-hourglass-split', bg: 'rgba(100, 116, 139, 0.1)', color: 'var(--text-muted)' },
+  { key: 'completed', label: '已完成', icon: 'bi-check-circle', bg: 'rgba(22, 163, 74, 0.1)', color: 'var(--success)' },
+  { key: 'failed', label: '失败', icon: 'bi-x-circle', bg: 'rgba(220, 38, 38, 0.1)', color: 'var(--danger)' },
+]
 
 const selectedTask = computed(() => {
   if (!selectedTaskId.value || !data.value) return null

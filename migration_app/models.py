@@ -74,6 +74,8 @@ class MigrationTask(models.Model):
         ('trigger', '触发器'),
         ('sequence', '序列'),
         ('full_schema', '全Schema编排迁移'),
+        ('table_batch', '表级批量迁移'),
+        ('full_database', '整库一键迁移'),
     ]
 
     STATUS_CHOICES = [
@@ -164,6 +166,11 @@ class MigrationTask(models.Model):
         default=500_000,
         verbose_name="主键对齐单次最大行数",
         help_text="超过则拒绝执行主键对齐，避免 OOM；大表请用水位列增量或调大该值",
+    )
+    # 目标环境配置（库/表空间/用户/Schema 创建或选择信息）
+    target_provisioning = models.JSONField(
+        null=True, blank=True, verbose_name="目标环境配置",
+        help_text="表级/整库迁移向导中的目标库、表空间、用户、Schema 配置",
     )
 
     def __str__(self):

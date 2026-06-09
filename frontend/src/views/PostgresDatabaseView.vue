@@ -8,13 +8,11 @@
       </div>
     </div>
     
-    <div class="page-header mb-4">
-      <h1>
-        <i class="bi bi-server me-2"></i>
-        PolarDB-PG数据库管理
-      </h1>
-      <p class="text-muted mb-0">管理 PolarDB-PG 数据库连接和查看数据库信息</p>
-    </div>
+    <PageHeader
+      title="PolarDB-PG 数据库管理"
+      subtitle="管理 PolarDB-PG 数据库连接和查看数据库信息"
+      icon="bi-server"
+    />
     
     <div class="row g-4">
       <div class="col-lg-6">
@@ -289,6 +287,7 @@
 import { ref, onMounted } from 'vue'
 import { postgresConnectionApi, databaseApi } from '@/api'
 import type { PostgresConnection } from '@/api'
+import PageHeader from '@/components/PageHeader.vue'
 
 const loading = ref(false)
 const creating = ref(false)

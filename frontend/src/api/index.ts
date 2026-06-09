@@ -68,6 +68,33 @@ export interface MigrationTask {
   last_schedule_run?: string
   /** 主键对齐单次允许对比的最大行数（源、目标两侧） */
   sync_max_pkey_rows?: number
+  /** 目标环境配置（库/表空间/用户/Schema） */
+  target_provisioning?: TargetProvisioningConfig
+}
+
+/** 目标环境单项配置 */
+export interface TargetResourceConfig {
+  mode: 'existing' | 'create' | 'skip'
+  name?: string
+  username?: string
+  password?: string
+  location?: string
+  encoding?: string
+  owner?: string
+  createdb?: boolean
+}
+
+/** 目标环境完整配置 */
+export interface TargetProvisioningConfig {
+  connection_id?: number
+  database?: TargetResourceConfig
+  tablespace?: TargetResourceConfig
+  user?: TargetResourceConfig
+  schema?: TargetResourceConfig
+  prepare_config?: Record<string, unknown>
+  schema_mappings?: { source_schema: string; target_schema: string }[]
+  object_types?: Record<string, boolean>
+  auto_prepare?: boolean
 }
 
 export const oracleConnectionApi = {
@@ -224,6 +251,34 @@ export const databaseApi = {
   getPgSchemas: (params: any) => apiClient.get('/api/polardb/schemas/', { params }),
   getPgTables: (params: any) => apiClient.get('/api/polardb/tables/', { params }),
   getPgUsers: (params: any) => apiClient.get('/api/polardb/users/', { params }),
+  /** Oracle 整库发现：Schema 及对象统计 */
+  getOracleDiscovery: (params: { connection_id: number }) =>
+    apiClient.get('/api/oracle/discovery/', { params }),
+  /** 列出 PG 表空间 */
+  getPgTablespaces: (params: { connection_id: number; database?: string }) =>
+    apiClient.get('/api/polardb/tablespaces/', { params }),
+}
+
+/** 目标环境 DDL 与迁移计划 API */
+export const targetEnvApi = {
+  prepare: (data: Record<string, unknown>) => apiClient.post('/api/target-env/prepare/', data),
+  createDatabase: (data: { connection_id: number; name: string; owner?: string; encoding?: string }) =>
+    apiClient.post('/api/polardb/databases/create/', data),
+  createTablespace: (data: { connection_id: number; name: string; location: string }) =>
+    apiClient.post('/api/polardb/tablespaces/create/', data),
+  createUser: (data: { connection_id: number; username: string; password: string; database?: string; createdb?: boolean }) =>
+    apiClient.post('/api/polardb/users/create/', data),
+  createSchema: (data: { connection_id: number; database: string; schema: string; owner?: string }) =>
+    apiClient.post('/api/polardb/schemas/create/', data),
+}
+
+export const migrationPlanApi = {
+  /** 表级迁移向导创建任务 */
+  createTableMigration: (data: Record<string, unknown>) =>
+    apiClient.post('/api/create-table-migration/', data),
+  /** 整库一键迁移创建任务 */
+  createFullDatabaseMigration: (data: Record<string, unknown>) =>
+    apiClient.post('/api/create-full-database-migration/', data),
 }
 
 export const configApi = {
@@ -234,7 +289,7 @@ export const configApi = {
 }
 
 export const logsApi = {
-  getLogs: () => apiClient.get('/api/logs/'),
+  getLogs: (params?: { limit?: number }) => apiClient.get('/api/logs/', { params }),
 }
 
 export const helpApi = {

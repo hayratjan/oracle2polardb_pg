@@ -6,6 +6,7 @@ from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from .models import MigrationTask, OracleConnection, PostgresConnection
+from .target_provisioning import prepare_target_env
 
 def validate_task_data(data):
     """验证任务数据的完整性和有效性"""
@@ -92,7 +93,7 @@ def validate_task_data(data):
                 errors.append('sync_max_pkey_rows 必须为整数')
 
     # 检查source_object和source_objects字段（view 与 view_to_table 均支持批量 source_objects）
-    if 'task_type' in data and data['task_type'] not in ('all_tables', 'full_schema'):
+    if 'task_type' in data and data['task_type'] not in ('all_tables', 'full_schema', 'full_database'):
         has_source_objects = bool(data.get('source_objects'))
         source_obj_val = data.get('source_object')
         has_source_object = bool(source_obj_val and str(source_obj_val).strip())
@@ -202,6 +203,8 @@ def create_task_validated(request):
             # 设置冲突策略
             if 'conflict_strategy' in validated_data:
                 task.conflict_strategy = validated_data['conflict_strategy']
+            if validated_data.get('target_provisioning') is not None:
+                task.target_provisioning = validated_data['target_provisioning']
             
             # 初始设置
             task.status = 'pending'
@@ -227,4 +230,149 @@ def create_task_validated(request):
     return {
         'status': 'error',
         'message': 'Invalid request method'
-    } 
+    }
+
+
+def _apply_task_fields(task: MigrationTask, validated_data: dict) -> None:
+    """将校验后的数据写入 MigrationTask 实例（供多种创建入口复用）。"""
+    task.name = validated_data['name']
+    task.task_type = validated_data['task_type']
+    task.oracle_connection = OracleConnection.objects.get(pk=validated_data['oracle_connection'])
+    if task.task_type == 'view_to_sqlite':
+        task.postgres_connection = None
+    else:
+        task.postgres_connection = PostgresConnection.objects.get(pk=validated_data['postgres_connection'])
+    task.source_schema = validated_data['source_schema']
+    task.target_schema = validated_data.get('target_schema') or ''
+    task.target_object = validated_data.get('target_object') or None
+    task.sqlite_directory = validated_data.get('sqlite_directory')
+    task.sqlite_file_name = validated_data.get('sqlite_file_name')
+    task.selected_fields = validated_data.get('selected_fields')
+    task.identifier_case = validated_data.get('identifier_case') or 'lower'
+    task.view_migration_mode = validated_data.get('view_migration_mode') or 'materialize'
+    task.is_batch = bool(validated_data.get('is_batch', False))
+
+    if task.task_type != 'view_to_sqlite' and task.postgres_connection:
+        task.postgres_database = validated_data.get('postgres_database') or task.postgres_connection.database or None
+
+    if task.task_type not in ('all_tables', 'full_schema', 'full_database'):
+        task.source_object = validated_data.get('source_object') or ''
+        if validated_data.get('source_objects'):
+            objs = validated_data['source_objects']
+            task.source_objects = ','.join(objs) if isinstance(objs, list) else objs
+    else:
+        task.source_object = ''
+        task.source_objects = None
+
+    task.incremental_mode = validated_data.get('incremental_mode') or 'none'
+    task.watermark_column = (validated_data.get('watermark_column') or '').strip() or ''
+    lw = validated_data.get('last_watermark')
+    task.last_watermark = lw if lw not in (None, '') else None
+    task.schedule_enabled = bool(validated_data.get('schedule_enabled', False))
+    try:
+        task.schedule_interval_minutes = max(1, int(validated_data.get('schedule_interval_minutes') or 60))
+    except (TypeError, ValueError):
+        task.schedule_interval_minutes = 60
+    if validated_data.get('sync_max_pkey_rows') is not None:
+        task.sync_max_pkey_rows = int(validated_data['sync_max_pkey_rows'])
+    if 'conflict_strategy' in validated_data:
+        task.conflict_strategy = validated_data['conflict_strategy']
+    if validated_data.get('target_provisioning') is not None:
+        task.target_provisioning = validated_data['target_provisioning']
+
+
+def create_table_migration_plan(data: dict) -> dict:
+    """
+    表级迁移向导：按表选择 + 增量 + 目标环境配置，创建迁移任务。
+    """
+    errors = []
+    required = ['name', 'oracle_connection', 'postgres_connection', 'source_schema', 'target_schema']
+    for field in required:
+        if not data.get(field):
+            errors.append(f'缺少必要字段: {field}')
+
+    source_objects = data.get('source_objects') or []
+    if isinstance(source_objects, str):
+        source_objects = [x.strip() for x in source_objects.replace('；', ',').replace('\n', ',').split(',') if x.strip()]
+    if not source_objects:
+        errors.append('请至少选择一张表')
+
+    if errors:
+        return {'status': 'error', 'message': '任务数据验证失败', 'errors': errors}
+
+    data['task_type'] = 'table'
+    data['source_objects'] = source_objects
+    data['source_object'] = source_objects[0]
+
+    validation = validate_task_data(data)
+    if not validation['is_valid']:
+        return {'status': 'error', 'message': '任务数据验证失败', 'errors': validation['errors']}
+
+    validated = validation['data']
+    target_prov = validated.get('target_provisioning')
+
+    # 可选：先准备目标环境
+    if validated.get('prepare_target') and target_prov:
+        prep_cfg = dict(target_prov)
+        prep_cfg['connection_id'] = validated['postgres_connection']
+        prep_result = prepare_target_env(prep_cfg)
+        if prep_result.get('status') != 'success':
+            return {
+                'status': 'error',
+                'message': prep_result.get('message', '目标环境准备失败'),
+                'steps': prep_result.get('steps'),
+            }
+        resolved = prep_result.get('resolved') or {}
+        if resolved.get('database'):
+            validated['postgres_database'] = resolved['database']
+        if resolved.get('schema'):
+            validated['target_schema'] = resolved['schema']
+
+    task = MigrationTask()
+    _apply_task_fields(task, validated)
+    task.status = 'pending'
+    postgres_db = task.postgres_database or (task.postgres_connection.database if task.postgres_connection else '')
+    task.log = f'【表级迁移】目标库: {postgres_db}，共 {len(source_objects)} 张表'
+    task.save()
+
+    return {'status': 'success', 'message': '表级迁移任务创建成功', 'task_id': task.id}
+
+
+def create_full_database_migration_plan(data: dict) -> dict:
+    """整库一键迁移：创建编排父任务。"""
+    errors = []
+    for field in ['name', 'oracle_connection', 'postgres_connection']:
+        if not data.get(field):
+            errors.append(f'缺少必要字段: {field}')
+    if errors:
+        return {'status': 'error', 'message': '任务数据验证失败', 'errors': errors}
+
+    target_prov = data.get('target_provisioning') or {}
+    data['task_type'] = 'full_database'
+    data['source_schema'] = data.get('source_schema') or '_ALL_'
+    data['target_schema'] = data.get('target_schema') or 'public'
+    data['conflict_strategy'] = data.get('conflict_strategy') or 'error'
+    data['identifier_case'] = data.get('identifier_case') or 'lower'
+    data['target_provisioning'] = target_prov
+
+    if data.get('prepare_target') and target_prov.get('prepare_config'):
+        prep_cfg = dict(target_prov['prepare_config'])
+        prep_cfg['connection_id'] = data['postgres_connection']
+        prep_result = prepare_target_env(prep_cfg)
+        if prep_result.get('status') != 'success':
+            return {
+                'status': 'error',
+                'message': prep_result.get('message', '目标环境准备失败'),
+                'steps': prep_result.get('steps'),
+            }
+        resolved = prep_result.get('resolved') or {}
+        if resolved.get('database'):
+            data['postgres_database'] = resolved['database']
+
+    task = MigrationTask()
+    _apply_task_fields(task, data)
+    task.status = 'pending'
+    task.log = '【整库一键迁移】任务已创建，等待启动'
+    task.save()
+
+    return {'status': 'success', 'message': '整库迁移任务创建成功', 'task_id': task.id}

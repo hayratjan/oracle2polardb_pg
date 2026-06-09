@@ -1,12 +1,10 @@
 <template>
   <div class="create-task-view">
-    <div class="page-header mb-4">
-      <h1>
-        <i class="bi bi-plus-circle me-2"></i>
-        创建迁移任务
-      </h1>
-      <p class="text-muted mb-0">配置并创建新的数据库迁移任务</p>
-    </div>
+    <PageHeader
+      title="创建迁移任务"
+      subtitle="配置并创建新的数据库迁移任务"
+      icon="bi-plus-circle"
+    />
     
     <div class="row">
       <div class="col-lg-8">
@@ -179,10 +177,15 @@
                   </div>
                   <div class="col-md-12">
                     <label class="form-label">第二步：目标数据库</label>
-                    <select v-model="form.postgres_database" class="form-select-sm" :disabled="!form.postgres_connection || pgDatabases.length === 0" @change="loadPgSchemas">
-                      <option value="">请先选择连接，再选择数据库</option>
-                      <option v-for="db in pgDatabases" :key="db" :value="db">{{ db }}</option>
-                    </select>
+                    <div class="d-flex gap-2 align-items-center">
+                      <select v-model="form.postgres_database" class="form-select-sm flex-grow-1" :disabled="!form.postgres_connection || pgDatabases.length === 0" @change="loadPgSchemas">
+                        <option value="">请先选择连接，再选择数据库</option>
+                        <option v-for="db in pgDatabases" :key="db" :value="db">{{ db }}</option>
+                      </select>
+                      <router-link to="/task/table-migrate" class="btn btn-sm btn-outline-primary text-nowrap" title="支持新建库/表空间/用户">
+                        <i class="bi bi-magic"></i> 向导
+                      </router-link>
+                    </div>
                   </div>
                   <div class="col-md-12">
                     <label class="form-label">第三步：目标 Schema</label>
@@ -348,6 +351,7 @@ import { ref, onMounted, watch, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { oracleConnectionApi, postgresConnectionApi, databaseApi, migrationTaskApi } from '@/api'
 import type { MigrationTask } from '@/api'
+import PageHeader from '@/components/PageHeader.vue'
 
 const router = useRouter()
 const loading = ref(false)

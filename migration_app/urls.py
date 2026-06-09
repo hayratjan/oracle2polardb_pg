@@ -48,6 +48,15 @@ urlpatterns = [
     path('logs/', api.MigrationLogsAPIView.as_view(), name='api_migration_logs'),
     path('help/', api.HelpDocsAPIView.as_view(), name='api_help'),
     path('create-task/', api.CreateTaskAPIView.as_view(), name='api_create_task'),
+    path('create-table-migration/', api.CreateTableMigrationAPIView.as_view(), name='api_create_table_migration'),
+    path('create-full-database-migration/', api.CreateFullDatabaseMigrationAPIView.as_view(), name='api_create_full_database_migration'),
+    path('polardb/tablespaces/', api.PgTablespacesAPIView.as_view(), name='api_pg_tablespaces'),
+    path('polardb/databases/create/', api.PgCreateDatabaseAPIView.as_view(), name='api_pg_create_database'),
+    path('polardb/tablespaces/create/', api.PgCreateTablespaceAPIView.as_view(), name='api_pg_create_tablespace'),
+    path('polardb/users/create/', api.PgCreateUserAPIView.as_view(), name='api_pg_create_user'),
+    path('polardb/schemas/create/', api.PgCreateSchemaAPIView.as_view(), name='api_pg_create_schema'),
+    path('target-env/prepare/', api.TargetEnvPrepareAPIView.as_view(), name='api_target_env_prepare'),
+    path('oracle/discovery/', api.OracleDiscoveryAPIView.as_view(), name='api_oracle_discovery'),
     
     # 保留旧的HTML视图路由（用于向后兼容，使用 /app/ 前缀）
     path('app/', include([

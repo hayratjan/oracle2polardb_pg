@@ -34,7 +34,8 @@ apiClient.interceptors.response.use(
       try {
         const refreshToken = tokenManager.getRefreshToken()
         if (refreshToken) {
-          const response = await axios.post('http://localhost:8000/api/token/refresh/', {
+          const baseURL = (typeof (import.meta as any).env !== 'undefined' ? (import.meta as any).env.VITE_API_BASE_URL : undefined) || 'http://localhost:8000'
+          const response = await axios.post(`${baseURL}/api/token/refresh/`, {
             refresh: refreshToken
           })
 

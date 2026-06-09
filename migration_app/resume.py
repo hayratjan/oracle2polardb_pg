@@ -61,7 +61,7 @@ def filter_pending_tables(all_tables: List[str], completed: Set[str]) -> List[st
 
 
 # 支持按表断点续传的任务类型
-RESUMABLE_TASK_TYPES = ('all_tables', 'table', 'full_schema')
+RESUMABLE_TASK_TYPES = ('all_tables', 'table', 'full_schema', 'full_database', 'table_batch')
 
 
 def can_resume_task(task) -> bool:

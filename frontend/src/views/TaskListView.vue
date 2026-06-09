@@ -1,20 +1,17 @@
 <template>
   <div class="task-list-view">
-    <div class="page-header mb-4">
-      <div class="d-flex justify-content-between align-items-center">
-        <div>
-          <h1 class="mb-1">
-            <i class="bi bi-list-task me-2" style="font-size: 32px;"></i>
-            迁移任务
-          </h1>
-          <p class="text-muted mb-0">管理和监控数据库迁移任务</p>
-        </div>
+    <PageHeader
+      title="迁移任务"
+      subtitle="管理和监控数据库迁移任务"
+      icon="bi-list-task"
+    >
+      <template #actions>
         <router-link to="/task/create" class="btn btn-sm btn-primary">
-          <i class="bi bi-plus-circle me-2"></i>
+          <i class="bi bi-plus-circle"></i>
           创建任务
         </router-link>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
     
     <div class="card">
       <!-- 批量操作栏：有选中项时显示 -->
@@ -34,7 +31,54 @@
           <p class="mt-3 text-muted">加载任务列表...</p>
         </div>
         <div v-else-if="tasks.length > 0">
-          <div class="table-responsive">
+          <!-- 移动端卡片列表 -->
+          <div class="mobile-card-list">
+            <div v-for="task in tasks" :key="'m-' + task.id" class="data-card">
+              <div class="data-card-header">
+                <router-link :to="`/task/${task.id}`" class="data-card-title">{{ task.name }}</router-link>
+                <span class="badge status-badge" :class="getStatusBadgeClass(task.status)">
+                  {{ getStatusText(task.status) }}
+                </span>
+              </div>
+              <div class="data-card-row">
+                <span class="data-card-label">类型</span>
+                <span class="badge type-badge" :class="getTypeBadgeClass(task.task_type)">
+                  {{ getTaskTypeText(task.task_type) }}
+                </span>
+              </div>
+              <div class="data-card-row">
+                <span class="data-card-label">迁移路径</span>
+                <span class="data-card-value small">{{ task.source_db }} → {{ task.target_db }}</span>
+              </div>
+              <div class="data-card-row">
+                <span class="data-card-label">进度</span>
+                <span class="data-card-value">{{ task.progress.toFixed(1) }}%</span>
+              </div>
+              <div class="data-card-row">
+                <span class="data-card-label">创建时间</span>
+                <span class="data-card-value small">{{ formatDate(task.created_at) }}</span>
+              </div>
+              <div class="data-card-actions">
+                <router-link :to="`/task/${task.id}`" class="btn btn-sm btn-outline-info">
+                  <i class="bi bi-eye"></i> 详情
+                </router-link>
+                <button v-if="task.status === 'pending' && task.id" @click="startTask(task.id)"
+                        class="btn btn-sm btn-success">
+                  <i class="bi bi-play-fill"></i> 开始
+                </button>
+                <button v-if="task.status === 'running' && task.id" @click="cancelTask(task.id)"
+                        class="btn btn-sm btn-warning">
+                  <i class="bi bi-x-circle"></i> 取消
+                </button>
+                <button v-if="task.id" @click="deleteTask(task.id)" class="btn btn-sm btn-outline-danger">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 桌面端表格 -->
+          <div class="table-responsive desktop-table">
             <table class="table table-hover">
               <thead>
                 <tr>
@@ -172,12 +216,12 @@
             </div>
           </div>
         </div>
-        <div v-else class="text-center py-5 empty-state">
-          <i class="bi bi-inbox mb-3" style="font-size: 80px;"></i>
-          <h4 class="mb-3">暂无任务</h4>
-          <p class="text-muted mb-4">还没有创建任何迁移任务</p>
+        <div v-else class="empty-state-enterprise">
+          <i class="bi bi-inbox empty-icon"></i>
+          <h4>暂无任务</h4>
+          <p>还没有创建任何迁移任务</p>
           <router-link to="/task/create" class="btn btn-primary btn-sm">
-            <i class="bi bi-plus-circle me-2"></i>
+            <i class="bi bi-plus-circle"></i>
             创建第一个任务
           </router-link>
         </div>
@@ -190,6 +234,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { migrationTaskApi } from '@/api'
 import type { MigrationTask } from '@/api'
+import PageHeader from '@/components/PageHeader.vue'
 
 const pageSize = 20
 const loading = ref(false)
@@ -483,17 +528,6 @@ onMounted(() => {
   }
 }
 
-.page-header h1 {
-  display: flex;
-  align-items: center;
-  font-weight: 700;
-  color: var(--text);
-}
-
-.page-header .text-muted {
-  font-size: 1rem;
-}
-
 .task-name-link {
   text-decoration: none;
   font-weight: 600;
@@ -603,25 +637,6 @@ onMounted(() => {
   margin-right: 0;
 }
 
-.empty-state {
-  padding: 4rem 2rem;
-}
-
-.empty-state svg {
-  color: var(--border);
-  margin-bottom: 1.5rem;
-}
-
-.empty-state h4 {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.empty-state p {
-  color: var(--text-muted);
-  font-size: 1.1rem;
-}
-
 /* 批量操作栏 */
 .batch-toolbar {
   background: var(--table-row-hover);
@@ -646,34 +661,18 @@ onMounted(() => {
   margin-bottom: 0;
 }
 
-.table thead th {
-  border: none;
-  padding: 1rem;
-  font-weight: 600;
-  color: white;
-  background: var(--gradient);
-  font-size: 0.875rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.table tbody td {
-  padding: 1rem;
-  vertical-align: middle;
-  border-color: var(--border);
-}
-
-.table tbody tr {
-  transition: all 0.3s ease;
-}
-
-.table tbody tr:hover {
-  background-color: var(--table-row-hover);
-  transform: scale(1.01);
-  box-shadow: 0 4px 12px var(--shadow-light);
-}
-
 .table tbody tr:hover .task-name-link {
   color: var(--link-hover);
+}
+
+@media (max-width: 767.98px) {
+  .pagination-bar {
+    flex-direction: column;
+    align-items: stretch !important;
+  }
+
+  .jump-page-wrap {
+    margin-left: 0;
+  }
 }
 </style>

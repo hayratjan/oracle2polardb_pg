@@ -355,6 +355,7 @@ def start_task(request, task_id):
             valid_task_types = [
                 'table', 'materialized_view', 'view', 'routine', 'all_tables',
                 'view_to_table', 'view_to_sqlite', 'trigger', 'sequence', 'full_schema',
+                'table_batch', 'full_database',
             ]
             if task.task_type not in valid_task_types:
                 logger.error(f"未知的任务类型: {task.task_type}")
@@ -408,6 +409,20 @@ def start_task(request, task_id):
                     t2 = threading.Thread(target=lambda: run_with_lifecycle(task.id, run_full_schema))
                     t2.daemon = True
                     t2.start()
+                elif task.task_type == 'full_database':
+                    logger.info(f"提交整库一键迁移任务: {task.name}")
+                    def run_full_db():
+                        try:
+                            from migration_app import full_database as fd
+                            fd.migrate_full_database(task.id, postgres_database)
+                        except Exception as ex:
+                            logger.error(f"整库迁移异常: {str(ex)}", exc_info=True)
+                    t3 = threading.Thread(target=lambda: run_with_lifecycle(task.id, run_full_db))
+                    t3.daemon = True
+                    t3.start()
+                elif task.task_type == 'table_batch':
+                    logger.info(f"提交表级批量迁移任务: {task.source_schema}")
+                    executor.submit(run_with_lifecycle, task.id, views.migrate_table, task.id, postgres_database)
                 elif task.task_type == 'all_tables':
                     # 所有表迁移不使用线程池，避免 interpreter shutdown 时 submit 报错；用独立线程并重载 views 确保跑最新逻辑
                     logger.info(f"提交全部表迁移任务（独立线程）: {task.source_schema}.*")
@@ -459,6 +474,13 @@ def start_task(request, task_id):
                             import migration_app.views as v
                             importlib.reload(v)
                             v.migrate_schema_orchestration(task.id, postgres_database)
+                        elif task.task_type == 'full_database':
+                            logger.info(f"开始执行整库一键迁移: {task.name}")
+                            from migration_app import full_database as fd
+                            fd.migrate_full_database(task.id, postgres_database)
+                        elif task.task_type == 'table_batch':
+                            logger.info(f"开始执行表级批量迁移: {task.source_schema}")
+                            views.migrate_table(task.id, postgres_database)
                         elif task.task_type == 'all_tables':
                             logger.info(f"开始执行全部表迁移任务（重载 views 后执行）: {task.source_schema}.*")
                             import migration_app.views as v
