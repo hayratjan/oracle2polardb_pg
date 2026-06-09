@@ -89,7 +89,9 @@ def run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log, sourc
     table_name = (source_table_name or task.source_object or "").strip()
     if not table_name:
         raise ValueError("主键对齐模式需要有效的源表名")
-    pg_table = table_name.lower()
+    from .pg_identifiers import apply_identifier_case
+    id_case = getattr(task, 'identifier_case', 'lower') or 'lower'
+    pg_table = apply_identifier_case(table_name, id_case)
 
     pg_cursor.execute(
         """
@@ -102,7 +104,7 @@ def run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log, sourc
 
     if not table_exists:
         log.append("【主键对齐】目标表不存在，先执行全量建表与导数（首次）。")
-        _migrate_single_table(
+        ok, _rows = _migrate_single_table(
             oracle_cursor,
             pg_conn,
             pg_cursor,
@@ -115,6 +117,8 @@ def run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log, sourc
             watermark_column=None,
             watermark_min_exclusive=None,
         )
+        if not ok:
+            raise RuntimeError(f"【主键对齐】首次全量迁移表 {table_name} 未成功完成")
         return
 
     pk_cols = fetch_oracle_pk_columns(oracle_cursor, source_schema, table_name)

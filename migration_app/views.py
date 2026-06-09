@@ -1118,7 +1118,8 @@ def migrate_table(task_id, postgres_database=None):
                     task.save(update_fields=['progress', 'view_progress', 'log'])
 
             if task.cancel_requested:
-                pass
+                task.status = 'partial'
+                log.append(f"用户取消，已完成 {len(completed_set)}/{total_tables} 张表")
             elif total_tables > 1:
                 if failed_tables:
                     task.status = 'partial'
@@ -1157,22 +1158,14 @@ def migrate_table(task_id, postgres_database=None):
         task.save()
 
     except Exception as e:
-        error_msg = str(e)
-        trace = traceback.format_exc()
+        from .migration_errors import MigrationCancelledError, format_db_error, rollback_quietly, safe_close_db_resources
+        rollback_quietly(pg_conn)
+        error_msg = format_db_error(e)
         log.append(f"迁移任务发生错误: {error_msg}")
-        log.append(f"详细错误: {trace}")
-        try:
-            if oracle_cursor:
-                oracle_cursor.close()
-            if oracle_conn:
-                oracle_conn.close()
-            if pg_cursor:
-                pg_cursor.close()
-            if pg_conn:
-                pg_conn.close()
-        except Exception as close_err:
-            log.append(f"关闭数据库连接时出错: {str(close_err)}")
-        task.status = 'failed'
+        if not isinstance(e, MigrationCancelledError):
+            log.append(f"详细错误: {traceback.format_exc()}")
+        safe_close_db_resources(oracle_cursor, oracle_conn, pg_cursor, pg_conn)
+        task.status = 'partial' if isinstance(e, MigrationCancelledError) else 'failed'
         try:
             final_vp = normalize_view_progress(task.view_progress)
             final_vp.pop('resume', None)
@@ -1322,7 +1315,8 @@ def migrate_all_tables(task_id, postgres_database=None):
     # 记录数据库信息
     if postgres_database:
         log.append(f"目标PostgreSQL数据库: {postgres_database}")
-    
+
+    oracle_conn = oracle_cursor = pg_conn = pg_cursor = None
     try:
         # 连接Oracle数据库
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
@@ -1506,7 +1500,8 @@ def migrate_all_tables(task_id, postgres_database=None):
                     )
                     completed_list = mark_table_completed(completed_set, table_name)
                 except Exception as table_err:
-                    err_msg = str(table_err)
+                    from .migration_errors import format_db_error
+                    err_msg = format_db_error(table_err)
                     log.append(f"表 {table_name} 迁移失败: {err_msg}")
                     failed_tables.append((table_name, err_msg))
                     completed_list = sorted(completed_set)
@@ -1522,14 +1517,9 @@ def migrate_all_tables(task_id, postgres_database=None):
                 task.log = '\n'.join(log)
                 task.save(update_fields=['progress', 'view_progress', 'log'])
 
-            if oracle_cursor:
-                oracle_cursor.close()
-            if oracle_conn:
-                oracle_conn.close()
-            if pg_cursor:
-                pg_cursor.close()
-            if pg_conn:
-                pg_conn.close()
+            from .migration_errors import safe_close_db_resources
+            safe_close_db_resources(oracle_cursor, oracle_conn, pg_cursor, pg_conn)
+            oracle_cursor = oracle_conn = pg_cursor = pg_conn = None
 
         # 根据是否有失败表设置最终状态
         if task.cancel_requested:
@@ -1556,15 +1546,7 @@ def migrate_all_tables(task_id, postgres_database=None):
         trace = traceback.format_exc()
         log.append(f"错误: {error_msg}")
         log.append(f"详细错误: {trace}")
-        try:
-            safe_close_db_resources(
-                locals().get('oracle_cursor'),
-                locals().get('oracle_conn'),
-                locals().get('pg_cursor'),
-                locals().get('pg_conn'),
-            )
-        except Exception:
-            pass
+        safe_close_db_resources(oracle_cursor, oracle_conn, pg_cursor, pg_conn)
         task.status = 'failed'
         final_vp = normalize_view_progress(task.view_progress)
         final_vp.pop('resume', None)
@@ -1632,6 +1614,7 @@ def migrate_sequence(task_id, postgres_database=None):
     log = []
     if postgres_database:
         log.append(f"目标PostgreSQL数据库: {postgres_database}")
+    oracle_conn = oracle_cursor = pg_conn = pg_cursor = None
     try:
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
@@ -1643,22 +1626,23 @@ def migrate_sequence(task_id, postgres_database=None):
             task.conflict_strategy, log,
             id_case=getattr(task, 'identifier_case', 'lower') or 'lower',
         )
-        oracle_cursor.close()
-        oracle_conn.close()
-        pg_cursor.close()
-        pg_conn.close()
         task.status = 'completed'
         task.progress = 100
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
     except Exception as e:
+        from .migration_errors import format_db_error, rollback_quietly
+        rollback_quietly(pg_conn)
         task.status = 'failed'
-        log.append(str(e))
+        log.append(format_db_error(e))
         log.append(traceback.format_exc())
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
+    finally:
+        from .migration_errors import safe_close_db_resources
+        safe_close_db_resources(oracle_cursor, oracle_conn, pg_cursor, pg_conn)
 
 
 def migrate_trigger(task_id, postgres_database=None):

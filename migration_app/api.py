@@ -18,6 +18,7 @@ from .serializers import (
 )
 from . import dashboard
 from . import create_task
+from .migration_errors import format_db_error, safe_close_db_resources
 import json
 import psycopg2
 
@@ -278,6 +279,7 @@ class MigrationTaskViewSet(viewsets.ModelViewSet):
 
 class SchemasAPIView(APIView):
     def get(self, request):
+        connection = cursor = conn = None
         try:
             connection_id = request.query_params.get('connection_id')
             conn_type = request.query_params.get('type', 'oracle')
@@ -288,12 +290,10 @@ class SchemasAPIView(APIView):
                 return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
             
             schemas = []
-            
             if conn_type == 'oracle':
                 from . import views
                 connection = views.get_oracle_connection(connection_id)
                 cursor = connection.cursor()
-                
                 query = """
                 SELECT USERNAME 
                 FROM ALL_USERS 
@@ -302,15 +302,12 @@ class SchemasAPIView(APIView):
                 """
                 cursor.execute(query)
                 schemas = [row[0] for row in cursor.fetchall()]
-                cursor.close()
-                connection.close()
             elif conn_type == 'postgres':
                 from .models import PostgresConnection
                 from .views import _pg_connect_kwargs
-                pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
-                conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, database or pg_conn.database))
+                pg_conn_obj = get_object_or_404(PostgresConnection, pk=connection_id)
+                conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn_obj, database or pg_conn_obj.database))
                 cursor = conn.cursor()
-                
                 cursor.execute("""
                 SELECT schema_name 
                 FROM information_schema.schemata 
@@ -318,21 +315,20 @@ class SchemasAPIView(APIView):
                 ORDER BY schema_name
                 LIMIT %s
                 """, [limit])
-                
                 schemas = [row[0] for row in cursor.fetchall()]
-                cursor.close()
-                conn.close()
-            
-            return Response({
-                'status': 'success',
-                'schemas': schemas
-            })
+            else:
+                return Response({'status': 'error', 'message': f'不支持的 type: {conn_type}'}, status=status.HTTP_400_BAD_REQUEST)
+
+            return Response({'status': 'success', 'schemas': schemas})
         except Exception as e:
-            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'status': 'error', 'message': format_db_error(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            safe_close_db_resources(cursor, connection, conn)
 
 
 class DatabaseObjectsAPIView(APIView):
     def get(self, request):
+        connection = cursor = None
         try:
             connection_id = request.query_params.get('connection_id')
             schema = request.query_params.get('schema')
@@ -348,9 +344,8 @@ class DatabaseObjectsAPIView(APIView):
             from . import views
             connection = views.get_oracle_connection(connection_id)
             cursor = connection.cursor()
-            
             objects = []
-            
+
             if object_type == 'view_to_sqlite':
                 cursor.execute("""
                 SELECT TABLE_NAME 
@@ -379,15 +374,11 @@ class DatabaseObjectsAPIView(APIView):
                     ]
                 
                 objects.sort(key=lambda obj: (obj['object_type'], obj['name']))
-                
-                cursor.close()
-                connection.close()
-                
                 return Response({
                     'status': 'success',
                     'objects': objects,
                     'total': len(objects),
-                    'has_more': False
+                    'has_more': False,
                 })
             elif object_type.upper() == 'TABLE':
                 query = """
@@ -448,68 +439,50 @@ class DatabaseObjectsAPIView(APIView):
                 objects = [row[0] for row in cursor.fetchall()]
 
             else:
-                cursor.close()
-                connection.close()
                 return Response({
                     'status': 'error',
-                    'message': f'不支持的object_type: {object_type}'
+                    'message': f'不支持的object_type: {object_type}',
                 }, status=status.HTTP_400_BAD_REQUEST)
-            
+
             if search_term:
                 objects = [obj for obj in objects if search_term.lower() in obj.lower()]
-            
-            cursor.close()
-            connection.close()
-            
-            return Response({
-                'status': 'success',
-                'objects': objects
-            })
+
+            return Response({'status': 'success', 'objects': objects})
         except Exception as e:
-            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'status': 'error', 'message': format_db_error(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            safe_close_db_resources(cursor, connection)
 
 
 class PostgresDatabasesAPIView(APIView):
     def get(self, request):
+        conn = cursor = None
         try:
             connection_id = request.query_params.get('connection_id')
-            
             if not connection_id:
                 return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
-            
-            # 获取PostgreSQL连接信息
+
             from .models import PostgresConnection
             from .views import _pg_connect_kwargs
-            pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
-            conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, 'postgres'))
+            pg_conn_obj = get_object_or_404(PostgresConnection, pk=connection_id)
+            conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn_obj, 'postgres'))
             cursor = conn.cursor()
-            
-            # 查询所有非系统数据库
             cursor.execute("""
             SELECT datname FROM pg_database 
             WHERE datistemplate = false AND datname != 'postgres' 
             ORDER BY datname
             """)
-            
             databases = [row[0] for row in cursor.fetchall()]
-            
-            # 添加默认连接的数据库到列表首位
-            if pg_conn.database not in databases:
-                databases.insert(0, pg_conn.database)
+            if pg_conn_obj.database not in databases:
+                databases.insert(0, pg_conn_obj.database)
             else:
-                databases.remove(pg_conn.database)
-                databases.insert(0, pg_conn.database)
-            
-            # 关闭游标和连接
-            cursor.close()
-            conn.close()
-            
-            return Response({
-                'status': 'success',
-                'databases': databases
-            })
+                databases.remove(pg_conn_obj.database)
+                databases.insert(0, pg_conn_obj.database)
+            return Response({'status': 'success', 'databases': databases})
         except Exception as e:
-            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'status': 'error', 'message': format_db_error(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            safe_close_db_resources(cursor, conn)
 
 
 class BrowseDirectoriesAPIView(APIView):

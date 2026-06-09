@@ -57,10 +57,14 @@ def _migrate_one_table_job(
             task=None,
             all_tables_context=None,
         )
+        err_detail = None
+        if not ok:
+            err_lines = [ln for ln in table_log if '校验失败' in ln or '迁移失败' in ln or '错误' in ln]
+            err_detail = err_lines[-1] if err_lines else '行数校验失败或迁移异常'
         return {
             'table': table_name,
             'ok': ok,
-            'error': None if ok else '行数校验失败或迁移异常',
+            'error': err_detail,
             'log_lines': table_log,
             'rows': rows,
         }

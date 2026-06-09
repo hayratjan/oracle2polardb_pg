@@ -155,6 +155,7 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
         }
         return object_types.get(key_map.get(phase, phase), True)
 
+    oracle_conn = oracle_cur = pg_conn = pg_cur = None
     try:
         # 阶段 0：准备目标环境（续传时若已过 prepare 则跳过）
         if not resume_mode and orch['auto_prepare'] and orch.get('prepare_config'):
@@ -321,11 +322,6 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                 task.log = '\n'.join(log)
                 task.save(update_fields=['progress', 'view_progress', 'log', 'status', 'postgres_database'])
 
-        oracle_cur.close()
-        oracle_conn.close()
-        pg_cur.close()
-        pg_conn.close()
-
         current_phase = 'done'
         if failed_objects:
             task.status = 'partial'
@@ -347,9 +343,14 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
         task.save()
 
     except Exception as e:
+        from .migration_errors import format_db_error, rollback_quietly, safe_close_db_resources
+        rollback_quietly(pg_conn)
         task.status = 'failed'
-        log.append(str(e))
+        log.append(format_db_error(e))
         log.append(traceback.format_exc())
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
+    finally:
+        from .migration_errors import safe_close_db_resources
+        safe_close_db_resources(oracle_cur, oracle_conn, pg_cur, pg_conn)

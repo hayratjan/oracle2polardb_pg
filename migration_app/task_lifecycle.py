@@ -43,11 +43,37 @@ def is_task_active_locally(task_id: int) -> bool:
         return int(task_id) in _active_task_ids
 
 
+def _fail_task_on_unhandled_exception(task_id: int, exc: BaseException) -> None:
+    """迁移函数未捕获异常时，将仍为 running 的任务标为 failed。"""
+    from .models import MigrationTask
+    from .migration_errors import format_db_error
+
+    try:
+        task = MigrationTask.objects.get(pk=task_id)
+    except MigrationTask.DoesNotExist:
+        return
+    if task.status != 'running':
+        return
+    msg = format_db_error(exc)
+    prev = task.log or ''
+    marker = '【迁移异常】'
+    if marker not in prev:
+        task.log = (prev + '\n' if prev else '') + f'{marker}{msg}'
+    task.status = 'failed'
+    if not task.completed_at:
+        task.completed_at = timezone.now()
+    task.save(update_fields=['status', 'log', 'completed_at'])
+    logger.error('任务 %s 因未捕获异常失败: %s', task_id, msg)
+
+
 def run_with_lifecycle(task_id: int, fn: Callable[..., T], *args, **kwargs) -> T:
-    """包装迁移入口：自动登记/注销本进程活跃任务。"""
+    """包装迁移入口：自动登记/注销本进程活跃任务；未捕获异常时修正任务状态。"""
     mark_task_active(task_id)
     try:
         return fn(*args, **kwargs)
+    except Exception as exc:
+        _fail_task_on_unhandled_exception(task_id, exc)
+        raise
     finally:
         mark_task_inactive(task_id)
 
