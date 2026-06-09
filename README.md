@@ -1,15 +1,10 @@
 <!-- 文档版本：v2 · 企业级迁移平台 -->
-<table align="center">
-  <tr>
-    <td valign="middle" align="right" width="110">
-      <img src="frontend/src/assets/logo.svg" alt="Oracle 至 PolarDB 迁移工具图标" width="96" height="96" />
-    </td>
-    <td valign="middle" align="left">
-      <h1>Oracle 至 PolarDB PostgreSQL</h1>
-      <h3>企业级数据库迁移与同步平台</h3>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="frontend/src/assets/logo.svg" alt="甲骨文至云数据库迁移平台图标" width="80" height="80" />
+</p>
+
+<h1 align="center">甲骨文 至 云原生 PostgreSQL</h1>
+<h3 align="center">企业级数据库迁移与同步平台</h3>
 
 <p align="center">
   <img src="https://img.shields.io/badge/版本-v2.0-2563EB?style=for-the-badge" alt="Version" />
@@ -129,26 +124,26 @@
 **Oracle 到 PolarDB PostgreSQL 迁移平台** 是一套面向企业级场景的数据库迁移与数据同步解决方案。帮助客户将 Oracle 11g 及更高版本的结构与数据，安全、可控地迁移至阿里云 PolarDB PostgreSQL 兼容引擎，并支持**任务编排、目标环境预置、增量同步、断点续传**与全链路可观测。
 
 ```mermaid
-mindmap
-  root((迁移平台))
-    连接层
-      Oracle多源连接
-      PolarDB多目标连接
-      连接测试与健康检查
-    迁移层
-      表级精迁向导
-      整库一键编排
-      单对象任务创建
-    目标层
-      选择已有库与Schema
-      自动建库
-      自动建用户与Schema
-      表空间管理
-    运维层
-      实时进度
-      结构化日志
-      断点续传
-      定时增量同步
+flowchart TB
+  R(("迁移平台"))
+  R --> L1["连接层"]
+  R --> L2["迁移层"]
+  R --> L3["目标层"]
+  R --> L4["运维层"]
+  L1 --> L1A["甲骨文多源连接"]
+  L1 --> L1B["云数据库多目标连接"]
+  L1 --> L1C["连接健康检查"]
+  L2 --> L2A["表级精迁向导"]
+  L2 --> L2B["整库一键编排"]
+  L2 --> L2C["单对象任务创建"]
+  L3 --> L3A["选择已有库与模式"]
+  L3 --> L3B["自动建库"]
+  L3 --> L3C["自动建用户与模式"]
+  L3 --> L3D["表空间管理"]
+  L4 --> L4A["实时进度"]
+  L4 --> L4B["结构化日志"]
+  L4 --> L4C["断点续传"]
+  L4 --> L4D["定时增量同步"]
 ```
 
 <br/>
@@ -228,12 +223,12 @@ mindmap
 五步向导，将「选表 + 配目标 + 定增量」收敛为一条清晰路径：
 
 ```mermaid
-flowchart LR
-  S1["步骤1 源端配置<br>Oracle连接与Schema"]
-  S2["步骤2 选择表<br>多选、搜索、全选"]
-  S3["步骤3 目标环境<br>库、表空间、用户、Schema"]
-  S4["步骤4 增量策略<br>全量、水位列、主键对齐"]
-  S5["步骤5 确认提交<br>可选自动准备环境"]
+flowchart TB
+  S1["步骤一 源端配置"]
+  S2["步骤二 选择数据表"]
+  S3["步骤三 目标环境"]
+  S4["步骤四 增量策略"]
+  S5["步骤五 确认提交"]
   S1 --> S2 --> S3 --> S4 --> S5
 ```
 
@@ -258,18 +253,18 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  subgraph discover [发现阶段]
+  subgraph discover ["发现阶段"]
     D1["扫描用户列表"]
-    D2["统计表视图序列触发器例程"]
-    D3["Schema映射配置"]
+    D2["统计各类对象数量"]
+    D3["源模式与目标模式映射"]
   end
-  subgraph prepare [准备阶段]
+  subgraph prepare ["准备阶段"]
     P1["创建数据库"]
     P2["创建表空间"]
-    P3["创建用户与Schema"]
-    P4["授权"]
+    P3["创建用户与模式"]
+    P4["执行授权"]
   end
-  subgraph migrate [迁移阶段]
+  subgraph migrate ["迁移阶段"]
     M1["序列"]
     M2["物理表"]
     M3["视图"]
@@ -442,54 +437,35 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-  subgraph FE [Web前端层]
-    direction TB
+  subgraph fe ["表现层"]
     Home["首页工作台"]
     TableWiz["表级迁移向导"]
     FullDB["整库一键迁移"]
-    Create["创建任务"]
-    Tasks["任务列表与详情"]
-    Monitor["实时监控"]
     TargetWiz["目标环境向导"]
   end
-
-  subgraph API [接口层]
-    direction TB
-    Auth["身份认证"]
-    TaskAPI["任务增删改查与启停"]
+  subgraph iface ["接口层"]
+    TaskAPI["任务管理接口"]
     DDL["目标环境接口"]
     Discovery["库发现服务"]
-    Meta["Schema与对象枚举"]
   end
-
-  subgraph Core [执行内核]
-    direction TB
-    Runner["任务分发模块"]
-    Provision["目标环境预置模块"]
-    FullOrch["整库编排模块"]
-    Migrate["对象迁移模块"]
-    Lifecycle["生命周期与续传"]
+  subgraph core ["执行层"]
+    Runner["任务分发"]
+    FullOrch["整库编排"]
+    Migrate["对象迁移"]
   end
-
-  subgraph Data [数据源]
-    direction LR
-    Oracle[("Oracle 11g及以上")]
-    PolarDB[("PolarDB PostgreSQL")]
-    SQLite[("SQLite归档库")]
+  subgraph datalayer ["数据层"]
+    SrcDB[(甲骨文源库)]
+    TgtDB[(云原生目标库)]
   end
-
   TableWiz --> TaskAPI
   FullDB --> TaskAPI
   TargetWiz --> DDL
   FullDB --> Discovery
   TaskAPI --> Runner
-  DDL --> Provision
   Runner --> FullOrch
   Runner --> Migrate
-  FullOrch --> Migrate
-  Migrate --> Oracle
-  Migrate --> PolarDB
-  Migrate --> SQLite
+  Migrate --> SrcDB
+  Migrate --> TgtDB
 ```
 
 <br/>
@@ -617,15 +593,15 @@ cd frontend && pnpm install && pnpm dev
 ### 推荐上手路径
 
 ```mermaid
-flowchart TD
-  A["步骤1 配置Oracle与PolarDB连接并测试"] --> B{"迁移规模"}
-  B -->|几张核心表| C["步骤2 表级迁移向导"]
-  B -->|整实例多Schema| D["步骤2 整库一键迁移"]
-  B -->|单视图或例程| E["步骤2 通用创建任务"]
-  C --> F["步骤3 准备目标环境可选"]
+flowchart TB
+  A["步骤一 配置源端与目标端连接"] --> B{"选择迁移规模"}
+  B -->|核心表迁移| C["步骤二 表级迁移向导"]
+  B -->|整库迁移| D["步骤二 整库一键迁移"]
+  B -->|单对象迁移| E["步骤二 通用创建任务"]
+  C --> F["步骤三 准备目标环境"]
   D --> F
-  F --> G["步骤4 启动任务并监控进度"]
-  G --> H["步骤5 日志排障与续传校验"]
+  F --> G["步骤四 启动并监控进度"]
+  G --> H["步骤五 排障与续传校验"]
 ```
 
 ---
@@ -851,17 +827,14 @@ pnpm build      # 生产构建
 
 <br/>
 
-<table align="center">
-  <tr>
-    <td valign="middle" align="right" width="72">
-      <img src="frontend/src/assets/logo.svg" alt="平台图标" width="56" height="56" />
-    </td>
-    <td valign="middle" align="left">
-      <strong>Oracle 至 PolarDB PostgreSQL</strong><br/>
-      <sub>企业级迁移平台 · 表级精迁 · 整库编排 · 目标环境自动就绪</sub>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="frontend/src/assets/logo.svg" alt="平台图标" width="48" height="48" />
+</p>
+
+<p align="center">
+  <strong>甲骨文 至 云原生 PostgreSQL</strong><br/>
+  <sub>企业级迁移平台 · 表级精迁 · 整库编排 · 目标环境自动就绪</sub>
+</p>
 
 <br/>
 
