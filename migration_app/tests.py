@@ -189,3 +189,84 @@ class PgIdentifiersTest(TestCase):
         self.assertIn('"isnull"', ddl)
         self.assertIn('SMALLINT', ddl)
         self.assertNotIn('    ISNULL SMALLINT', ddl)
+
+
+class PlatformConfigAPITest(TestCase):
+    """平台配置持久化 API 测试"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='cfguser', password='testpass')
+        self.client.force_authenticate(user=self.user)
+
+    def test_migration_settings_persist(self):
+        payload = {
+            'default_identifier_case': 'upper',
+            'default_conflict_strategy': 'skip',
+            'batch_size': 8000,
+            'enable_fk_replay': False,
+        }
+        post = self.client.post('/api/config/migration/', payload, format='json')
+        self.assertEqual(post.status_code, 200)
+        get = self.client.get('/api/config/migration/')
+        self.assertEqual(get.status_code, 200)
+        data = get.json()
+        self.assertEqual(data['default_identifier_case'], 'upper')
+        self.assertEqual(data['batch_size'], 8000)
+        self.assertFalse(data['enable_fk_replay'])
+
+    def test_system_settings_persist(self):
+        payload = {'max_concurrent_tasks': 3, 'log_level': 'WARNING'}
+        self.client.post('/api/config/system/', payload, format='json')
+        data = self.client.get('/api/config/system/').json()
+        self.assertEqual(data['max_concurrent_tasks'], 3)
+        self.assertEqual(data['log_level'], 'WARNING')
+
+    def test_celery_status_api(self):
+        res = self.client.get('/api/config/celery-status/')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn('broker_configured', data)
+
+    def test_help_api_sections(self):
+        res = self.client.get('/api/help/')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data['status'], 'success')
+        self.assertTrue(len(data.get('sections', [])) >= 1)
+
+
+class MigrationReportTest(TestCase):
+    """迁移报告生成测试"""
+
+    def test_build_report_from_log(self):
+        from migration_app.migration_report import build_migration_report
+
+        oracle_conn = OracleConnection.objects.create(
+            name='O', host='h', port=1521, service_name='ORCL', username='u', password='p',
+        )
+        task = MigrationTask.objects.create(
+            name='报告测试',
+            task_type='table',
+            oracle_connection=oracle_conn,
+            source_schema='HR',
+            source_object='EMP',
+            status='completed',
+            log='需人工审查: ROWNUM\n【校验通过】EMP: 源端 100 行 = 目标端 100 行',
+        )
+        report = build_migration_report(task)
+        self.assertEqual(report['task_id'], task.id)
+        self.assertGreaterEqual(report['summary']['manual_review_count'], 1)
+        self.assertEqual(len(report['row_checks']), 1)
+
+
+class ApplyTaskDefaultsTest(TestCase):
+    """创建任务默认策略合并"""
+
+    def test_apply_defaults(self):
+        from migration_app.platform_config import apply_task_creation_defaults, save_migration_settings
+
+        save_migration_settings({'default_conflict_strategy': 'skip', 'default_identifier_case': 'preserve'})
+        data = apply_task_creation_defaults({'name': 't'})
+        self.assertEqual(data['conflict_strategy'], 'skip')
+        self.assertEqual(data['identifier_case'], 'preserve')

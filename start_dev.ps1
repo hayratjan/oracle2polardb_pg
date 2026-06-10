@@ -1,13 +1,14 @@
 # =============================================================================
 # Oracle → PolarDB 开发环境一键启动脚本（Windows / PowerShell）
 # 同时启动 Django 后端 (默认 8000) 与 Vue/Vite 前端 (默认 5173)
-# 用法: .\start_dev.ps1 [-Migrate] [-Install] [-Celery] [-Help]
+# 用法: .\start_dev.ps1 [-Migrate] [-Install] [-Celery] [-Beat] [-Help]
 # =============================================================================
 
 param(
     [switch]$Migrate,
     [switch]$Install,
     [switch]$Celery,
+    [switch]$Beat,
     [switch]$Help
 )
 
@@ -183,6 +184,14 @@ try {
                 -Label "Celery Worker" `
                 -FilePath "uv" `
                 -ArgumentList @("run", "celery", "-A", "oracle2polardb_pg", "worker", "-l", "info")
+            if ($Beat) {
+                Start-DevProcess `
+                    -Label "Celery Beat" `
+                    -FilePath "uv" `
+                    -ArgumentList @("run", "celery", "-A", "oracle2polardb_pg", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler")
+            } else {
+                Write-WarnMsg "未启动 Celery Beat；定时增量需使用 -Beat 或单独运行 celery beat。"
+            }
         }
     }
 

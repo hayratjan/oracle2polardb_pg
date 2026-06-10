@@ -12,6 +12,16 @@
       <button type="button" class="btn btn-sm btn-outline-warning" @click="loadSettings">重试</button>
     </div>
 
+    <!-- Celery 未配置提示 -->
+    <div v-if="celeryStatus && !celeryStatus.broker_configured" class="alert alert-warning d-flex align-items-start mb-4" role="alert">
+      <i class="bi bi-exclamation-triangle me-2 mt-1"></i>
+      <div>
+        <strong>定时增量未就绪</strong>
+        <p class="mb-0 small">{{ celeryStatus.message }}</p>
+        <p class="mb-0 small mt-1">请配置 <code>CELERY_BROKER_URL</code> 并启动 Worker + Beat（<code>./start_dev.sh --celery --beat</code>）。</p>
+      </div>
+    </div>
+
     <div class="row g-4">
       <!-- 迁移配置 -->
       <div class="col-lg-6">
@@ -61,13 +71,31 @@
               </div>
 
               <div class="mb-4">
-                <label class="form-label">批量大小</label>
+                <label class="form-label">每批拉取行数（batch_size）</label>
                 <input
                   v-model.number="migrationSettings.batch_size"
                   type="number"
                   class="form-control form-control-sm"
-                  min="1"
+                  min="100"
+                  max="50000"
                 />
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label">每 N 批提交一次</label>
+                <input v-model.number="migrationSettings.commit_every_batches" type="number" min="1" max="20" class="form-control form-control-sm" />
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label">多表并行线程数</label>
+                <input v-model.number="migrationSettings.parallel_table_workers" type="number" min="1" max="64" class="form-control form-control-sm" />
+              </div>
+
+              <div class="mb-3">
+                <div class="form-check form-switch">
+                  <input v-model="migrationSettings.enable_fk_replay" type="checkbox" class="form-check-input" id="enableFkReplay" />
+                  <label class="form-check-label" for="enableFkReplay">整库/全 Schema 完成后回放外键</label>
+                </div>
               </div>
 
               <button type="submit" class="btn btn-sm btn-primary w-100" :disabled="saving">
@@ -198,8 +226,13 @@ import PageHeader from '@/components/PageHeader.vue'
 const DEFAULT_MIGRATION_SETTINGS = {
   default_identifier_case: 'lower',
   default_conflict_strategy: 'error',
-  enable_batch_migration: false,
-  batch_size: 100,
+  enable_batch_migration: true,
+  batch_size: 5000,
+  commit_every_batches: 2,
+  progress_save_rows: 10000,
+  parallel_table_workers: 16,
+  copy_row_threshold: 100000,
+  enable_fk_replay: true,
 }
 
 /** 系统设置默认值 */
@@ -219,6 +252,7 @@ const logsError = ref('')
 const migrationSettings = ref<typeof DEFAULT_MIGRATION_SETTINGS | null>(null)
 const systemSettings = ref<typeof DEFAULT_SYSTEM_SETTINGS | null>(null)
 const logs = ref('')
+const celeryStatus = ref<{ broker_configured?: boolean; message?: string } | null>(null)
 
 /** 从 API 响应中解析配置对象（兼容嵌套与扁平两种结构） */
 function parseSettings<T extends Record<string, unknown>>(
@@ -260,9 +294,10 @@ const loadSettings = async () => {
   loading.value = true
   loadError.value = ''
   try {
-    const [migrationRes, systemRes] = await Promise.all([
+    const [migrationRes, systemRes, celeryRes] = await Promise.all([
       configApi.getMigrationSettings(),
       configApi.getSystemSettings(),
+      configApi.getCeleryStatus().catch(() => ({ data: null })),
     ])
 
     migrationSettings.value = parseSettings(
@@ -275,6 +310,9 @@ const loadSettings = async () => {
       'system_settings',
       DEFAULT_SYSTEM_SETTINGS,
     )
+    if (celeryRes.data) {
+      celeryStatus.value = celeryRes.data as typeof celeryStatus.value
+    }
   } catch (error) {
     console.error('加载配置失败:', error)
     loadError.value = '加载配置失败，已显示默认值，可修改后保存或点击重试'

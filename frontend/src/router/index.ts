@@ -56,6 +56,11 @@ const routes: Array<RouteRecordRaw> = [
     path: '/config',
     name: 'Config',
     component: () => import('@/views/ConfigView.vue')
+  },
+  {
+    path: '/help',
+    name: 'Help',
+    component: () => import('@/views/HelpView.vue')
   }
 ]
 

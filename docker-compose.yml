@@ -1,0 +1,46 @@
+# Oracle → PolarDB 迁移平台本地栈（Django + Redis + Celery Worker/Beat）
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  web:
+    build: .
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8000:8000"
+    environment:
+      DJANGO_DEBUG: "true"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+
+  celery-worker:
+    build: .
+    command: celery -A oracle2polardb_pg worker -l info
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+      - web
+
+  celery-beat:
+    build: .
+    command: celery -A oracle2polardb_pg beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+      - web

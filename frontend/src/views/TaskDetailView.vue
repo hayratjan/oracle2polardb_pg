@@ -356,6 +356,39 @@
                 </button>
               </div>
           </section>
+
+          <section v-if="migrationReport && isTerminalStatus(task.status)" class="task-detail-section mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h5 class="section-title mb-0">
+                <i class="bi bi-file-earmark-bar-graph me-1" style="font-size: 20px;"></i>
+                迁移报告
+              </h5>
+              <button type="button" class="btn btn-sm btn-outline-secondary" @click="downloadReport">
+                <i class="bi bi-download me-1"></i>导出 JSON
+              </button>
+            </div>
+            <div v-if="migrationReport.manual_review_items?.length" class="alert alert-warning py-2 small">
+              <strong>需人工审查 {{ migrationReport.summary?.manual_review_count ?? 0 }} 项</strong>
+              <ul class="mb-0 mt-2 ps-3">
+                <li v-for="(item, idx) in (migrationReport.manual_review_items as string[]).slice(0, 8)" :key="idx">{{ item }}</li>
+              </ul>
+            </div>
+            <div v-if="migrationReport.row_checks?.length" class="table-responsive">
+              <table class="table table-sm table-bordered mb-0">
+                <thead><tr><th>对象</th><th>源行数</th><th>目标行数</th><th>差异</th><th>结果</th></tr></thead>
+                <tbody>
+                  <tr v-for="(row, idx) in (migrationReport.row_checks as any[]).slice(0, 20)" :key="idx">
+                    <td><code>{{ row.object }}</code></td>
+                    <td>{{ row.source_rows }}</td>
+                    <td>{{ row.target_rows }}</td>
+                    <td>{{ row.row_diff }}</td>
+                    <td><span :class="row.passed ? 'text-success' : 'text-danger'">{{ row.passed ? '通过' : '失败' }}</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-else class="text-muted small mb-0">暂无行数校验明细。</p>
+          </section>
           
           <section class="task-detail-section mb-4">
             <h5 class="section-title mb-3">
@@ -712,6 +745,32 @@ const ensureStatusPolling = () => {
 
 const canRerun = (status: string) =>
   ['failed', 'completed', 'partial', 'canceled', 'aborted', 'exported'].includes(status)
+
+const isTerminalStatus = (status: string) => canRerun(status)
+
+const migrationReport = computed(() => {
+  const r = task.value?.migration_report
+  return r && typeof r === 'object' ? (r as Record<string, unknown>) : null
+})
+
+const downloadReport = async () => {
+  const taskId = Number(route.params.id)
+  if (!taskId) return
+  try {
+    const res = await migrationTaskApi.report(taskId, { refresh: true })
+    const report = (res.data as { report?: unknown }).report ?? res.data
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `migration_report_task_${taskId}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error(e)
+    alert('导出报告失败')
+  }
+}
 
 /** 是否展示「继续迁移」按钮 */
 const canResume = (status: string) => {

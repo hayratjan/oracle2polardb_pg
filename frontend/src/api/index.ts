@@ -70,6 +70,7 @@ export interface MigrationTask {
   sync_max_pkey_rows?: number
   /** 目标环境配置（库/表空间/用户/Schema） */
   target_provisioning?: TargetProvisioningConfig
+  migration_report?: Record<string, unknown>
 }
 
 /** 目标环境单项配置 */
@@ -167,6 +168,11 @@ export const migrationTaskApi = {
   /** 实时任务监控聚合数据 */
   monitor: (params?: { task_limit?: number; log_limit?: number; compare_limit?: number }) =>
     apiClient.get<TaskMonitorResponse>('/api/tasks/monitor/', { params: params || {} }),
+  /** 结构化迁移报告 */
+  report: (id: number, params?: { refresh?: boolean; format?: string }) =>
+    apiClient.get(`/api/tasks/${id}/report/`, {
+      params: { refresh: params?.refresh ? 1 : undefined, format: params?.format },
+    }),
 }
 
 /** 主键对齐对比快照 */
@@ -286,6 +292,7 @@ export const configApi = {
   saveMigrationSettings: (data: any) => apiClient.post('/api/config/migration/', data),
   getSystemSettings: () => apiClient.get('/api/config/system/'),
   saveSystemSettings: (data: any) => apiClient.post('/api/config/system/', data),
+  getCeleryStatus: () => apiClient.get('/api/config/celery-status/'),
 }
 
 export const logsApi = {

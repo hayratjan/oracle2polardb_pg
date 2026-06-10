@@ -61,6 +61,13 @@
               </div>
             </div>
             <p v-else-if="oracleConnection && !discovering" class="text-muted mt-3 mb-0">点击「刷新发现」加载 Schema 统计</p>
+
+            <div v-if="discoveryWarnings.length" class="alert alert-warning mt-3 mb-0" role="alert">
+              <strong><i class="bi bi-exclamation-triangle me-1"></i>Discovery 告警</strong>
+              <ul class="mb-0 mt-2 small ps-3">
+                <li v-for="(w, i) in discoveryWarnings" :key="i">{{ w }}</li>
+              </ul>
+            </div>
           </div>
         </div>
 
@@ -136,6 +143,7 @@
               <li>准备目标环境</li>
               <li>迁移序列</li>
               <li>迁移物理表</li>
+              <li>回放外键约束</li>
               <li>迁移视图</li>
               <li>迁移物化视图</li>
               <li>导出触发器</li>
@@ -166,6 +174,7 @@ const postgresConnection = ref(0)
 const discovering = ref(false)
 const submitting = ref(false)
 const discoverySchemas = ref<{ name: string; stats: Record<string, number> }[]>([])
+const discoveryWarnings = ref<string[]>([])
 const schemaMappings = ref<{ source_schema: string; target_schema: string }[]>([])
 const targetConfig = ref<TargetProvisioningConfig>({})
 const resolvedDatabase = ref('')
@@ -206,6 +215,7 @@ const loadDiscovery = async () => {
   try {
     const res = await databaseApi.getOracleDiscovery({ connection_id: oracleConnection.value })
     discoverySchemas.value = res.data.schemas || []
+    discoveryWarnings.value = res.data.warnings || []
     schemaMappings.value = discoverySchemas.value.map((s: { name: string }) => ({
       source_schema: s.name,
       target_schema: s.name.toLowerCase(),

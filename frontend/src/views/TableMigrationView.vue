@@ -123,6 +123,11 @@
                 <option value="preserve">保持原样</option>
               </select>
             </div>
+            <div v-if="form.incremental_mode === 'pk_mirror'" class="col-md-4">
+              <label class="form-label">主键对齐行数上限</label>
+              <input v-model.number="form.sync_max_pkey_rows" type="number" min="1000" max="10000000" class="form-control-sm" title="源表与目标表行数均不得超过该值">
+              <div class="form-text">默认 500000；大表请用水位列增量或调大该值</div>
+            </div>
           </div>
         </div>
 
@@ -207,6 +212,7 @@ const form = ref({
   schedule_interval_minutes: 60,
   conflict_strategy: 'error',
   identifier_case: 'lower',
+  sync_max_pkey_rows: 500000,
 })
 
 const scheduleAllowed = computed(() =>
@@ -278,6 +284,7 @@ const handleSubmit = async () => {
       schedule_interval_minutes: form.value.schedule_interval_minutes,
       conflict_strategy: form.value.conflict_strategy,
       identifier_case: form.value.identifier_case,
+      sync_max_pkey_rows: form.value.sync_max_pkey_rows,
       prepare_target: prepareTarget.value,
       target_provisioning: targetConfig.value,
     }

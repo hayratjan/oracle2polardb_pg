@@ -1823,8 +1823,8 @@ def migrate_schema_orchestration(task_id, postgres_database=None):
             else:
                 task.view_progress = {
                     'orchestration': True,
-                    'phase': phases[2],
-                    'phase_index': 2,
+                    'phase': phases[-1],
+                    'phase_index': len(phases) - 1,
                     'phases': phases,
                 }
             task.save(update_fields=['view_progress'])
@@ -1895,8 +1895,8 @@ def migrate_schema_orchestration(task_id, postgres_database=None):
         else:
             task.view_progress = {
                 'orchestration': True,
-                'phase': phases[2],
-                'phase_index': 2,
+                'phase': phases[-1],
+                'phase_index': len(phases) - 1,
                 'phases': phases,
             }
         task.save(update_fields=['log', 'view_progress'])

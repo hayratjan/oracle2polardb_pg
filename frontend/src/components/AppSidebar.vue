@@ -31,7 +31,7 @@
 
     <!-- 底部版本信息 -->
     <div v-show="!collapsed || mobileOpen" class="sidebar-footer">
-      <span class="version-text">v1.0 · 企业版</span>
+      <span class="version-text">v2.0 · 企业版</span>
     </div>
   </aside>
 </template>
@@ -79,6 +79,7 @@ const navGroups = [
     label: '系统',
     items: [
       { to: '/config', label: '系统配置', icon: 'bi-gear' },
+      { to: '/help', label: '帮助文档', icon: 'bi-question-circle' },
     ],
   },
 ]

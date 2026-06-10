@@ -19,8 +19,16 @@ from datetime import timedelta
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Initialize Oracle client
-cx_Oracle.init_oracle_client(lib_dir=r"/Users/xiaohaige/Downloads/instantclient_23_3")
+# Initialize Oracle client（生产/开发通过 ORACLE_CLIENT_LIB 指定；CI 可留空跳过）
+_ORACLE_CLIENT_LIB = os.environ.get(
+    'ORACLE_CLIENT_LIB',
+    r'/Users/xiaohaige/Downloads/instantclient_23_3',
+)
+if _ORACLE_CLIENT_LIB:
+    try:
+        cx_Oracle.init_oracle_client(lib_dir=_ORACLE_CLIENT_LIB)
+    except Exception:
+        pass  # 无本地 Instant Client 时仍可运行不依赖 Oracle 的 API/单测
 
 
 # Quick-start development settings - unsuitable for production
