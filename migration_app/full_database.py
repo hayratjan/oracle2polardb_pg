@@ -78,48 +78,54 @@ _OBJECT_QUERIES = {
 def discover_oracle_instance(connection_id: int) -> dict[str, Any]:
     """发现 Oracle 实例下所有非系统 Schema 及对象统计。"""
     conn = get_oracle_connection(connection_id)
-    cur = conn.cursor()
-    placeholders = ', '.join([f"'{u}'" for u in _ORACLE_SYSTEM_USERS])
-    cur.execute(f"""
-        SELECT USERNAME FROM ALL_USERS
-        WHERE USERNAME NOT IN ({placeholders})
-        ORDER BY USERNAME
-    """)
-    schemas = [row[0] for row in cur.fetchall()]
+    try:
+        cur = conn.cursor()
+        placeholders = ', '.join([f"'{u}'" for u in _ORACLE_SYSTEM_USERS])
+        cur.execute(f"""
+            SELECT USERNAME FROM ALL_USERS
+            WHERE USERNAME NOT IN ({placeholders})
+            ORDER BY USERNAME
+        """)
+        schemas = [row[0] for row in cur.fetchall()]
 
-    result_schemas = []
-    for schema in schemas:
-        stats = {}
-        for key, (query, _) in _OBJECT_QUERIES.items():
-            cur.execute(query, {'schema': schema})
-            stats[key] = len(cur.fetchall())
-        result_schemas.append({'name': schema, 'stats': stats})
+        result_schemas = []
+        for schema in schemas:
+            stats = {}
+            for key, (query, _) in _OBJECT_QUERIES.items():
+                cur.execute(query, {'schema': schema})
+                stats[key] = len(cur.fetchall())
+            result_schemas.append({'name': schema, 'stats': stats})
 
-    # 未自动迁移的对象类型统计（Discovery 告警）
-    unsupported: dict[str, int] = {}
-    _UNSUPPORTED_QUERIES = {
-        'synonyms': (
-            "SELECT COUNT(*) FROM ALL_SYNONYMS WHERE OWNER = :schema",
-        ),
-        'packages': (
-            "SELECT COUNT(*) FROM ALL_OBJECTS WHERE OWNER = :schema "
-            "AND OBJECT_TYPE IN ('PACKAGE', 'PACKAGE BODY')",
-        ),
-        'db_links': (
-            "SELECT COUNT(*) FROM ALL_DB_LINKS WHERE OWNER = :schema",
-        ),
-        'partitioned_tables': (
-            "SELECT COUNT(*) FROM ALL_PART_TABLES WHERE OWNER = :schema",
-        ),
-    }
-    for schema in schemas:
-        for key, (query,) in _UNSUPPORTED_QUERIES.items():
-            cur.execute(query, {'schema': schema})
-            cnt = int(cur.fetchone()[0])
-            unsupported[key] = unsupported.get(key, 0) + cnt
+        # 未自动迁移的对象类型统计（Discovery 告警）
+        unsupported: dict[str, int] = {}
+        _UNSUPPORTED_QUERIES = {
+            'synonyms': (
+                "SELECT COUNT(*) FROM ALL_SYNONYMS WHERE OWNER = :schema",
+            ),
+            'packages': (
+                "SELECT COUNT(*) FROM ALL_OBJECTS WHERE OWNER = :schema "
+                "AND OBJECT_TYPE IN ('PACKAGE', 'PACKAGE BODY')",
+            ),
+            'db_links': (
+                "SELECT COUNT(*) FROM ALL_DB_LINKS WHERE OWNER = :schema",
+            ),
+            'partitioned_tables': (
+                "SELECT COUNT(*) FROM ALL_PART_TABLES WHERE OWNER = :schema",
+            ),
+        }
+        for schema in schemas:
+            for key, (query,) in _UNSUPPORTED_QUERIES.items():
+                cur.execute(query, {'schema': schema})
+                cnt = int(cur.fetchone()[0])
+                unsupported[key] = unsupported.get(key, 0) + cnt
 
-    cur.close()
-    conn.close()
+        cur.close()
+    finally:
+        # 确保异常时也能释放 Oracle 连接，避免连接泄漏
+        try:
+            conn.close()
+        except Exception:
+            pass
     warnings = []
     if unsupported.get('synonyms', 0):
         warnings.append(f"发现 {unsupported['synonyms']} 个同义词，当前不支持自动迁移")

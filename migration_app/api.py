@@ -20,7 +20,11 @@ from . import dashboard
 from . import create_task
 from .migration_errors import format_db_error, safe_close_db_resources
 import json
+import logging
+import traceback
 import psycopg2
+
+logger = logging.getLogger(__name__)
 
 
 class OracleConnectionViewSet(viewsets.ModelViewSet):
@@ -1067,6 +1071,9 @@ class OracleDiscoveryAPIView(APIView):
             result = discover_oracle_instance(int(connection_id))
             return Response({'status': 'success', **result})
         except Exception as e:
+            # 打印完整异常堆栈到控制台，便于诊断 ORA/DPI 等连接或查询错误
+            logger.exception("Oracle discovery 失败, connection_id=%s", connection_id)
+            print(traceback.format_exc())
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
