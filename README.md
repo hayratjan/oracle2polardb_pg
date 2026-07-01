@@ -1,9 +1,9 @@
-<!-- 文档版本：v2.1 · 企业级迁移平台 -->
+<!-- 文档版本：v2.2 · 企业级迁移平台 -->
 <h1 align="center">Oracle 至 PolarDB PostgreSQL</h1>
 <h3 align="center">企业级数据库迁移与同步平台</h3>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-v2.1-2563EB?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/版本-v2.2-2563EB?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/状态-生产可用-22C55E?style=for-the-badge" alt="Status" />
   <img src="https://img.shields.io/badge/许可-专有-64748B?style=for-the-badge" alt="License" />
 </p>
@@ -101,6 +101,7 @@
 | [🎯 产品概述](#-产品概述) | 平台定位与核心能力矩阵 |
 | [✨ 亮点功能 · v2](#-亮点功能--v2) | 表级向导 · 整库编排 · 目标环境 DDL |
 | [🆕 v2.1 优化与修复](#-v21-优化与修复) | 日志体系 · 事务保护 · bigint 截断 · 超时控制 |
+| [🆕 v2.2 企业级加固](#-v22-企业级加固) | 安全加固 · 运维命令 · 类型补全 · 索引告警 · 注释迁移 · 多层校验 |
 | [📌 适用场景与版本](#-适用场景与版本) | 源端/目标端版本与典型场景 |
 | [✨ 核心功能矩阵](#-核心功能矩阵) | 连接、对象、策略、可观测性 |
 | [🏗 系统架构](#-系统架构) | 前后端分层与数据流 |
@@ -376,6 +377,74 @@ flowchart TB
 **问题：** 整库迁移的视图/物化视图/例程阶段，修改 `task.source_object` 后未 `save` 就调用迁移函数，后者重新从数据库读取 task 时 `source_object` 为空，报「未指定要迁移的视图」。
 
 **修复：** 三个阶段的循环中都加了 `task.save(update_fields=[...])` 再调用迁移函数。
+
+---
+
+## 🆕 v2.2 企业级加固
+
+> [!IMPORTANT]
+> 本版本重点：**安全加固** · **运维命令** · **数据类型补全** · **索引告警** · **注释迁移** · **多层数据校验**
+
+### 🛡 P0 安全加固
+
+| 加固项 | 说明 |
+|:-------|:-----|
+| 环境隔离 | `DJANGO_ENV=dev/prod` 区分，生产强制 `SECRET_KEY`/`ALLOWED_HOSTS`/`CORS` 白名单 |
+| 安全头 | `SECURE_SSL_REDIRECT`/`HSTS`/`Cookie Secure`/`X_FRAME_OPTIONS=DENY` |
+| API 限流 | DRF `AnonRateThrottle`(60/min) + `UserRateThrottle`(300/min) + 登录 `ScopedRateThrottle`(5/min) |
+| 文件浏览沙箱 | `BrowseDirectoriesAPIView` 白名单校验，防目录穿越 |
+| 错误处理 | `_safe_error` 统一错误响应，生产不泄露 `str(e)` |
+| 健康检查 | `/healthz`（存活）+ `/readyz`（就绪，DB 连通性） |
+| JWT 密钥独立 | `JWT_SIGNING_KEY` 可独立于 `SECRET_KEY` |
+| 数据库 | `DATABASE_URL` 支持 PostgreSQL 元数据库 |
+| 缓存 | Redis 缓存配置（与 Celery Broker 复用） |
+| 日志 | `LOGGING` dictConfig + 慢查询告警 + 模块分级 |
+
+### 🔧 P1 运维 Management Commands
+
+```bash
+python manage.py init_admin --username admin --password xxx    # 初始化/重置超管
+python manage.py cleanup_logs --days 30                         # 清理 30 天前日志
+python manage.py reconcile_running                               # 重置孤儿 running 任务
+python manage.py healthcheck                                    # 命令行健康检查
+```
+
+### 📊 P1 数据类型补全
+
+| Oracle 类型 | PostgreSQL 映射 |
+|:-----------|:----------------|
+| XMLTYPE | XML |
+| ROWID | CHAR(18) |
+| UROWID | CHAR(40) |
+| BFILE | TEXT |
+| INTERVAL YEAR TO MONTH | INTERVAL YEAR TO MONTH |
+| INTERVAL DAY TO SECOND(n) | INTERVAL DAY TO SECOND(n) |
+| BOOLEAN | BOOLEAN |
+
+累计支持 Oracle 类型从 17 种扩展到 24 种。
+
+### 🔍 P1 索引补全告警
+
+新增 `fetch_unsupported_indexes` 统计函数索引/位图索引/反向键索引，迁移时输出告警 + PG 对应建议：
+- FUNCTION-BASED → PG 表达式索引
+- BITMAP → PG GIN 或普通 B-tree
+- REVERSE → PG 普通 B-tree
+
+### 💬 P1 表/列注释迁移
+
+新增 `apply_table_comments`，读取 `ALL_TAB_COMMENTS` / `ALL_COL_COMMENTS`，执行 `COMMENT ON TABLE` / `COMMENT ON COLUMN`。
+
+### ✅ P2 多层数据校验
+
+从仅行数校验升级为 4 层校验体系：
+
+| 层级 | 函数 | 说明 |
+|:-----|:-----|:-----|
+| 行数 | `validate_row_counts` | 最低保障，行数相等≠数据一致 |
+| 聚合 | `validate_aggregates` | 对比 SUM/COUNT/MIN/MAX，捕获批量错误 |
+| 哈希 | `validate_row_hashes` | 按主键分批 MD5 对比，精确定位差异行 |
+| 抽样 | `validate_sample_rows` | DBMS_RANDOM 随机抽样逐行对比 |
+| 综合 | `validate_full` | 行数→聚合→哈希（小表）/抽样（大表） |
 
 ---
 
