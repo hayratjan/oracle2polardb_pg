@@ -62,6 +62,14 @@
             </div>
             <p v-else-if="oracleConnection && !discovering" class="text-muted mt-3 mb-0">点击「刷新发现」加载 Schema 统计</p>
 
+            <div v-if="discoveryError" class="alert alert-danger mt-3 mb-0" role="alert">
+              <strong><i class="bi bi-exclamation-triangle me-1"></i>发现失败</strong>
+              <div class="small mt-1">{{ discoveryError }}</div>
+              <button type="button" class="btn btn-sm btn-outline-danger mt-2" @click="loadDiscovery">
+                <i class="bi bi-arrow-clockwise me-1"></i>重试
+              </button>
+            </div>
+
             <div v-if="discoveryWarnings.length" class="alert alert-warning mt-3 mb-0" role="alert">
               <strong><i class="bi bi-exclamation-triangle me-1"></i>Discovery 告警</strong>
               <ul class="mb-0 mt-2 small ps-3">
@@ -244,9 +252,11 @@ const canSubmit = computed(() =>
 )
 
 /** 加载 Oracle 整库发现 */
+const discoveryError = ref('')
 const loadDiscovery = async () => {
   if (!oracleConnection.value) return
   discovering.value = true
+  discoveryError.value = ''
   try {
     const res = await databaseApi.getOracleDiscovery({ connection_id: oracleConnection.value })
     discoverySchemas.value = res.data.schemas || []
@@ -259,7 +269,12 @@ const loadDiscovery = async () => {
       const conn = oracleConnections.value.find((c: any) => c.id === oracleConnection.value)
       taskName.value = `整库迁移-${conn?.name || oracleConnection.value}`
     }
-  } catch (err) {
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || err?.message || '发现失败'
+    discoveryError.value = msg
+    discoverySchemas.value = []
+    discoveryWarnings.value = []
+    schemaMappings.value = []
     console.error('发现失败:', err)
   } finally {
     discovering.value = false

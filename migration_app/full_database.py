@@ -7,7 +7,9 @@
 """
 from __future__ import annotations
 
+import logging
 import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any
 
 from django.shortcuts import get_object_or_404
@@ -37,6 +39,8 @@ _ORACLE_SYSTEM_USERS = (
     'DVSYS', 'GSMADMIN_INTERNAL', 'LBACSYS', 'MDSYS', 'OJVMSYS', 'OLAPSYS',
     'ORDDATA', 'ORDSYS', 'REMOTE_SCHEDULER_AGENT', 'WMSYS', 'XDB',
 )
+
+logger = logging.getLogger(__name__)
 
 # 编排阶段顺序（外键在表数据导入完成后回放）
 PHASES = [
@@ -75,53 +79,83 @@ _OBJECT_QUERIES = {
 }
 
 
-def discover_oracle_instance(connection_id: int) -> dict[str, Any]:
-    """发现 Oracle 实例下所有非系统 Schema 及对象统计。"""
-    conn = get_oracle_connection(connection_id)
+def discover_oracle_instance(connection_id: int, *, timeout_seconds: int = 90) -> dict[str, Any]:
+    """发现 Oracle 实例下所有非系统 Schema 及对象统计。
+
+    优化点：
+    1. 用 GROUP BY OWNER 批量聚合，替代逐 Schema 循环查询。
+       原方案 N 个 Schema 需 10N 次往返，现仅需 7 次查询。
+    2. 用 ThreadPoolExecutor 包裹整体逻辑，超时自动中断。
+    3. 各步骤输出进度日志，便于诊断卡在哪一步。
+    """
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_discover_oracle_instance_impl, connection_id)
+            return future.result(timeout=timeout_seconds)
+    except FuturesTimeoutError:
+        logger.error("discover_oracle_instance 超时 (%ss), connection_id=%s", timeout_seconds, connection_id)
+        raise TimeoutError(f"Oracle Discovery 超时（{timeout_seconds}秒），请检查 Oracle 连接配置或网络")
+
+
+def _discover_oracle_instance_impl(connection_id: int) -> dict[str, Any]:
+    """discover_oracle_instance 的实际实现（在子线程中执行）。"""
+    logger.info("[STEP] 开始 Oracle Discovery, connection_id=%s", connection_id)
+    conn = get_oracle_connection(connection_id, call_timeout_ms=20000)
     try:
         cur = conn.cursor()
         placeholders = ', '.join([f"'{u}'" for u in _ORACLE_SYSTEM_USERS])
+        logger.info("[INFO] 查询非系统 Schema 列表...")
         cur.execute(f"""
             SELECT USERNAME FROM ALL_USERS
             WHERE USERNAME NOT IN ({placeholders})
             ORDER BY USERNAME
         """)
         schemas = [row[0] for row in cur.fetchall()]
+        logger.info("[OK] 发现 %d 个 Schema", len(schemas))
 
-        result_schemas = []
-        for schema in schemas:
-            stats = {}
-            for key, (query, _) in _OBJECT_QUERIES.items():
-                cur.execute(query, {'schema': schema})
-                stats[key] = len(cur.fetchall())
-            result_schemas.append({'name': schema, 'stats': stats})
+        # 批量聚合：每类对象一次 GROUP BY 查询，替代逐 Schema 循环
+        stats_map: dict[str, dict[str, int]] = {s: {} for s in schemas}
+        _GROUP_QUERIES = {
+            'tables': f"SELECT OWNER, COUNT(*) FROM ALL_TABLES WHERE OWNER NOT IN ({placeholders}) GROUP BY OWNER",
+            'sequences': f"SELECT SEQUENCE_OWNER, COUNT(*) FROM ALL_SEQUENCES WHERE SEQUENCE_OWNER NOT IN ({placeholders}) GROUP BY SEQUENCE_OWNER",
+            'views': f"SELECT OWNER, COUNT(*) FROM ALL_VIEWS WHERE OWNER NOT IN ({placeholders}) GROUP BY OWNER",
+            'materialized_views': f"SELECT OWNER, COUNT(*) FROM ALL_MVIEWS WHERE OWNER NOT IN ({placeholders}) GROUP BY OWNER",
+            'triggers': f"SELECT OWNER, COUNT(*) FROM ALL_TRIGGERS WHERE OWNER NOT IN ({placeholders}) AND BASE_OBJECT_TYPE IN ('TABLE', 'VIEW') GROUP BY OWNER",
+            'routines': (
+                f"SELECT OWNER, COUNT(*) FROM ALL_OBJECTS WHERE OWNER NOT IN ({placeholders}) "
+                "AND OBJECT_TYPE IN ('PROCEDURE', 'FUNCTION') GROUP BY OWNER"
+            ),
+        }
+        for key, sql in _GROUP_QUERIES.items():
+            logger.info("[INFO] 查询 %s 统计...", key)
+            cur.execute(sql)
+            for owner, cnt in cur.fetchall():
+                if owner in stats_map:
+                    stats_map[owner][key] = int(cnt)
+
+        result_schemas = [
+            {'name': s, 'stats': stats_map[s]}
+            for s in schemas
+        ]
 
         # 未自动迁移的对象类型统计（Discovery 告警）
         unsupported: dict[str, int] = {}
-        _UNSUPPORTED_QUERIES = {
-            'synonyms': (
-                "SELECT COUNT(*) FROM ALL_SYNONYMS WHERE OWNER = :schema",
-            ),
+        _UNSUPPORTED_GROUP_QUERIES = {
+            'synonyms': f"SELECT COUNT(*) FROM ALL_SYNONYMS WHERE OWNER NOT IN ({placeholders})",
             'packages': (
-                "SELECT COUNT(*) FROM ALL_OBJECTS WHERE OWNER = :schema "
-                "AND OBJECT_TYPE IN ('PACKAGE', 'PACKAGE BODY')",
+                f"SELECT COUNT(*) FROM ALL_OBJECTS WHERE OWNER NOT IN ({placeholders}) "
+                "AND OBJECT_TYPE IN ('PACKAGE', 'PACKAGE BODY')"
             ),
-            'db_links': (
-                "SELECT COUNT(*) FROM ALL_DB_LINKS WHERE OWNER = :schema",
-            ),
-            'partitioned_tables': (
-                "SELECT COUNT(*) FROM ALL_PART_TABLES WHERE OWNER = :schema",
-            ),
+            'db_links': f"SELECT COUNT(*) FROM ALL_DB_LINKS WHERE OWNER NOT IN ({placeholders})",
+            'partitioned_tables': f"SELECT COUNT(*) FROM ALL_PART_TABLES WHERE OWNER NOT IN ({placeholders})",
         }
-        for schema in schemas:
-            for key, (query,) in _UNSUPPORTED_QUERIES.items():
-                cur.execute(query, {'schema': schema})
-                cnt = int(cur.fetchone()[0])
-                unsupported[key] = unsupported.get(key, 0) + cnt
+        for key, sql in _UNSUPPORTED_GROUP_QUERIES.items():
+            cur.execute(sql)
+            unsupported[key] = int(cur.fetchone()[0])
+        logger.info("[OK] 对象统计完成: %d schema, unsupported=%s", len(schemas), unsupported)
 
         cur.close()
     finally:
-        # 确保异常时也能释放 Oracle 连接，避免连接泄漏
         try:
             conn.close()
         except Exception:

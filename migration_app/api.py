@@ -1063,18 +1063,43 @@ class OracleDiscoveryAPIView(APIView):
     """发现 Oracle 实例下所有 Schema 及对象统计"""
 
     def get(self, request):
+        connection_id = request.query_params.get('connection_id')
+        if not connection_id:
+            return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            connection_id = request.query_params.get('connection_id')
-            if not connection_id:
-                return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
             from .full_database import discover_oracle_instance
-            result = discover_oracle_instance(int(connection_id))
+            result = discover_oracle_instance(int(connection_id), timeout_seconds=90)
             return Response({'status': 'success', **result})
+        except TimeoutError as e:
+            logger.error("Oracle discovery 超时, connection_id=%s", connection_id)
+            return Response(
+                {'status': 'error', 'message': f'{e}。请检查：1) Oracle 主机/端口是否可达 2) 服务名是否正确 3) 网络是否畅通'},
+                status=status.HTTP_504_GATEWAY_TIMEOUT,
+            )
         except Exception as e:
-            # 打印完整异常堆栈到控制台，便于诊断 ORA/DPI 等连接或查询错误
             logger.exception("Oracle discovery 失败, connection_id=%s", connection_id)
-            print(traceback.format_exc())
-            return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'status': 'error', 'message': self._format_oracle_error(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @staticmethod
+    def _format_oracle_error(e: Exception) -> str:
+        """把 cx_Oracle 异常转为用户可读的提示。"""
+        msg = str(e)
+        if 'ORA-12154' in msg:
+            return f'ORA-12154: 无法解析连接标识符。请检查 service_name 配置。({msg})'
+        if 'ORA-12541' in msg:
+            return f'ORA-12541: 监听器未运行。请检查 Oracle 主机端口和监听状态。({msg})'
+        if 'ORA-01017' in msg:
+            return f'ORA-01017: 用户名/密码错误。({msg})'
+        if 'ORA-12514' in msg:
+            return f'ORA-12514: 监听器未识别 service_name。请检查 service_name 拼写。({msg})'
+        if 'DPI-1040' in msg or 'cannot locate' in msg.lower():
+            return f'Oracle Client 未安装或路径未配置。请安装 Oracle Instant Client 并设置 LD_LIBRARY_PATH。({msg})'
+        if 'DPI-1067' in msg or 'ORA-01013' in msg:
+            return f'查询超时被中断。Oracle 数据量过大或查询过慢。({msg})'
+        return msg
 
 
 class CreateTableMigrationAPIView(APIView):

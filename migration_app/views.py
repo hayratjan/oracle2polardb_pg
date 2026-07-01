@@ -112,8 +112,15 @@ def _connection_plain_password(stored):
     return require_plain_connection_password(stored)
 
 
-def get_oracle_connection(connection_id):
-    """创建Oracle连接"""
+def get_oracle_connection(connection_id, *, call_timeout_ms: int = 30000):
+    """创建Oracle连接。
+
+    Args:
+        connection_id: OracleConnection 主键
+        call_timeout_ms: 单条 SQL 执行超时（毫秒），默认 30 秒。
+            cx_Oracle 7.1+ 的 callTimeout，超时后查询自动中断并抛
+            DPI-1067 或 ORA-01013。设为 0 表示不限制。
+    """
     conn_obj = get_object_or_404(OracleConnection, pk=connection_id)
     dsn = cx_Oracle.makedsn(conn_obj.host, conn_obj.port, service_name=conn_obj.service_name)
     pwd = _connection_plain_password(conn_obj.password)
@@ -122,6 +129,9 @@ def get_oracle_connection(connection_id):
         password=pwd,
         dsn=dsn
     )
+    # 设置单条 SQL 执行超时，避免查询卡死导致 HTTP 请求永不返回
+    if call_timeout_ms and hasattr(connection, 'callTimeout'):
+        connection.callTimeout = call_timeout_ms
     return connection
 
 def _pg_connect_kwargs(conn_obj, database=None, *, connect_timeout: int = 30):
