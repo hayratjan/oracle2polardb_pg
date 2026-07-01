@@ -1253,6 +1253,20 @@ def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None
         'RAW': 'BYTEA',
         'LONG RAW': 'BYTEA',
         'LONG': 'TEXT',
+        # ===== v2.1 新增类型映射 =====
+        # XML 类型：PG 原生支持 XML（需启用 xml 模块或直接用 TEXT）
+        'XMLTYPE': 'XML',
+        # ROWID/UROWID：Oracle 物理行标识，PG 无直接对应，用 CHAR(18) 保留
+        'ROWID': 'CHAR(18)',
+        'UROWID': 'CHAR(40)',
+        # BFILE：Oracle 外部文件指针，PG 无对应，用 TEXT 记录路径
+        'BFILE': 'TEXT',
+        # INTERVAL 类型：PG 原生支持 INTERVAL
+        'INTERVAL YEAR TO MONTH': 'INTERVAL',
+        'INTERVAL DAY TO SECOND': 'INTERVAL',
+        # BINARY_FLOAT/DOUBLE 已在上面映射
+        # Oracle BOOLEAN（PL/SQL 中使用，表列不直接支持但兼容）
+        'BOOLEAN': 'BOOLEAN',
     }
     
     if oracle_type == 'NUMBER':
@@ -1293,6 +1307,22 @@ def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None
     elif oracle_type == 'TIMESTAMP' and data_scale is not None:
         # 处理带精度的TIMESTAMP
         return f"TIMESTAMP({data_scale})"
+    elif oracle_type.startswith('INTERVAL'):
+        # 处理 INTERVAL YEAR TO MONTH / INTERVAL DAY TO SECOND
+        # 可能带精度如 INTERVAL YEAR(2) TO MONTH / INTERVAL DAY(2) TO SECOND(6)
+        import re
+        m = re.match(r'INTERVAL\s+YEAR\s*(?:\((\d+)\))?\s*TO\s*MONTH', oracle_type)
+        if m:
+            precision = m.group(1) or '2'
+            return f"INTERVAL YEAR TO MONTH"  # PG 不接受精度参数，用默认
+        m = re.match(r'INTERVAL\s+DAY\s*(?:\((\d+)\))?\s*TO\s*SECOND\s*(?:\((\d+)\))?', oracle_type)
+        if m:
+            second_precision = m.group(2)
+            if second_precision:
+                return f"INTERVAL DAY TO SECOND({second_precision})"
+            return "INTERVAL DAY TO SECOND"
+        # 兜底
+        return "INTERVAL"
     elif oracle_type in type_map:
         # 使用映射表中的对应类型
         return type_map[oracle_type]
