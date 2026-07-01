@@ -9,11 +9,32 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from django.views.generic import RedirectView, TemplateView
+from django.http import JsonResponse
 import os
+
+
+def healthz(request):
+    """存活探针：只要进程能响应即返回 200"""
+    return JsonResponse({'status': 'ok'})
+
+
+def readyz(request):
+    """就绪探针：检查数据库连接是否正常"""
+    try:
+        from django.db import connections
+        conn = connections['default']
+        conn.ensure_connection()
+        return JsonResponse({'status': 'ready', 'database': 'connected'})
+    except Exception as e:
+        return JsonResponse({'status': 'not_ready', 'error': str(e)}, status=503)
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('migration_app.urls')),
+    # 健康检查端点（供 k8s / 负载均衡探针使用，无需认证）
+    path('healthz', healthz),
+    path('readyz', readyz),
 ]
 
 # 开发环境配置

@@ -2,12 +2,14 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import authenticate, login, logout
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.http import JsonResponse
+from django.conf import settings
 from .models import OracleConnection, PostgresConnection, MigrationTask
 from .serializers import (
     OracleConnectionSerializer,
@@ -25,6 +27,21 @@ import traceback
 import psycopg2
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_error(e: Exception, prefix: str = '操作失败') -> Response:
+    """统一错误响应，避免直接返回 str(e) 泄露内部异常堆栈。
+
+    开发环境返回完整错误信息便于调试，生产环境仅返回通用提示。
+    异常详情始终写入后端日志。
+    """
+    logger.error('%s: %s', prefix, e, exc_info=True)
+    if getattr(settings, 'DEBUG', False):
+        msg = f'{prefix}: {e}'
+    else:
+        # 生产环境只返回通用提示，不泄露内部细节
+        msg = prefix
+    return Response({'status': 'error', 'message': msg}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class OracleConnectionViewSet(viewsets.ModelViewSet):
@@ -50,20 +67,23 @@ class PostgresConnectionViewSet(viewsets.ModelViewSet):
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginAPIView(APIView):
     permission_classes = [permissions.AllowAny]
-    
+    # 登录接口限流：每分钟最多 5 次尝试（防暴力破解）
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
+
     def post(self, request):
         try:
             username = request.data.get('username')
             password = request.data.get('password')
-            
+
             if not username or not password:
                 return Response({
                     'status': 'error',
                     'message': '用户名和密码不能为空'
                 }, status=status.HTTP_400_BAD_REQUEST)
-            
+
             user = authenticate(request, username=username, password=password)
-            
+
             if user is not None:
                 login(request, user)
                 refresh = RefreshToken.for_user(user)
@@ -82,11 +102,12 @@ class LoginAPIView(APIView):
                     'status': 'error',
                     'message': '用户名或密码错误'
                 }, status=status.HTTP_401_UNAUTHORIZED)
-                
+
         except Exception as e:
+            logger.error('登录异常: %s', e, exc_info=True)
             return Response({
                 'status': 'error',
-                'message': f'登录失败: {str(e)}'
+                'message': f'登录失败: {str(e)}' if getattr(settings, 'DEBUG', False) else '登录失败，请稍后重试'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -511,26 +532,37 @@ class PostgresDatabasesAPIView(APIView):
 
 class BrowseDirectoriesAPIView(APIView):
     def get(self, request):
+        from pathlib import Path
+        # 安全沙箱：只允许访问白名单内的根目录及其子目录
+        whitelist = getattr(settings, 'BROWSE_DIRECTORIES_WHITELIST', [])
+        if not whitelist:
+            return Response({'status': 'error', 'message': '文件浏览功能未配置白名单，已禁用'},
+                            status=status.HTTP_403_FORBIDDEN)
+
         try:
-            from pathlib import Path
             raw_path = request.query_params.get('path', '').strip()
             explicit_request = bool(raw_path)
-            base_path = Path.home().resolve()
-            
+
+            # 默认返回白名单第一个根目录
             if not raw_path:
-                raw_path = str(base_path)
-            
+                raw_path = whitelist[0]
+
             try:
                 target = Path(raw_path).expanduser().resolve()
             except Exception as resolve_err:
                 return Response({'status': 'error', 'message': f'路径解析失败: {resolve_err}'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
+            # 关键：校验 target 是否在白名单某个根目录之下（防止目录穿越）
+            allowed_roots = [Path(p).resolve() for p in whitelist]
+            if not any(target == r or target.is_relative_to(r) for r in allowed_roots):
+                logger.warning('目录浏览越权访问被拒绝: %s (白名单: %s)', target, whitelist)
+                return Response({'status': 'error', 'message': '访问被拒绝：目标路径不在允许的目录范围内'},
+                                status=status.HTTP_403_FORBIDDEN)
+
             try:
-                if explicit_request and (not target.exists() or not target.is_dir()):
-                    return Response({'status': 'error', 'message': '目标路径不存在或不是目录'}, status=status.HTTP_400_BAD_REQUEST)
                 if not target.exists() or not target.is_dir():
                     return Response({'status': 'error', 'message': '目标路径不存在或不是目录'}, status=status.HTTP_400_BAD_REQUEST)
-                
+
                 directories = []
                 for item in target.iterdir():
                     if item.is_dir():
@@ -539,16 +571,18 @@ class BrowseDirectoriesAPIView(APIView):
                             'path': str(item),
                             'is_parent': False
                         })
-                
-                if target != base_path and target.parent.exists():
+
+                # 仅在白名单根目录的子目录内允许返回「..」
+                parent = target.parent
+                if any(parent == r or parent.is_relative_to(r) for r in allowed_roots) and parent != target:
                     directories.insert(0, {
                         'name': '..',
-                        'path': str(target.parent),
+                        'path': str(parent),
                         'is_parent': True
                     })
-                
+
                 directories.sort(key=lambda x: (not x['is_parent'], x['name'].lower()))
-                
+
                 return Response({
                     'status': 'success',
                     'current_path': str(target),
