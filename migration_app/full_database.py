@@ -321,6 +321,9 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                     seq_list = _list_objects(oracle_cur, src_schema, 'sequences')
                     make_info_log(log, f'  序列数: {len(seq_list)}')
                     seq_ok, seq_fail = 0, 0
+                    # 记录第一个失败的原因（根因），后续相同原因只计数
+                    seq_first_error: str | None = None
+                    seq_error_count = 0
                     for seq_name in seq_list:
                         obj_id = f'{src_schema}.{seq_name}'
                         if obj_id in completed_objects:
@@ -337,9 +340,21 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                             log.extend([f'    {ln}' for ln in seq_log])
                         except Exception as e:
                             seq_fail += 1
-                            failed_objects.append({'object': obj_id, 'phase': phase, 'error': str(e)})
-                            make_error_log(log, f'    序列 {seq_name} 失败: {e}')
-                    if seq_ok or seq_fail:
+                            err_msg = str(e)
+                            failed_objects.append({'object': obj_id, 'phase': phase, 'error': err_msg})
+                            # 只记录第一个失败原因（根因），避免 2567 条重复日志刷屏
+                            if seq_first_error is None:
+                                seq_first_error = err_msg
+                                make_error_log(log, f'    序列 {seq_name} 失败（根因）: {err_msg}')
+                            elif err_msg == seq_first_error:
+                                seq_error_count += 1
+                            else:
+                                make_error_log(log, f'    序列 {seq_name} 失败: {err_msg}')
+                    if seq_fail:
+                        if seq_error_count:
+                            make_warn_log(log, f'    另有 {seq_error_count} 个序列因相同原因失败（事务已自动回滚）')
+                        make_warn_log(log, f'  Schema {src_schema} 序列完成 ({seq_ok} 成功 / {seq_fail} 失败)')
+                    elif seq_ok:
                         make_ok_log(log, f'  Schema {src_schema} 序列完成 ({seq_ok} 成功 / {seq_fail} 失败)')
 
                 elif phase == 'tables':
@@ -396,9 +411,13 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                         if obj_id in completed_objects:
                             continue
                         try:
+                            # 关键：必须先 save 再调用 migrate_view，因为后者会重新
+                            # 从数据库读取 task，内存中修改的 source_schema/source_object
+                            # 若不持久化就会丢失，导致「未指定要迁移的视图」错误
                             task.source_schema = src_schema
                             task.target_schema = tgt_schema
                             task.source_object = vname
+                            task.save(update_fields=['source_schema', 'target_schema', 'source_object'])
                             views.migrate_view(task.id, pgdb)
                             task.refresh_from_db()
                             completed_objects.add(obj_id)
@@ -421,9 +440,12 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                         if obj_id in completed_objects:
                             continue
                         try:
+                            # 必须先 save，否则 migrate_materialized_view 重新读取 task 时
+                            # source_object 为空会报错
                             task.source_schema = src_schema
                             task.target_schema = tgt_schema
                             task.source_object = mv
+                            task.save(update_fields=['source_schema', 'target_schema', 'source_object'])
                             views.migrate_materialized_view(task.id, pgdb)
                             task.refresh_from_db()
                             completed_objects.add(obj_id)
@@ -466,9 +488,12 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                         if obj_id in completed_objects:
                             continue
                         try:
+                            # 必须先 save，否则 migrate_routine 重新读取 task 时
+                            # source_object 为空会报错
                             task.source_schema = src_schema
                             task.target_schema = tgt_schema
                             task.source_object = rname
+                            task.save(update_fields=['source_schema', 'target_schema', 'source_object'])
                             views.migrate_routine(task.id, pgdb)
                             task.refresh_from_db()
                             completed_objects.add(obj_id)

@@ -1608,49 +1608,62 @@ def _migrate_one_sequence(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
                           conflict_strategy, log_list, id_case='lower'):
     """
     根据 ALL_SEQUENCES 在 PolarDB/PostgreSQL 中创建等价序列（常见属性映射）。
+
+    注意：PostgreSQL 中一条 SQL 失败后事务进入 aborted 状态，后续所有查询
+    都会报「当前事务被终止」。本函数内任何异常都会先 rollback 再向上抛出，
+    保证批量迁移时一个序列失败不影响下一个。
     """
     strategy = conflict_strategy or 'error'
-    oracle_cursor.execute("""
-        SELECT MIN_VALUE, MAX_VALUE, INCREMENT_BY, CYCLE_FLAG, ORDER_FLAG, CACHE_SIZE, LAST_NUMBER
-        FROM ALL_SEQUENCES
-        WHERE SEQUENCE_OWNER = :o AND SEQUENCE_NAME = :n
-    """, {'o': source_schema.upper(), 'n': seq_name.upper()})
-    row = oracle_cursor.fetchone()
-    if not row:
-        raise Exception(f"找不到序列 {source_schema}.{seq_name}")
-    min_v, max_v, inc_by, cycle_f, _order_f, cache_sz, last_num = (
-        int(row[0]), int(row[1]), int(row[2]), row[3], row[4],
-        int(row[5]) if row[5] is not None else 20,
-        int(row[6]) if row[6] is not None else 1,
-    )
-    cycle_sql = 'CYCLE' if (cycle_f or 'N') == 'Y' else 'NO CYCLE'
-    cache_n = max(1, int(cache_sz) if cache_sz else 1)
-    seq_ident = apply_identifier_case(seq_name, id_case)
-    pg_cursor.execute(
-        """
-        SELECT 1 FROM pg_catalog.pg_class c
-        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind = 'S' AND n.nspname = %s AND c.relname = %s
-        """,
-        (target_schema, seq_ident),
-    )
-    exists = pg_cursor.fetchone() is not None
-    if exists:
-        if strategy == 'skip':
-            log_list.append(f"序列 {target_schema}.{seq_ident} 已存在，跳过")
-            return
-        if strategy == 'error':
-            raise Exception(f"序列 {target_schema}.{seq_ident} 已存在")
-        pg_cursor.execute(f"DROP SEQUENCE IF EXISTS {target_schema}.{seq_ident} CASCADE")
+    try:
+        oracle_cursor.execute("""
+            SELECT MIN_VALUE, MAX_VALUE, INCREMENT_BY, CYCLE_FLAG, ORDER_FLAG, CACHE_SIZE, LAST_NUMBER
+            FROM ALL_SEQUENCES
+            WHERE SEQUENCE_OWNER = :o AND SEQUENCE_NAME = :n
+        """, {'o': source_schema.upper(), 'n': seq_name.upper()})
+        row = oracle_cursor.fetchone()
+        if not row:
+            raise Exception(f"找不到序列 {source_schema}.{seq_name}")
+        min_v, max_v, inc_by, cycle_f, _order_f, cache_sz, last_num = (
+            int(row[0]), int(row[1]), int(row[2]), row[3], row[4],
+            int(row[5]) if row[5] is not None else 20,
+            int(row[6]) if row[6] is not None else 1,
+        )
+        cycle_sql = 'CYCLE' if (cycle_f or 'N') == 'Y' else 'NO CYCLE'
+        cache_n = max(1, int(cache_sz) if cache_sz else 1)
+        seq_ident = apply_identifier_case(seq_name, id_case)
+        pg_cursor.execute(
+            """
+            SELECT 1 FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind = 'S' AND n.nspname = %s AND c.relname = %s
+            """,
+            (target_schema, seq_ident),
+        )
+        exists = pg_cursor.fetchone() is not None
+        if exists:
+            if strategy == 'skip':
+                log_list.append(f"序列 {target_schema}.{seq_ident} 已存在，跳过")
+                return
+            if strategy == 'error':
+                raise Exception(f"序列 {target_schema}.{seq_ident} 已存在")
+            pg_cursor.execute(f"DROP SEQUENCE IF EXISTS {target_schema}.{seq_ident} CASCADE")
+            pg_conn.commit()
+        sql = (
+            f"CREATE SEQUENCE {target_schema}.{seq_ident} "
+            f"INCREMENT BY {inc_by} MINVALUE {min_v} MAXVALUE {max_v} "
+            f"START WITH {last_num} CACHE {cache_n} {cycle_sql}"
+        )
+        pg_cursor.execute(sql)
         pg_conn.commit()
-    sql = (
-        f"CREATE SEQUENCE {target_schema}.{seq_ident} "
-        f"INCREMENT BY {inc_by} MINVALUE {min_v} MAXVALUE {max_v} "
-        f"START WITH {last_num} CACHE {cache_n} {cycle_sql}"
-    )
-    pg_cursor.execute(sql)
-    pg_conn.commit()
-    log_list.append(f"已创建序列: {target_schema}.{seq_ident}")
+        log_list.append(f"已创建序列: {target_schema}.{seq_ident}")
+    except Exception:
+        # 关键：失败时必须 rollback，否则事务留在 aborted 状态，
+        # 后续所有 SQL 都会报「当前事务被终止, 事务块结束之前的查询被忽略」
+        try:
+            pg_conn.rollback()
+        except Exception:
+            pass
+        raise
 
 
 def migrate_sequence(task_id, postgres_database=None):
