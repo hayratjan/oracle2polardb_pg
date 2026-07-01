@@ -186,6 +186,26 @@ def _list_objects(oracle_cursor, schema: str, object_key: str) -> list[str]:
     return [row[0] for row in oracle_cursor.fetchall()]
 
 
+def _classify_seq_error(err_msg: str) -> str:
+    """对序列迁移失败原因分类，便于同类错误合并显示，避免日志刷屏。
+
+    例如「超出 bigint 范围」即使数值不同也算同一类，
+    「模式 xxx 不存在」即使 schema 名不同也算同一类。
+    """
+    msg = err_msg or ''
+    if '超出类型 bigint 的范围' in msg or 'bigint' in msg.lower():
+        return 'bigint 范围溢出'
+    if '模式' in msg and '不存在' in msg:
+        return '目标 schema 不存在'
+    if '当前事务被终止' in msg:
+        return '事务中断连锁'
+    if '已存在' in msg:
+        return '对象已存在'
+    if '找不到序列' in msg:
+        return '源序列不存在'
+    return f'其他: {msg[:40]}'
+
+
 def _get_orchestration_config(task: MigrationTask) -> dict[str, Any]:
     """从 target_provisioning 读取整库编排配置。"""
     cfg = task.target_provisioning or {}
@@ -324,6 +344,9 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                     # 记录第一个失败的原因（根因），后续相同原因只计数
                     seq_first_error: str | None = None
                     seq_error_count = 0
+                    # 错误分类计数器：按错误类型分组，避免同类错误刷屏
+                    # （如「超出 bigint 范围」即使数值不同也算同类）
+                    seq_error_groups: dict[str, list] = {}
                     for seq_name in seq_list:
                         obj_id = f'{src_schema}.{seq_name}'
                         if obj_id in completed_objects:
@@ -342,17 +365,18 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                             seq_fail += 1
                             err_msg = str(e)
                             failed_objects.append({'object': obj_id, 'phase': phase, 'error': err_msg})
-                            # 只记录第一个失败原因（根因），避免 2567 条重复日志刷屏
-                            if seq_first_error is None:
-                                seq_first_error = err_msg
-                                make_error_log(log, f'    序列 {seq_name} 失败（根因）: {err_msg}')
-                            elif err_msg == seq_first_error:
-                                seq_error_count += 1
+                            # 按错误类型分类，避免同类错误重复打印
+                            err_key = _classify_seq_error(err_msg)
+                            if err_key not in seq_error_groups:
+                                seq_error_groups[err_key] = {'first': seq_name, 'msg': err_msg, 'count': 0}
                             else:
-                                make_error_log(log, f'    序列 {seq_name} 失败: {err_msg}')
+                                seq_error_groups[err_key]['count'] += 1
+                    # 输出分组后的错误：每类只打印一条根因 + 计数
+                    for err_key, info in seq_error_groups.items():
+                        make_error_log(log, f'    序列 {info["first"]} 失败（{err_key}）: {info["msg"]}')
+                        if info['count']:
+                            make_warn_log(log, f'      另有 {info["count"]} 个序列因同类错误失败')
                     if seq_fail:
-                        if seq_error_count:
-                            make_warn_log(log, f'    另有 {seq_error_count} 个序列因相同原因失败（事务已自动回滚）')
                         make_warn_log(log, f'  Schema {src_schema} 序列完成 ({seq_ok} 成功 / {seq_fail} 失败)')
                     elif seq_ok:
                         make_ok_log(log, f'  Schema {src_schema} 序列完成 ({seq_ok} 成功 / {seq_fail} 失败)')

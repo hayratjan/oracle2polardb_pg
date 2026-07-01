@@ -1612,9 +1612,27 @@ def _migrate_one_sequence(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
     注意：PostgreSQL 中一条 SQL 失败后事务进入 aborted 状态，后续所有查询
     都会报「当前事务被终止」。本函数内任何异常都会先 rollback 再向上抛出，
     保证批量迁移时一个序列失败不影响下一个。
+
+    Oracle NUMBER 最大 38 位，但 PostgreSQL bigint 最大 9223372036854775807
+    （19 位）。当 Oracle 序列的 MAX_VALUE/LAST_NUMBER 超过 bigint 范围时，
+    自动截断到 bigint 最大值，避免 CREATE SEQUENCE 失败。
     """
+    # PostgreSQL bigint 范围上限
+    PG_BIGINT_MAX = 9223372036854775807
+    PG_BIGINT_MIN = -9223372036854775808
+
     strategy = conflict_strategy or 'error'
     try:
+        # 确保目标 schema 存在，否则 CREATE SEQUENCE 会报「模式不存在」
+        pg_cursor.execute(
+            "SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = %s",
+            (target_schema,),
+        )
+        if not pg_cursor.fetchone():
+            pg_cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{target_schema}"')
+            pg_conn.commit()
+            log_list.append(f'  自动创建 schema: {target_schema}')
+
         oracle_cursor.execute("""
             SELECT MIN_VALUE, MAX_VALUE, INCREMENT_BY, CYCLE_FLAG, ORDER_FLAG, CACHE_SIZE, LAST_NUMBER
             FROM ALL_SEQUENCES
@@ -1628,6 +1646,21 @@ def _migrate_one_sequence(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
             int(row[5]) if row[5] is not None else 20,
             int(row[6]) if row[6] is not None else 1,
         )
+        # 关键：Oracle 序列值可能超过 PostgreSQL bigint 范围，需截断
+        clamped = False
+        if min_v < PG_BIGINT_MIN:
+            min_v = PG_BIGINT_MIN
+            clamped = True
+        if max_v > PG_BIGINT_MAX:
+            max_v = PG_BIGINT_MAX
+            clamped = True
+        if last_num > PG_BIGINT_MAX:
+            last_num = PG_BIGINT_MAX
+            clamped = True
+        if inc_by > PG_BIGINT_MAX:
+            inc_by = 1
+            clamped = True
+
         cycle_sql = 'CYCLE' if (cycle_f or 'N') == 'Y' else 'NO CYCLE'
         cache_n = max(1, int(cache_sz) if cache_sz else 1)
         seq_ident = apply_identifier_case(seq_name, id_case)
@@ -1655,7 +1688,10 @@ def _migrate_one_sequence(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
         )
         pg_cursor.execute(sql)
         pg_conn.commit()
-        log_list.append(f"已创建序列: {target_schema}.{seq_ident}")
+        if clamped:
+            log_list.append(f"已创建序列: {target_schema}.{seq_ident}（注：原值超出 bigint 范围，已截断）")
+        else:
+            log_list.append(f"已创建序列: {target_schema}.{seq_ident}")
     except Exception:
         # 关键：失败时必须 rollback，否则事务留在 aborted 状态，
         # 后续所有 SQL 都会报「当前事务被终止, 事务块结束之前的查询被忽略」
