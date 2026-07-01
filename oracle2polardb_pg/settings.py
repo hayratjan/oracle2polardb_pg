@@ -105,6 +105,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
+    'drf_spectacular',
     'migration_app',
     'django_celery_beat',
     # 'mdeditor',  # 添加Markdown编辑器支持
@@ -289,6 +290,8 @@ REST_FRAMEWORK = {
         'user': '300/min',  # 认证用户每分钟最多 300 次
         'login': '5/min',   # 登录接口每分钟最多 5 次（防爆破）
     },
+    # OpenAPI Schema
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 # JWT 配置
@@ -307,6 +310,25 @@ SIMPLE_JWT = {
     'USER_ID_CLAIM': 'user_id',
     'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
     'TOKEN_TYPE_CLAIM': 'token_type',
+}
+
+# OpenAPI/Swagger 配置
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Oracle2PolarDB Migration API',
+    'DESCRIPTION': 'Oracle 到 PolarDB PostgreSQL 迁移工具 REST API',
+    'VERSION': '2.3.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SECURITY': [{'bearerAuth': []}],
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'bearerAuth': {
+                'type': 'http',
+                'scheme': 'bearer',
+                'bearerFormat': 'JWT',
+            }
+        }
+    },
 }
 
 # CORS 配置：生产严格白名单，开发允许所有

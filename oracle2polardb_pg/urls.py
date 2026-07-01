@@ -11,6 +11,7 @@ from django.conf.urls.static import static
 from django.views.generic import RedirectView, TemplateView
 from django.http import JsonResponse
 import os
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
 
 def healthz(request):
@@ -31,7 +32,14 @@ def readyz(request):
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # API 版本化 v1
+    path('api/v1/', include('migration_app.urls')),
+    # 兼容现有前端：保留 api/ 作为别名
     path('api/', include('migration_app.urls')),
+    # OpenAPI/Swagger 文档端点
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
     # 健康检查端点（供 k8s / 负载均衡探针使用，无需认证）
     path('healthz', healthz),
     path('readyz', readyz),
