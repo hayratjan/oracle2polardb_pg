@@ -251,7 +251,11 @@ def fetch_table_indexes(
     source_schema: str,
     table_name: str,
 ) -> List[dict]:
-    """读取非约束自动创建的索引（排除 PK/UK 约束索引）。"""
+    """读取非约束自动创建的索引（排除 PK/UK 约束索引）。
+
+    仅返回 NORMAL 类型索引。函数索引/位图索引/反向键索引由
+    fetch_unsupported_indexes 单独统计并告警。
+    """
     oracle_cursor.execute(
         """
         SELECT i.INDEX_NAME, i.UNIQUENESS, ic.COLUMN_NAME, ic.COLUMN_POSITION
@@ -280,6 +284,58 @@ def fetch_table_indexes(
     return list(index_map.values())
 
 
+def fetch_unsupported_indexes(
+    oracle_cursor,
+    source_schema: str,
+    table_name: str,
+) -> List[dict]:
+    """统计不被自动迁移的索引类型（函数索引/位图索引/反向键索引等）。
+
+    用于在迁移日志中告警，提示用户需人工补建。
+    PG 对应策略参考：
+      - FUNCTION-BASED NORMAL → PG 表达式索引
+      - BITMAP → PG 无原生位图，转 GIN 或普通索引
+      - REVERSE → PG 无反向键索引，转普通索引
+      - DOMAIN/CLUSTER → PG 无对应，人工处理
+    """
+    oracle_cursor.execute(
+        """
+        SELECT i.INDEX_NAME, i.INDEX_TYPE, i.UNIQUENESS,
+               ic.COLUMN_NAME, ic.COLUMN_POSITION,
+               ie.COLUMN_EXPRESSION
+        FROM ALL_INDEXES i
+        JOIN ALL_IND_COLUMNS ic
+          ON i.OWNER = ic.INDEX_OWNER AND i.INDEX_NAME = ic.INDEX_NAME
+        LEFT JOIN ALL_IND_EXPRESSIONS ie
+          ON i.OWNER = ie.INDEX_OWNER AND i.INDEX_NAME = ie.INDEX_NAME
+          AND ic.COLUMN_POSITION = ie.COLUMN_POSITION
+        WHERE i.TABLE_OWNER = :schema AND i.TABLE_NAME = :table_name
+          AND i.INDEX_TYPE != 'NORMAL'
+          AND NOT EXISTS (
+            SELECT 1 FROM ALL_CONSTRAINTS c
+            WHERE c.OWNER = i.TABLE_OWNER AND c.INDEX_NAME = i.INDEX_NAME
+          )
+        ORDER BY i.INDEX_NAME, ic.COLUMN_POSITION
+        """,
+        {'schema': source_schema.upper(), 'table_name': table_name.upper()},
+    )
+    index_map: Dict[str, dict] = {}
+    for row in oracle_cursor.fetchall():
+        idx_name, idx_type, uniqueness, col_name, _pos, col_expr = row
+        if idx_name not in index_map:
+            index_map[idx_name] = {
+                'name': idx_name,
+                'type': idx_type,
+                'unique': uniqueness == 'UNIQUE',
+                'columns': [],
+                'expressions': [],
+            }
+        index_map[idx_name]['columns'].append(col_name)
+        if col_expr:
+            index_map[idx_name]['expressions'].append(col_expr)
+    return list(index_map.values())
+
+
 def apply_table_indexes(
     oracle_cursor,
     pg_cursor,
@@ -291,8 +347,27 @@ def apply_table_indexes(
     *,
     id_case: str = 'lower',
 ) -> None:
-    """在目标表上创建索引。"""
+    """在目标表上创建索引，并对不支持的索引类型输出告警。"""
     indexes = fetch_table_indexes(oracle_cursor, source_schema, table_name)
+    # 检查不被自动迁移的索引（函数索引/位图/反向键等）
+    unsupported = fetch_unsupported_indexes(oracle_cursor, source_schema, table_name)
+    if unsupported:
+        log_list.append(f"[WARN] 表 {table_name} 有 {len(unsupported)} 个索引未自动迁移（需人工补建）：")
+        for idx in unsupported:
+            idx_type = idx.get('type', 'UNKNOWN')
+            exprs = idx.get('expressions') or []
+            if exprs:
+                log_list.append(f"  - {idx['name']} ({idx_type}): 表达式 {' | '.join(exprs)}")
+            else:
+                log_list.append(f"  - {idx['name']} ({idx_type}): 列 {', '.join(idx.get('columns', []))}")
+            # 给出 PG 对应建议
+            if 'FUNCTION' in idx_type.upper() or exprs:
+                log_list.append(f"    建议：在 PG 上创建表达式索引 CREATE INDEX ... ON ... ({', '.join(exprs) if exprs else '...'})")
+            elif 'BITMAP' in idx_type.upper():
+                log_list.append(f"    建议：PG 无位图索引，转 GIN 或普通 B-tree 索引")
+            elif 'REVERSE' in idx_type.upper():
+                log_list.append(f"    建议：PG 无反向键索引，转普通 B-tree 索引")
+
     if not indexes:
         return
 
@@ -332,9 +407,9 @@ def apply_post_table_schema(
     skip_constraints: bool = False,
 ) -> None:
     """
-    建表并导数后执行的 Schema 扩展：默认值 → 约束 → 索引。
+    建表并导数后执行的 Schema 扩展：默认值 → 约束 → 索引 → 注释。
     """
-    log_list.append(f"【Schema 扩展】开始处理表 {table_name} 的默认值/约束/索引")
+    log_list.append(f"【Schema 扩展】开始处理表 {table_name} 的默认值/约束/索引/注释")
     apply_column_defaults(
         oracle_cursor, pg_cursor, pg_conn,
         source_schema, target_schema, table_name, log_list, id_case=id_case,
@@ -348,6 +423,82 @@ def apply_post_table_schema(
         oracle_cursor, pg_cursor, pg_conn,
         source_schema, target_schema, table_name, log_list, id_case=id_case,
     )
+    apply_table_comments(
+        oracle_cursor, pg_cursor, pg_conn,
+        source_schema, target_schema, table_name, log_list, id_case=id_case,
+    )
+
+
+def apply_table_comments(
+    oracle_cursor,
+    pg_cursor,
+    pg_conn,
+    source_schema: str,
+    target_schema: str,
+    table_name: str,
+    log_list: List[str],
+    *,
+    id_case: str = 'lower',
+) -> None:
+    """迁移表级和列级注释到 PolarDB/PostgreSQL。
+
+    Oracle 注释存储在 ALL_TAB_COMMENTS 和 ALL_COL_COMMENTS 视图中，
+    PG 对应 COMMENT ON TABLE / COMMENT ON COLUMN。
+    """
+    try:
+        # 表级注释
+        oracle_cursor.execute(
+            """
+            SELECT COMMENTS FROM ALL_TAB_COMMENTS
+            WHERE OWNER = :schema AND TABLE_NAME = :table_name
+              AND COMMENTS IS NOT NULL
+            """,
+            {'schema': source_schema.upper(), 'table_name': table_name.upper()},
+        )
+        row = oracle_cursor.fetchone()
+        if row and row[0]:
+            comment = str(row[0]).replace("'", "''")
+            tbl_ident = apply_identifier_case(table_name, id_case)
+            qualified = build_qualified_table_name(target_schema, tbl_ident)
+            try:
+                pg_cursor.execute(f"COMMENT ON TABLE {qualified} IS '{comment}'")
+                pg_conn.commit()
+                log_list.append(f"已迁移表注释: {table_name}")
+            except Exception as e:
+                pg_conn.rollback()
+                log_list.append(f"迁移表注释失败（可忽略）: {e}")
+
+        # 列级注释
+        oracle_cursor.execute(
+            """
+            SELECT COLUMN_NAME, COMMENTS FROM ALL_COL_COMMENTS
+            WHERE OWNER = :schema AND TABLE_NAME = :table_name
+              AND COMMENTS IS NOT NULL
+            """,
+            {'schema': source_schema.upper(), 'table_name': table_name.upper()},
+        )
+        col_count = 0
+        for col_name, comment in oracle_cursor.fetchall():
+            if not comment:
+                continue
+            comment = str(comment).replace("'", "''")
+            col_ident = apply_identifier_case(col_name, id_case)
+            tbl_ident = apply_identifier_case(table_name, id_case)
+            qualified = build_qualified_table_name(target_schema, tbl_ident)
+            try:
+                pg_cursor.execute(
+                    f"COMMENT ON COLUMN {qualified}.{quote_identifier(col_ident)} IS '{comment}'"
+                )
+                col_count += 1
+            except Exception as e:
+                pg_conn.rollback()
+                log_list.append(f"迁移列注释失败 {col_name}（可忽略）: {e}")
+        if col_count:
+            pg_conn.commit()
+            log_list.append(f"已迁移 {col_count} 个列注释: {table_name}")
+    except Exception as e:
+        # 注释迁移失败不应影响主流程
+        log_list.append(f"注释迁移跳过（不影响数据）: {e}")
 
 
 def fetch_foreign_keys_for_schema(oracle_cursor, source_schema: str) -> List[dict]:
