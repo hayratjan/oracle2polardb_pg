@@ -103,12 +103,104 @@ def convert_oracle_to_pg_mview(oracle_mview_text: str) -> Tuple[str, List[str]]:
     return convert_oracle_to_pg_sql(oracle_mview_text)
 
 
+def _replace_to_date(text: str) -> str:
+    """TO_DATE('2024-01-01','YYYY-MM-DD') → '2024-01-01'::timestamp。
+
+    仅处理双参数字面量格式，复杂表达式仅标记不转。
+    """
+    pattern = re.compile(
+        r"TO_DATE\s*\(\s*('[^']*')\s*,\s*'[^']*'\s*\)",
+        re.IGNORECASE,
+    )
+    return pattern.sub(r'\1::timestamp', text)
+
+
+def _replace_to_char(text: str) -> str:
+    """TO_CHAR(expr) → expr::text（简单替换，格式化参数丢失需人工复核）。"""
+    # 仅替换单参数 TO_CHAR(x) → x::text
+    return re.sub(r'\bTO_CHAR\s*\(', 'CAST(', text, flags=re.IGNORECASE)
+
+
+def _replace_to_number(text: str) -> str:
+    """TO_NUMBER(expr) → expr::numeric。"""
+    return re.sub(r'\bTO_NUMBER\s*\(', 'CAST(', text, flags=re.IGNORECASE)
+
+
+def _replace_rownum(text: str) -> str:
+    """ROWNUM → ROW_NUMBER() OVER() 占位（仅简单场景，复杂需人工）。"""
+    # 仅在 SELECT 列表中替换 ROWNUM 为 ROW_NUMBER() OVER()
+    return re.sub(r'\bROWNUM\b', 'ROW_NUMBER() OVER()', text, flags=re.IGNORECASE)
+
+
+def _replace_execute_immediate(text: str) -> str:
+    """EXECUTE IMMEDIATE 'sql' → EXECUTE 'sql'（PG plpgsql 语法）。"""
+    return re.sub(r'\bEXECUTE\s+IMMEDIATE\b', 'EXECUTE', text, flags=re.IGNORECASE)
+
+
+def _replace_dbms_output(text: str) -> str:
+    """DBMS_OUTPUT.PUT_LINE(x) → RAISE NOTICE '%', x。"""
+    text = re.sub(
+        r'\bDBMS_OUTPUT\.PUT_LINE\s*\(',
+        'RAISE NOTICE \'%\', ',
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
 def convert_oracle_to_pg_routine(oracle_routine_text: str) -> Tuple[str, List[str]]:
-    """将 Oracle 例程源码做基础语法替换（完整 PL/SQL 转换需人工）。"""
+    """将 Oracle 例程源码做基础语法替换（完整 PL/SQL 转换需人工）。
+
+    v2.3 增强：新增 DECODE/FROM DUAL/TO_DATE/TO_CHAR/TO_NUMBER/ROWNUM/
+    EXECUTE IMMEDIATE/DBMS_OUTPUT 等高频语法替换，并检测 Oracle
+    PROCEDURE 语法（与 PG 不兼容），返回 manual_items 提示人工处理。
+    """
     text = str(oracle_routine_text or '')
+    original_text = text  # 保留原文用于检测 Oracle 专有语法
     text = _replace_sysdate(text)
     text = _replace_nvl(text)
-    manual_items = detect_manual_review_items(text)
-    if ':=' in text:
-        manual_items.append('PL/SQL 赋值运算符 := 需改为 PL/pgSQL')
+    text = _replace_dual(text)
+    text = _replace_decode_simple(text)
+    text = _replace_to_date(text)
+    text = _replace_to_char(text)
+    text = _replace_to_number(text)
+    text = _replace_rownum(text)
+    text = _replace_execute_immediate(text)
+    text = _replace_dbms_output(text)
+
+    manual_items = detect_manual_review_items(original_text)
+
+    # 检测 Oracle PROCEDURE/FUNCTION 头部语法（与 PG 不兼容）
+    # Oracle: CREATE OR REPLACE PROCEDURE name IS/AS ... BEGIN ... END;
+    # PG:    CREATE OR REPLACE FUNCTION name() RETURNS ... LANGUAGE plpgsql AS $$ ... $$
+    if re.search(r'\bCREATE\s+(OR\s+REPLACE\s+)?PROCEDURE\b', original_text, re.IGNORECASE):
+        manual_items.append('Oracle CREATE PROCEDURE 语法需改写为 PG CREATE FUNCTION（含 RETURNS 与 LANGUAGE plpgsql）')
+    if re.search(r'\bCREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b', original_text, re.IGNORECASE):
+        manual_items.append('Oracle CREATE FUNCTION 头部签名需补全 RETURNS 与 LANGUAGE plpgsql AS $$ ... $$ 包装')
+    # %TYPE / %ROWTYPE 需人工映射
+    if re.search(r'%TYPE\b|%ROWTYPE\b', original_text, re.IGNORECASE):
+        manual_items.append('PL/SQL %TYPE/%ROWTYPE 需手动映射为 PG 列类型或 composite type')
+    # EXCEPTION WHEN OTHERS 需人工复核（PG 语法兼容但语义略不同）
+    if re.search(r'\bEXCEPTION\s+WHEN\s+OTHERS\b', original_text, re.IGNORECASE):
+        manual_items.append('EXCEPTION WHEN OTHERS 需复核 PG 异常处理语义')
+    # := 在 plpgsql 中本就支持，不算需人工（修正之前的误报）
+
     return text, manual_items
+
+
+def is_routine_safe_to_execute(pg_routine_text: str, manual_items: List[str]) -> bool:
+    """判断转换后的例程是否可直接在 PG 执行。
+
+    存在 Oracle 专有语法头部（PROCEDURE / %TYPE / %ROWTYPE）时返回 False，
+    避免直接 execute 导致语法错误与任务失败。
+    """
+    # 检测 PG 不兼容的 Oracle 头部语法
+    text = str(pg_routine_text or '')
+    if re.search(r'\bCREATE\s+(OR\s+REPLACE\s+)?PROCEDURE\b', text, re.IGNORECASE):
+        return False
+    if re.search(r'%TYPE\b|%ROWTYPE\b', text, re.IGNORECASE):
+        return False
+    # 缺少 LANGUAGE plpgsql 包装的裸 BEGIN ... END
+    if re.search(r'\bBEGIN\b', text, re.IGNORECASE) and not re.search(r'\bLANGUAGE\s+plpgsql\b', text, re.IGNORECASE):
+        return False
+    return True

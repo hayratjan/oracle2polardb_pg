@@ -7,6 +7,10 @@ class OracleConnectionSerializer(serializers.ModelSerializer):
         model = OracleConnection
         fields = ['id', 'name', 'host', 'port', 'service_name', 'username', 'password', 'created_at']
         read_only_fields = ['id', 'created_at']
+        # 密码字段仅写入,不通过 API 返回(避免 enc: 密文泄露到前端)
+        extra_kwargs = {
+            'password': {'write_only': True, 'required': False, 'allow_blank': True},
+        }
 
 
 class PostgresConnectionSerializer(serializers.ModelSerializer):
@@ -15,6 +19,10 @@ class PostgresConnectionSerializer(serializers.ModelSerializer):
         fields = ['id', 'user', 'name', 'host', 'port', 'database', 'username', 'password',
                   'sslmode', 'status', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+        # 密码字段仅写入,不通过 API 返回(避免 enc: 密文泄露到前端)
+        extra_kwargs = {
+            'password': {'write_only': True, 'required': False, 'allow_blank': True},
+        }
 
 
 class MigrationTaskLogSerializer(serializers.ModelSerializer):

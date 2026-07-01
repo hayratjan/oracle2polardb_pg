@@ -7,7 +7,13 @@
   3. 哈希校验（validate_row_hashes）—— 按主键分批 MD5 对比，精确定位差异行
   4. 抽样校验（validate_sample_rows）—— 随机抽样逐行对比，适用于大表
 
-校验失败默认不阻塞迁移，仅记 WARN 日志。可通过 strict=True 强制阻塞。
+返回值约定：
+  - True  = 校验通过
+  - False = 校验失败（发现差异）
+  - None  = 校验异常跳过（连接断开、权限不足等，不应视为"通过"）
+
+校验失败默认不阻塞迁移，仅记 WARN 日志。可通过 validate_full(strict=True)
+强制阻塞：strict 模式下 None 也视为失败。
 """
 from __future__ import annotations
 
@@ -66,10 +72,11 @@ def validate_row_counts(
     pg_table_name: Optional[str] = None,
     watermark_where: str = '',
     watermark_params: Optional[dict] = None,
-) -> Tuple[bool, int, int]:
+) -> Tuple[Optional[bool], int, int]:
     """
     对比源端与目标端行数。
     返回 (是否一致, 源行数, 目标行数)。
+    返回值: True=一致, False=不一致, None=校验异常跳过
     """
     try:
         src_count = count_oracle_rows(
@@ -98,9 +105,9 @@ def validate_row_counts(
         from .migration_errors import format_db_error
         logger.warning('行数校验异常: %s', e)
         log_list.append(
-            f"[WARN] 行数校验跳过 · {source_object}: 行数对比异常 ({format_db_error(e)})，请检查连接与权限"
+            f"[ERROR] 行数校验异常跳过 · {source_object}: 行数对比异常 ({format_db_error(e)})，请检查连接与权限"
         )
-        return True, -1, -1  # 校验失败不阻塞迁移，仅记日志
+        return None, -1, -1  # None 表示校验异常,不应视为"通过"
 
 
 # ============================================================================
@@ -193,8 +200,8 @@ def validate_aggregates(
         return all_pass
     except Exception as e:
         logger.warning('聚合校验异常: %s', e)
-        log_list.append(f"[WARN] 聚合校验跳过 · {source_object}: {e}")
-        return True  # 不阻塞
+        log_list.append(f"[ERROR] 聚合校验异常跳过 · {source_object}: {e}")
+        return None  # None 表示校验异常,不应视为"通过"
 
 
 # ============================================================================
@@ -318,8 +325,8 @@ def validate_row_hashes(
             return False, total_checked, mismatch_count
     except Exception as e:
         logger.warning('哈希校验异常: %s', e)
-        log_list.append(f"[WARN] 哈希校验跳过 · {source_object}: {e}")
-        return True, 0, 0  # 不阻塞
+        log_list.append(f"[ERROR] 哈希校验异常跳过 · {source_object}: {e}")
+        return None, 0, 0  # None 表示校验异常,不应视为"通过"
 
 
 # ============================================================================
@@ -431,8 +438,8 @@ def validate_sample_rows(
             return False, len(sampled_pks), mismatch_count
     except Exception as e:
         logger.warning('抽样校验异常: %s', e)
-        log_list.append(f"[WARN] 抽样校验跳过 · {source_object}: {e}")
-        return True, 0, 0  # 不阻塞
+        log_list.append(f"[ERROR] 抽样校验异常跳过 · {source_object}: {e}")
+        return None, 0, 0  # None 表示校验异常,不应视为"通过"
 
 
 # ============================================================================
@@ -454,6 +461,7 @@ def validate_full(
     enable_sample: bool = True,
     sample_count: int = 100,
     max_rows_for_hash: int = 100000,
+    strict: bool = False,
 ) -> dict:
     """综合校验：行数 → 聚合 → 哈希/抽样。
 
@@ -462,8 +470,11 @@ def validate_full(
         enable_hash: 是否启用哈希校验（大表慎用）
         enable_sample: 是否启用抽样校验
         max_rows_for_hash: 超过此行数不启用哈希校验
+        strict: 严格模式。启用后校验异常(None)与失败(False)均视为未通过,
+            调用方可据此标记任务 failed。默认 False,校验失败仅记 WARN 日志。
     Returns:
-        {'row_count': bool, 'aggregate': bool, 'hash': bool, 'sample': bool}
+        {'row_count': bool|None, 'aggregate': bool|None, 'hash': bool|None, 'sample': bool|None,
+         'all_pass': bool, 'failed': list, 'skipped': list}
     """
     results = {'row_count': True, 'aggregate': True, 'hash': True, 'sample': True}
 
@@ -509,11 +520,28 @@ def validate_full(
         results['sample'] = sample_ok
 
     # 汇总
-    all_pass = all(results.values())
-    if all_pass:
-        log_list.append(f"[OK] 综合校验通过 · {source_object}: 行数+聚合+哈希+抽样全部通过")
+    failed = [k for k, v in results.items() if v is False]
+    skipped = [k for k, v in results.items() if v is None]
+    # strict 模式:None 也视为失败;非 strict 模式:None 视为跳过(不影响 all_pass)
+    if strict:
+        all_pass = all(v is True for v in results.values())
     else:
-        failed = [k for k, v in results.items() if not v]
-        log_list.append(f"[WARN] 综合校验有差异 · {source_object}: {', '.join(failed)} 未通过")
+        all_pass = all(v is not False for v in results.values())
 
+    if all_pass and not skipped:
+        log_list.append(f"[OK] 综合校验通过 · {source_object}: 行数+聚合+哈希+抽样全部通过")
+    elif all_pass and skipped:
+        log_list.append(f"[WARN] 综合校验部分跳过 · {source_object}: {', '.join(skipped)} 因异常跳过（strict={strict}）")
+    else:
+        if skipped:
+            log_list.append(
+                f"[{'ERROR' if strict else 'WARN'}] 综合校验有差异 · {source_object}: "
+                f"失败 {failed} / 跳过 {skipped}（strict={strict}）"
+            )
+        else:
+            log_list.append(f"[{'ERROR' if strict else 'WARN'}] 综合校验有差异 · {source_object}: {', '.join(failed)} 未通过（strict={strict}）")
+
+    results['all_pass'] = all_pass
+    results['failed'] = failed
+    results['skipped'] = skipped
     return results

@@ -26,6 +26,7 @@ from .oracle_sql_converter import (
     convert_oracle_to_pg_mview as _convert_mview_sql,
     convert_oracle_to_pg_routine as _convert_routine_sql,
     convert_oracle_to_pg_view,
+    is_routine_safe_to_execute as _is_routine_safe,
 )
 from .pg_identifiers import (
     apply_identifier_case,
@@ -93,6 +94,7 @@ def cleanup_executor():
 # 注册清理函数
 atexit.register(cleanup_executor)
 
+@login_required
 def index(request):
     """首页视图"""
     tasks = MigrationTask.objects.all().order_by('-created_at')[:10]
@@ -157,6 +159,7 @@ def get_postgres_connection(connection_id, database=None):
     connection = psycopg2.connect(**_pg_connect_kwargs(conn_obj, database))
     return connection
 
+@login_required
 def switch_postgres_database(request, task_id):
     """
     切换任务的目标PostgreSQL数据库
@@ -498,17 +501,23 @@ def migrate_routine(task_id, postgres_database=None):
         make_meta_log(log, f'前 300 字符预览: {routine_text[:300]}')
 
         # 转换为 PostgreSQL 函数语法（基础替换，完整 PL/SQL 需人工）
-        pg_routine_text, manual_items = convert_oracle_to_pg_routine(routine_text)
+        pg_routine_text, manual_items = _convert_routine_sql(routine_text)
         make_meta_log(log, f'转换后 PG 定义 (前 300 字符): {pg_routine_text[:300]}')
         if manual_items:
             make_warn_log(log, f'需人工审查 ({len(manual_items)} 项): {", ".join(manual_items)}')
 
-        # 创建PostgreSQL函数
-        make_sql_log(log, f'执行 CREATE FUNCTION: {pg_routine_text[:200]}{"..." if len(pg_routine_text) > 200 else ""}')
-        pg_cursor.execute(pg_routine_text)
-        pg_conn.commit()
-
-        make_ok_log(log, f'成功创建 PostgreSQL 函数 {task.target_schema}.{task.source_object}')
+        # 安全校验：检测是否仍含 Oracle 专有语法（PROCEDURE/%TYPE 等），避免直接 execute 导致语法错误
+        if not _is_routine_safe(pg_routine_text, manual_items):
+            make_warn_log(log, '检测到 Oracle 专有语法（CREATE PROCEDURE / %TYPE / 缺少 LANGUAGE plpgsql 包装等），未自动执行，仅导出源码供人工改写')
+            make_sql_log(log, '【Oracle 源码 / 需人工改写为 PG plpgsql】')
+            make_sql_log(log, routine_text)
+            make_ok_log(log, f'例程 {task.source_object} 源码已导出，需人工改写后在 PG 中创建（语法不兼容，未自动执行以避免失败）')
+        else:
+            # 创建PostgreSQL函数
+            make_sql_log(log, f'执行 CREATE FUNCTION: {pg_routine_text[:200]}{"..." if len(pg_routine_text) > 200 else ""}')
+            pg_cursor.execute(pg_routine_text)
+            pg_conn.commit()
+            make_ok_log(log, f'成功创建 PostgreSQL 函数 {task.target_schema}.{task.source_object}')
 
         # 关闭连接
         oracle_cursor.close()
@@ -2054,6 +2063,7 @@ def migrate_schema_orchestration(task_id, postgres_database=None):
         task.save()
 
 
+@login_required
 def oracle_database_management(request):
     """Oracle数据库管理视图"""
     # 获取所有Oracle连接
@@ -2089,6 +2099,7 @@ def _test_oracle_connect_with_params(host, port, service_name, username, passwor
         return False, str(e)
 
 
+@login_required
 @csrf_exempt
 def test_oracle_connection(request):
     """测试Oracle数据库连接。支持仅传 connection_id（用已保存配置），或传 host/port/service_name/username/password（用前端未保存的输入）"""
@@ -2146,6 +2157,7 @@ def test_oracle_connection(request):
             return JsonResponse({'status': 'error', 'message': str(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
+@login_required
 @csrf_exempt
 def save_oracle_connection(request):
     """保存Oracle数据库连接"""
@@ -2176,6 +2188,7 @@ def save_oracle_connection(request):
             return JsonResponse({'status': 'error', 'message': str(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
+@login_required
 @csrf_exempt
 def delete_oracle_connection(request):
     """删除Oracle数据库连接"""
@@ -2195,6 +2208,7 @@ def delete_oracle_connection(request):
             return JsonResponse({'status': 'error', 'message': str(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
+@login_required
 @csrf_exempt
 def edit_oracle_connection(request):
     """编辑Oracle数据库连接"""
@@ -2252,10 +2266,12 @@ def edit_oracle_connection(request):
 
 # PolarDB-PG数据库连接管理
 
+@login_required
 def pg_database_management(request):
     return render(request, 'migration_app/postgres/database_management.html')
 
 
+@login_required
 def get_pg_connections(request):
     try:
         # 获取当前用户的连接和没有指定用户的连接
@@ -2277,6 +2293,7 @@ def get_pg_connections(request):
         return JsonResponse({'status': 'error', 'message': str(e)})
 
 
+@login_required
 def add_pg_connection(request):
     if request.method == 'POST':
         try:
@@ -2379,6 +2396,7 @@ def _test_pg_connect_with_params(host, port, database, user, password, sslmode=N
     return False, '连接测试失败'
 
 
+@login_required
 @csrf_exempt
 def test_pg_connection(request):
     if request.method == 'POST':
@@ -2457,6 +2475,7 @@ def test_pg_connection(request):
             return JsonResponse({'status': 'error', 'message': f'测试连接时发生错误: {str(e)}'})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
+@login_required
 def delete_pg_connection(request):
     if request.method == 'POST':
         try:
@@ -2468,6 +2487,7 @@ def delete_pg_connection(request):
             return JsonResponse({'status': 'error', 'message': str(e)})
     return JsonResponse({'status': 'error', 'message': 'Invalid request method'})
 
+@login_required
 @csrf_exempt
 def edit_pg_connection(request):
     if request.method == 'POST':

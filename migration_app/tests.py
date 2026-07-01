@@ -85,8 +85,11 @@ class BrowseDirectoriesAPITest(TestCase):
         self.assertIn('directories', data)
 
     def test_browse_directories_with_path_returns_structure(self):
+        """测试在白名单内的路径能正常返回结构（v2.2 文件浏览沙箱限制只允许白名单目录）。"""
         import os
-        path = os.path.expanduser('~')
+        from django.conf import settings
+        # 使用白名单内的项目根目录，避免被沙箱拒绝
+        path = settings.BROWSE_DIRECTORIES_WHITELIST[0] if settings.BROWSE_DIRECTORIES_WHITELIST else os.path.dirname(__file__)
         response = self.client.get('/api/filesystem/directories/', {'path': path})
         self.assertEqual(response.status_code, 200)
         data = response.json()

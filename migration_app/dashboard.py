@@ -8,6 +8,7 @@ from .batch_config import (
 )
 from .oracle_row_adapter import adapt_oracle_rows
 from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth.decorators import login_required
 import logging
 import json
 import threading
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 SQLITE_ALLOWED_SUFFIXES = ('.sqlite', '.sqlite3', '.db')
 
+@login_required
 def dashboard(request):
     """
     数据库迁移管理仪表盘
@@ -49,6 +51,7 @@ def dashboard(request):
     
     return render(request, 'migration_app/dashboard.html', context)
 
+@login_required
 def task_list(request):
     """
     显示所有迁移任务
@@ -91,6 +94,7 @@ def task_list(request):
         'status_filter': status_filter
     })
 
+@login_required
 def task_detail(request, task_id):
     """
     显示任务详情页面
@@ -106,6 +110,7 @@ def task_detail(request, task_id):
         'subtasks': subtasks
     })
 
+@login_required
 def database_info(request):
     """
     显示数据库连接信息
@@ -113,36 +118,42 @@ def database_info(request):
     return render(request, 'migration_app/database_info.html')
 
 # 新增数据库管理视图
+@login_required
 def oracle_schemas(request):
     """
     Oracle数据库架构管理
     """
     return render(request, 'migration_app/oracle/schemas.html')
 
+@login_required
 def oracle_tables(request):
     """
     Oracle数据库表管理
     """
     return render(request, 'migration_app/oracle/tables.html')
 
+@login_required
 def oracle_users(request):
     """
     Oracle数据库用户管理
     """
     return render(request, 'migration_app/oracle/users.html')
 
+@login_required
 def pg_schemas(request):
     """
     PolarDB-PG数据库架构管理
     """
     return render(request, 'migration_app/polardb/schemas.html')
 
+@login_required
 def pg_tables(request):
     """
     PolarDB-PG数据库表管理
     """
     return render(request, 'migration_app/polardb/tables.html')
 
+@login_required
 def pg_users(request):
     """
     PolarDB-PG数据库用户管理
@@ -150,30 +161,35 @@ def pg_users(request):
     return render(request, 'migration_app/polardb/users.html')
 
 # 系统配置视图
+@login_required
 def migration_settings(request):
     """
     迁移参数配置
     """
     return render(request, 'migration_app/config/migration_settings.html')
 
+@login_required
 def system_settings(request):
     """
     系统参数配置
     """
     return render(request, 'migration_app/config/system_settings.html')
 
+@login_required
 def migration_logs(request):
     """
     迁移日志
     """
     return render(request, 'migration_app/logs.html')
 
+@login_required
 def help_docs(request):
     """
     帮助文档
     """
     return render(request, 'migration_app/help.html')
 
+@login_required
 def task_status(request, task_id):
     """获取任务状态。支持 ?light=1 轻量轮询：不返回 log，view_progress 仅含 progress/total_rows/migrated_rows，减少响应体积。"""
     # 确保从数据库获取最新状态
@@ -246,6 +262,7 @@ def task_status(request, task_id):
     
     return JsonResponse(response_data)
 
+@login_required
 @csrf_exempt
 def start_task(request, task_id):
     """启动迁移任务"""
@@ -540,6 +557,7 @@ def start_task(request, task_id):
             'message': 'Invalid request method'
         }, status=405)
 
+@login_required
 @csrf_exempt
 def cancel_task(request, task_id):
     """取消迁移任务"""
@@ -604,6 +622,7 @@ def cancel_task(request, task_id):
             'message': 'Invalid request method'
         }, status=405)
 
+@login_required
 @csrf_exempt
 def delete_task(request, task_id):
     """删除迁移任务（仅允许删除非运行中的任务）"""
@@ -629,6 +648,7 @@ def delete_task(request, task_id):
     logger.warning(f"非法的请求方法: {request.method}")
     return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=405)
 
+@login_required
 def task_detailed_info(request, task_id):
     """获取任务的详细信息"""
     task = get_object_or_404(MigrationTask, pk=task_id)
@@ -702,6 +722,7 @@ def task_detailed_info(request, task_id):
     
     return JsonResponse(info)
 
+@login_required
 @csrf_exempt
 def switch_postgres_database(request, task_id):
     """
@@ -735,6 +756,7 @@ def switch_postgres_database(request, task_id):
         return JsonResponse({'status': 'error', 'message': str(e)})
 
 # 数据查询API函数
+@login_required
 @csrf_exempt
 def get_schemas(request):
     """获取数据库Schema列表"""
@@ -821,6 +843,7 @@ def get_schemas(request):
         'message': 'Invalid request method'
     })
 
+@login_required
 @csrf_exempt
 def get_database_objects(request):
     """获取数据库对象列表"""
@@ -954,6 +977,7 @@ def get_database_objects(request):
         'message': 'Invalid request method'
     })
 
+@login_required
 @csrf_exempt
 def get_postgres_databases(request):
     """获取PostgreSQL数据库列表"""
@@ -1007,6 +1031,7 @@ def get_postgres_databases(request):
         'message': 'Invalid request method'
     })
 
+@login_required
 @csrf_exempt
 def browse_directories(request):
     """列出服务器上的目录，便于选择SQLite输出位置"""
