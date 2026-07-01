@@ -100,8 +100,8 @@ const handleLogout = async () => {
   justify-content: space-between;
   height: var(--header-height, 56px);
   padding: 0 16px 0 12px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  background: var(--header-bg, var(--gradient));
+  border-bottom: 1px solid var(--header-border, rgba(255, 255, 255, 0.15));
   flex-shrink: 0;
 }
 
@@ -128,15 +128,15 @@ const handleLogout = async () => {
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--header-text-muted, rgba(255, 255, 255, 0.78));
   font-size: 18px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
 .btn-icon:hover {
-  background: var(--table-row-hover);
-  color: var(--text);
+  background: var(--nav-hover-bg, rgba(255, 255, 255, 0.12));
+  color: var(--header-text, #ffffff);
 }
 
 .breadcrumb-nav {
@@ -149,24 +149,24 @@ const handleLogout = async () => {
 
 .breadcrumb-item {
   font-size: 14px;
-  color: var(--text-muted);
+  color: var(--header-text-muted, rgba(255, 255, 255, 0.78));
   text-decoration: none;
   white-space: nowrap;
   transition: color 0.15s ease;
 }
 
 .breadcrumb-item:hover:not(.current) {
-  color: var(--primary);
+  color: var(--header-text, #ffffff);
 }
 
 .breadcrumb-item.current {
-  color: var(--text);
+  color: var(--header-text, #ffffff);
   font-weight: 600;
 }
 
 .breadcrumb-sep {
   font-size: 10px;
-  color: var(--text-muted);
+  color: var(--header-text-muted, rgba(255, 255, 255, 0.6));
   flex-shrink: 0;
 }
 
@@ -175,10 +175,10 @@ const handleLogout = async () => {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--header-border, rgba(255, 255, 255, 0.15));
   border-radius: 8px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--header-text-muted, rgba(255, 255, 255, 0.78));
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -187,8 +187,8 @@ const handleLogout = async () => {
 
 .btn-logout:hover {
   border-color: var(--danger);
-  color: var(--danger);
-  background: rgba(245, 101, 101, 0.06);
+  color: #fff;
+  background: var(--danger);
 }
 
 @media (max-width: 575.98px) {

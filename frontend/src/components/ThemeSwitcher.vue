@@ -97,15 +97,15 @@ onUnmounted(() => {
 
 .theme-toggle-btn.header-style {
   background: transparent;
-  color: var(--text-muted);
-  border: 1px solid var(--border);
+  color: var(--header-text-muted, rgba(255, 255, 255, 0.78));
+  border: 1px solid var(--header-border, rgba(255, 255, 255, 0.15));
   padding: 6px 10px;
 }
 
 .theme-toggle-btn.header-style:hover {
-  background: var(--table-row-hover);
-  color: var(--text);
-  border-color: var(--border);
+  background: var(--nav-hover-bg, rgba(255, 255, 255, 0.12));
+  color: var(--header-text, #ffffff);
+  border-color: var(--header-border, rgba(255, 255, 255, 0.25));
   transform: none;
 }
 

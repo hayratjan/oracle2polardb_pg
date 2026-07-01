@@ -101,8 +101,8 @@ function isActive(path: string): boolean {
   flex-direction: column;
   width: var(--sidebar-width, 240px);
   height: 100vh;
-  background: var(--sidebar-bg, var(--surface));
-  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg, var(--gradient));
+  border-right: 1px solid var(--sidebar-border, rgba(255, 255, 255, 0.12));
   transition: width 0.25s ease, transform 0.25s ease;
   overflow: hidden;
 }
@@ -113,7 +113,7 @@ function isActive(path: string): boolean {
   display: flex;
   align-items: center;
   padding: 0 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--sidebar-border, rgba(255, 255, 255, 0.12));
 }
 
 .brand-link {
@@ -121,7 +121,7 @@ function isActive(path: string): boolean {
   align-items: center;
   gap: 10px;
   text-decoration: none;
-  color: var(--text);
+  color: var(--sidebar-text, #ffffff);
   overflow: hidden;
 }
 
@@ -136,6 +136,7 @@ function isActive(path: string): boolean {
   font-weight: 700;
   white-space: nowrap;
   letter-spacing: 0.3px;
+  color: var(--sidebar-text, #ffffff);
 }
 
 .sidebar-nav {
@@ -153,7 +154,7 @@ function isActive(path: string): boolean {
   padding: 8px 12px 4px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--sidebar-text-muted, rgba(255, 255, 255, 0.6));
   text-transform: uppercase;
   letter-spacing: 0.8px;
   white-space: nowrap;
@@ -172,7 +173,7 @@ function isActive(path: string): boolean {
   padding: 9px 12px;
   margin: 2px 0;
   border-radius: 8px;
-  color: var(--text-muted);
+  color: var(--sidebar-text-muted, rgba(255, 255, 255, 0.72));
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
@@ -181,13 +182,13 @@ function isActive(path: string): boolean {
 }
 
 .nav-item:hover {
-  background: var(--table-row-hover);
-  color: var(--text);
+  background: var(--nav-hover-bg, rgba(255, 255, 255, 0.12));
+  color: var(--sidebar-text, #ffffff);
 }
 
 .nav-item.active {
-  background: var(--sidebar-active-bg, rgba(102, 126, 234, 0.12));
-  color: var(--primary);
+  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.18));
+  color: var(--sidebar-text, #ffffff);
   font-weight: 600;
 }
 
@@ -201,12 +202,12 @@ function isActive(path: string): boolean {
 .sidebar-footer {
   flex-shrink: 0;
   padding: 12px 16px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--sidebar-border, rgba(255, 255, 255, 0.12));
 }
 
 .version-text {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--sidebar-text-muted, rgba(255, 255, 255, 0.6));
 }
 
 /* 折叠态：仅显示图标 */
