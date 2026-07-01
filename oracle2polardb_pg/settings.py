@@ -341,6 +341,20 @@ CELERY_BEAT_SCHEDULE = {
 
 # 连接密码加密：设置 MIGRATION_FERNET_KEY 后保存连接时自动加密（见 migration_app.credentials）
 MIGRATION_FERNET_KEY = os.environ.get('MIGRATION_FERNET_KEY', '')
+# 生产环境强制要求 Fernet 密钥（与 SECRET_KEY / JWT_SIGNING_KEY 一致）
+if IS_PROD and not MIGRATION_FERNET_KEY:
+    raise RuntimeError(
+        '生产环境必须通过 MIGRATION_FERNET_KEY 环境变量提供连接密码加密密钥。'
+        '生成方法：python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+    )
+
+# ============================================================================
+# 数据库连接池配置
+# ============================================================================
+MIGRATION_USE_CONNECTION_POOL = os.environ.get(
+    'MIGRATION_USE_CONNECTION_POOL',
+    'true'  # 生产默认启用池，开发可通过环境变量关闭
+).lower() == 'true'
 
 # ============================================================================
 # 文件系统浏览白名单：BrowseDirectoriesAPIView 仅允许访问这些根目录

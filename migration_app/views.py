@@ -114,8 +114,8 @@ def _connection_plain_password(stored):
     return require_plain_connection_password(stored)
 
 
-def get_oracle_connection(connection_id, *, call_timeout_ms: int = 30000):
-    """创建Oracle连接。
+def _get_oracle_connection_direct(connection_id, *, call_timeout_ms: int = 30000):
+    """直接创建 Oracle 连接（不使用连接池，保留供特殊场景）。
 
     Args:
         connection_id: OracleConnection 主键
@@ -136,6 +136,34 @@ def get_oracle_connection(connection_id, *, call_timeout_ms: int = 30000):
         connection.callTimeout = call_timeout_ms
     return connection
 
+
+def get_oracle_connection(connection_id, *, call_timeout_ms: int = 30000, use_pool: bool = True):
+    """创建或获取 Oracle 连接（支持连接池）。
+
+    Args:
+        connection_id: OracleConnection 主键
+        call_timeout_ms: 单条 SQL 执行超时（毫秒），默认 30 秒。
+        use_pool: 是否使用连接池，默认 True（可通过 settings.MIGRATION_USE_CONNECTION_POOL 控制）
+
+    Returns:
+        cx_Oracle.Connection: 连接对象（从池获取或新建，使用池时返回代理对象）
+
+    注意：
+        - 使用连接池时，返回代理对象，调用 connection.close() 会自动归还到池
+        - 不使用连接池时，直接关闭连接即可（connection.close()）
+    """
+    # 从 settings 读取全局配置，如果未启用池，则强制 use_pool=False
+    if use_pool and hasattr(settings, 'MIGRATION_USE_CONNECTION_POOL'):
+        use_pool = settings.MIGRATION_USE_CONNECTION_POOL
+
+    if use_pool:
+        from .connection_pool import get_oracle_pooled_connection, OracleConnectionProxy
+        conn = get_oracle_pooled_connection(connection_id, call_timeout_ms=call_timeout_ms)
+        # 返回代理对象，拦截 close() 调用并归还到池
+        return OracleConnectionProxy(conn, connection_id)
+    else:
+        return _get_oracle_connection_direct(connection_id, call_timeout_ms=call_timeout_ms)
+
 def _pg_connect_kwargs(conn_obj, database=None, *, connect_timeout: int = 30):
     """从 PostgresConnection 构建 psycopg2.connect 参数字典（含连接超时）。"""
     db_name = database if database else conn_obj.database
@@ -153,11 +181,34 @@ def _pg_connect_kwargs(conn_obj, database=None, *, connect_timeout: int = 30):
         kwargs['sslmode'] = sslmode
     return kwargs
 
-def get_postgres_connection(connection_id, database=None):
-    """创建PostgreSQL连接"""
-    conn_obj = get_object_or_404(PostgresConnection, pk=connection_id)
-    connection = psycopg2.connect(**_pg_connect_kwargs(conn_obj, database))
-    return connection
+def get_postgres_connection(connection_id, database=None, *, use_pool: bool = True):
+    """创建或获取 PostgreSQL 连接（支持连接池）。
+
+    Args:
+        connection_id: PostgresConnection 主键
+        database: 可选的数据库名（默认使用连接配置中的数据库）
+        use_pool: 是否使用连接池，默认 True（可通过 settings.MIGRATION_USE_CONNECTION_POOL 控制）
+
+    Returns:
+        psycopg2.connection: 连接对象（从池获取或新建，使用池时返回代理对象）
+
+    注意：
+        - 使用连接池时，返回代理对象，调用 connection.close() 会自动归还到池
+        - 不使用连接池时，直接关闭连接即可（connection.close()）
+    """
+    # 从 settings 读取全局配置，如果未启用池，则强制 use_pool=False
+    if use_pool and hasattr(settings, 'MIGRATION_USE_CONNECTION_POOL'):
+        use_pool = settings.MIGRATION_USE_CONNECTION_POOL
+
+    if use_pool:
+        from .connection_pool import get_postgres_pooled_connection, PostgresConnectionProxy
+        conn = get_postgres_pooled_connection(connection_id, database)
+        # 返回代理对象，拦截 close() 调用并归还到池
+        return PostgresConnectionProxy(conn, connection_id, database)
+    else:
+        conn_obj = get_object_or_404(PostgresConnection, pk=connection_id)
+        connection = psycopg2.connect(**_pg_connect_kwargs(conn_obj, database))
+        return connection
 
 @login_required
 def switch_postgres_database(request, task_id):
