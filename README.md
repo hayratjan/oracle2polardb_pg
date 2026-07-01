@@ -1,9 +1,9 @@
-<!-- 文档版本：v2 · 企业级迁移平台 -->
+<!-- 文档版本：v2.1 · 企业级迁移平台 -->
 <h1 align="center">Oracle 至 PolarDB PostgreSQL</h1>
 <h3 align="center">企业级数据库迁移与同步平台</h3>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/版本-v2.0-2563EB?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/版本-v2.1-2563EB?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/状态-生产可用-22C55E?style=for-the-badge" alt="Status" />
   <img src="https://img.shields.io/badge/许可-专有-64748B?style=for-the-badge" alt="License" />
 </p>
@@ -100,6 +100,7 @@
 |:-----|:-----|
 | [🎯 产品概述](#-产品概述) | 平台定位与核心能力矩阵 |
 | [✨ 亮点功能 · v2](#-亮点功能--v2) | 表级向导 · 整库编排 · 目标环境 DDL |
+| [🆕 v2.1 优化与修复](#-v21-优化与修复) | 日志体系 · 事务保护 · bigint 截断 · 超时控制 |
 | [📌 适用场景与版本](#-适用场景与版本) | 源端/目标端版本与典型场景 |
 | [✨ 核心功能矩阵](#-核心功能矩阵) | 连接、对象、策略、可观测性 |
 | [🏗 系统架构](#-系统架构) | 前后端分层与数据流 |
@@ -108,6 +109,8 @@
 | [📖 使用手册](#-使用手册) | 三条上手路径与策略速查 |
 | [🔌 API 速查](#-api-速查--新增) | v2 新增 REST 端点 |
 | [🔧 开发指南](#-开发指南) | 技术栈与关键模块 |
+| [🐳 Docker 部署](#-docker-部署) | 容器化一键部署 |
+| [❓ 常见问题 FAQ](#-常见问题-faq) | 排障与错误诊断 |
 | [📚 文档与支持](#-文档与支持) | 子文档索引 |
 | [📄 许可证](#-许可证) | 版权信息 |
 
@@ -313,6 +316,66 @@ flowchart TB
 
 > [!WARNING]
 > 表空间创建需 PolarDB 实例文件系统路径；无超级用户权限时，可回退「使用默认表空间」仅完成库/用户/Schema 准备。
+
+---
+
+## 🆕 v2.1 优化与修复
+
+> [!IMPORTANT]
+> 本版本重点：**统一结构化日志协议** · **事务中断保护** · **bigint 范围截断** · **连接超时控制** · **对象选择 UI 重构**
+
+### 📊 统一结构化日志协议
+
+后端定义 8 级日志协议 `[LEVEL] message`，所有迁移模块统一调用：
+
+| 级别 | 含义 | 颜色 | 典型场景 |
+|:----:|:-----|:-----|:-----|
+| `STEP` | 阶段步骤 | 天蓝 | 进入某个迁移阶段 |
+| `INFO` | 一般信息 | 浅蓝 | 过程说明、参数提示 |
+| `OK` | 成功 | 绿 | 单个对象完成、阶段摘要 |
+| `WARN` | 警告 | 黄 | 跳过对象、兼容性提示 |
+| `ERROR` | 错误 | 红 | 异常、失败、traceback |
+| `DATA` | 数据导入 | 紫 | 批量 INSERT 行数 |
+| `SQL` | DDL 语句 | 粉 | CREATE VIEW / 触发器源码 |
+| `META` | 元数据 | 灰 | 列数、对象统计 |
+
+前端日志面板（任务详情、实时监控）按级别着色显示，支持级别过滤、关键词搜索、自动滚动、复制下载。
+
+### 🛡 事务中断保护
+
+**问题：** PostgreSQL 中一条 SQL 失败后事务进入 `aborted` 状态，后续所有查询都报「当前事务被终止」，导致整批对象连锁失败。
+
+**修复：** 序列、表等批量迁移中，每个对象的 `except` 分支先 `pg_conn.rollback()` 再抛出，保证失败不影响下一个。日志按错误类型分组聚合，同类错误只显示一条根因 + 计数，避免 2567 条重复日志刷屏。
+
+### 🔢 bigint 范围截断
+
+**问题：** Oracle 序列 `MAX_VALUE` 可达 28 位（如 `999999999999999999999999999`），远超 PostgreSQL bigint 上限 `9223372036854775807`（19 位），导致 `CREATE SEQUENCE` 失败。
+
+**修复：** `_migrate_one_sequence` 自动将超范围的 `MIN_VALUE` / `MAX_VALUE` / `LAST_NUMBER` 截断到 bigint 上下限，日志中标注「原值超出 bigint 范围，已截断」。
+
+### ⏱ 连接超时控制
+
+**问题：** Oracle 主机不可达时 `cx_Oracle.connect()` 阻塞数十秒，HTTP 请求永不返回。
+
+**修复：**
+- `get_oracle_connection` 新增 `call_timeout_ms`（默认 30 秒），通过 `cx_Oracle.callTimeout` 限制单条 SQL 执行超时
+- `discover_oracle_instance` 用 `ThreadPoolExecutor` 包裹，整体 90 秒超时
+- Discovery 查询从逐 Schema 循环（10N 次往返）改为 `GROUP BY` 批量聚合（仅 7 次）
+- API 异常分类处理：超时返回 504，ORA 错误码翻译为中文提示
+
+### 🎨 对象选择 UI 重构
+
+| 页面 | 优化内容 |
+|:-----|:-----|
+| 整库一键迁移 | 对象类型改为卡片网格：彩色图标 + 名称 + 描述 + checkbox，全选/反选 |
+| 创建任务 | 源对象列表增强：反选、搜索图标、对象类型图标、选中高亮、空状态提示 |
+| 任务详情/监控 | 日志面板深色终端化：级别过滤、关键词搜索、自动滚动、复制下载 |
+
+### 📋 视图/例程 source_object 持久化
+
+**问题：** 整库迁移的视图/物化视图/例程阶段，修改 `task.source_object` 后未 `save` 就调用迁移函数，后者重新从数据库读取 task 时 `source_object` 为空，报「未指定要迁移的视图」。
+
+**修复：** 三个阶段的循环中都加了 `task.save(update_fields=[...])` 再调用迁移函数。
 
 ---
 
@@ -553,6 +616,11 @@ flowchart TB
       <td>✅</td>
     </tr>
     <tr>
+      <td><strong>Oracle 客户端</strong></td>
+      <td>Oracle Instant Client 19c+（cx_Oracle 依赖）</td>
+      <td>✅</td>
+    </tr>
+    <tr>
       <td><strong>异步任务</strong></td>
       <td>Redis + Celery（生产环境异步任务与定时增量）</td>
       <td>可选</td>
@@ -565,7 +633,57 @@ flowchart TB
   </tbody>
 </table>
 
-### 一键启动
+### 环境变量配置
+
+复制 `.env.example` 为 `.env` 并按需修改：
+
+```bash
+cp .env.example .env
+```
+
+| 变量 | 说明 | 示例 |
+|:-----|:-----|:-----|
+| `DJANGO_SECRET_KEY` | Django 密钥（生产必改） | 随机长字符串 |
+| `DJANGO_DEBUG` | 调试模式（生产设为 `false`） | `false` |
+| `MIGRATION_FERNET_KEY` | 连接密码加密密钥 | `Fernet.generate_key()` 生成 |
+| `ORACLE_CLIENT_LIB` | Oracle Instant Client 路径 | `/opt/instantclient_23_3` |
+| `CELERY_BROKER_URL` | Celery 消息队列 | `redis://127.0.0.1:6379/0` |
+| `CELERY_RESULT_BACKEND` | Celery 结果后端 | `redis://127.0.0.1:6379/0` |
+| `MIGRATION_BEAT_SCAN_SECONDS` | 定时增量扫描间隔 | `300` |
+
+> [!WARNING]
+> `MIGRATION_FERNET_KEY` 用于加密数据库连接密码，**首次部署前必须生成并配置**，否则已保存的连接将无法解密。生成命令：
+> ```bash
+> python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+> ```
+
+### 方式一：一键启动脚本（推荐）
+
+项目提供了一键启动脚本，同时启动前后端开发服务器：
+
+```bash
+# macOS / Linux
+./start_dev.sh --migrate --install
+
+# Windows
+.\start_dev.ps1 -Migrate -Install
+
+# 启动 Celery Worker + Beat（需先配置 CELERY_BROKER_URL）
+CELERY_BROKER_URL=redis://127.0.0.1:6379/0 ./start_dev.sh --celery --beat
+```
+
+| 参数 | 说明 |
+|:-----|:-----|
+| `--migrate` | 启动前执行 `uv run manage.py migrate` |
+| `--install` | 安装后端与前端依赖 |
+| `--celery` | 启动 Celery Worker（需配置 `CELERY_BROKER_URL`） |
+| `--beat` | 启动 Celery Beat（定时增量必需，需配合 `--celery`） |
+
+启动后访问：
+- 前端：http://localhost:5173
+- 后端 API：http://localhost:8000
+
+### 方式二：手动启动
 
 ```bash
 # ══════════════════════════════════════════════
@@ -769,6 +887,98 @@ pnpm build      # 生产构建
 
 ---
 
+## 🐳 Docker 部署
+
+项目提供 `Dockerfile` 与 `docker-compose.yml`，支持容器化一键部署：
+
+```bash
+# 一键启动（Redis + Django + Celery Worker + Celery Beat）
+docker compose up -d
+
+# 查看日志
+docker compose logs -f web
+
+# 停止
+docker compose down
+```
+
+| 服务 | 说明 | 端口 |
+|:-----|:-----|:-----|
+| `redis` | 消息队列与结果后端 | 6379 |
+| `web` | Django 应用（含 migrate） | 8000 |
+| `celery-worker` | 异步任务 Worker | — |
+| `celery-beat` | 定时任务调度器 | — |
+
+**生产部署注意事项：**
+1. 修改 `.env` 中的 `DJANGO_SECRET_KEY` 和 `MIGRATION_FERNET_KEY`
+2. 设置 `DJANGO_DEBUG=false`
+3. 容器内需挂载 Oracle Instant Client（或使用包含客户端的基础镜像）
+4. 使用 Nginx 反向代理，将前端静态文件与 API 统一入口
+
+---
+
+## ❓ 常见问题 FAQ
+
+### Q1：Discovery 接口「没有返回响应」/ 一直转圈
+
+**原因：** Oracle 主机不可达或网络不通，`cx_Oracle.connect()` 阻塞。
+
+**解决：**
+- 检查 Oracle 连接配置（host/port/service_name）
+- 用 `tnsping` 或 `sqlplus` 验证网络连通性
+- v2.1 已加 90 秒超时保护，超时后会返回 504 + 友好提示
+- 后端控制台会打印完整 traceback，查看 ORA 错误码
+
+### Q2：序列迁移报「值超出 bigint 的范围」
+
+**原因：** Oracle 序列 `MAX_VALUE` 可达 28 位，超过 PostgreSQL bigint 上限（19 位）。
+
+**解决：** v2.1 已自动截断到 bigint 范围，日志中标注「原值超出 bigint 范围，已截断」。
+
+### Q3：序列迁移报「当前事务被终止, 事务块结束之前的查询被忽略」
+
+**原因：** PostgreSQL 中一条 SQL 失败后事务进入 aborted 状态，后续所有查询都会报此错。
+
+**解决：** v2.1 已在每个对象的 `except` 分支中先 `rollback` 再抛出，保证失败不影响下一个。
+
+### Q4：视图/物化视图/例程报「未指定要迁移的视图」
+
+**原因：** 整库迁移修改 `task.source_object` 后未 `save`，迁移函数重新读取时为空。
+
+**解决：** v2.1 已在三个阶段的循环中加了 `task.save(update_fields=[...])`。
+
+### Q5：日志显示 `Broken pipe from ('127.0.0.1', xxxxx)`
+
+**原因：** 浏览器在服务端写响应前关闭了 socket（页面跳转、组件卸载、请求被取消）。这是症状不是故障，无需处理。
+
+### Q6：Oracle 连接报 `DPI-1040: cannot locate Oracle software`
+
+**原因：** Oracle Instant Client 未安装或路径未配置。
+
+**解决：**
+```bash
+# macOS/Linux
+export LD_LIBRARY_PATH=/opt/instantclient_23_3:$LD_LIBRARY_PATH  # Linux
+export DYLD_LIBRARY_PATH=/opt/instantclient_23_3:$DYLD_LIBRARY_PATH  # macOS
+
+# 或在 .env 中配置
+ORACLE_CLIENT_LIB=/opt/instantclient_23_3
+```
+
+### Q7：日志刷屏，几千条重复错误
+
+**原因：** 批量迁移中同类错误（如 bigint 溢出）每个对象都打印一条。
+
+**解决：** v2.1 已按错误类型分组聚合，同类错误只显示一条根因 + 计数。如仍出现刷屏，请检查是否有新的错误类型未覆盖。
+
+### Q8：目标 schema 不存在导致序列/表创建失败
+
+**原因：** prepare 阶段未覆盖到该 schema。
+
+**解决：** v2.1 已在 `_migrate_one_sequence` 中自动 `CREATE SCHEMA IF NOT EXISTS`。表迁移也会自动创建。
+
+---
+
 ## 📚 文档与支持
 
 <table>
@@ -806,8 +1016,18 @@ pnpm build      # 生产构建
       <td>产品</td>
     </tr>
     <tr>
+      <td><a href="docs/日志体系与对象选择UI优化说明.md">日志体系与对象选择UI优化说明</a></td>
+      <td>统一 `[LEVEL]` 日志协议、前后端日志着色面板、对象选择卡片网格</td>
+      <td>开发</td>
+    </tr>
+    <tr>
+      <td><a href="docs/数据模型-is_migrate表结构说明.md">数据模型与表结构说明</a></td>
+      <td>is_migrate 表结构与字段说明</td>
+      <td>开发</td>
+    </tr>
+    <tr>
       <td><strong>本 README</strong></td>
-      <td>产品概述、v2 新功能、架构与上手路径</td>
+      <td>产品概述、v2 新功能、架构与上手路径、FAQ</td>
       <td>全员</td>
     </tr>
   </tbody>
