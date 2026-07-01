@@ -24,7 +24,11 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from pathlib import Path
 import cx_Oracle
 import os
+import logging
 from datetime import timedelta
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -47,6 +51,23 @@ if _ORACLE_CLIENT_LIB:
 DJANGO_ENV = os.environ.get('DJANGO_ENV', 'dev').lower()
 IS_DEV = DJANGO_ENV != 'prod'
 IS_PROD = DJANGO_ENV == 'prod'
+
+# ============================================================================
+# Sentry 错误上报（仅生产环境启用）
+# ============================================================================
+SENTRY_DSN = os.environ.get('SENTRY_DSN', '')
+if IS_PROD and SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=DJANGO_ENV,
+        integrations=[
+            DjangoIntegration(),
+            LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+        ],
+        traces_sample_rate=0.1,  # 10% 性能追踪
+        profiles_sample_rate=0.1,  # 10% 性能分析
+        send_default_pii=False,  # 不发送用户隐私信息
+    )
 
 # ============================================================================
 # SECRET_KEY：生产环境强制从环境变量提供
