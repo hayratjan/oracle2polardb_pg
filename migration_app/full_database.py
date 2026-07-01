@@ -1,5 +1,9 @@
 """
 整库一键迁移编排：多 Schema、多对象类型按依赖顺序迁移。
+
+日志采用统一前缀格式 `[LEVEL] message`，便于前端解析着色：
+  [STEP] 阶段步骤    [INFO] 一般信息    [OK] 成功    [WARN] 警告
+  [ERROR] 错误      [DATA] 数据导入    [SQL] DDL    [META] 元数据
 """
 from __future__ import annotations
 
@@ -12,6 +16,14 @@ from django.utils import timezone
 from .models import MigrationTask
 from .pg_identifiers import apply_identifier_case
 from .target_provisioning import prepare_target_env
+from .task_logging import (
+    build_log_line,
+    make_error_log,
+    make_info_log,
+    make_ok_log,
+    make_step_log,
+    make_warn_log,
+)
 from .views import (
     get_oracle_connection,
     get_postgres_connection,
@@ -31,6 +43,19 @@ PHASES = [
     'prepare', 'sequences', 'tables', 'foreign_keys',
     'views', 'materialized_views', 'triggers', 'routines', 'done',
 ]
+
+# 阶段中文标签（用于日志与前端展示）
+PHASE_LABELS = {
+    'prepare': '准备目标环境',
+    'sequences': '序列',
+    'tables': '物理表',
+    'foreign_keys': '外键约束回放',
+    'views': '视图',
+    'materialized_views': '物化视图',
+    'triggers': '触发器',
+    'routines': '例程',
+    'done': '完成',
+}
 
 _OBJECT_QUERIES = {
     'tables': ("SELECT TABLE_NAME FROM ALL_TABLES WHERE OWNER = :schema ORDER BY TABLE_NAME", None),
@@ -199,15 +224,24 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
         if not resume_mode and orch['auto_prepare'] and orch.get('prepare_config'):
             prep_cfg = dict(orch['prepare_config'])
             prep_cfg['connection_id'] = task.postgres_connection_id
-            log.append('【整库迁移】开始准备目标环境...')
+            make_step_log(log, '阶段 0 · 准备目标环境')
             prep_result = prepare_target_env(prep_cfg)
             for step in prep_result.get('steps', []):
-                log.append(f"  [{step.get('step')}] {step.get('status')}: {step.get('message')}")
+                status_str = step.get('status') or ''
+                line_msg = f"  [{step.get('step')}] {status_str}: {step.get('message')}"
+                if status_str == 'success':
+                    make_ok_log(log, line_msg)
+                elif status_str == 'skipped':
+                    make_info_log(log, line_msg)
+                else:
+                    make_warn_log(log, line_msg)
             resolved = prep_result.get('resolved') or {}
             if resolved.get('database'):
                 pgdb = resolved['database']
                 task.postgres_database = pgdb
+                make_ok_log(log, f'已解析目标数据库名: {pgdb}')
             if prep_result.get('status') != 'success':
+                make_error_log(log, f"目标环境准备失败: {prep_result.get('message', '')}")
                 raise RuntimeError(prep_result.get('message', '目标环境准备失败'))
             current_phase = 'sequences'
             phase_index = 1
@@ -217,29 +251,37 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
         pg_conn = get_postgres_connection(task.postgres_connection_id, pgdb)
         pg_cur = pg_conn.cursor()
         pg_cur.execute('SELECT current_database()')
-        log.append(f'已连接目标库: {pg_cur.fetchone()[0]}')
+        make_ok_log(log, f'已连接目标 PostgreSQL 库: {pg_cur.fetchone()[0]}')
+        make_ok_log(log, '已连接 Oracle 源端')
 
         total_schemas = len(schema_mappings)
+        make_info_log(log, f'待迁移 Schema 数: {total_schemas} | 启用的对象类型: ' +
+                      ', '.join(k for k, v in object_types.items() if v))
 
         for phase in PHASES[1:-1]:
             if phase == 'prepare':
                 continue
             if not _phase_enabled(phase):
+                make_info_log(log, f'阶段「{PHASE_LABELS.get(phase, phase)}」未启用，跳过')
                 continue
             if resume_mode and PHASES.index(phase) < phase_index:
                 continue
 
             current_phase = phase
             phase_index = PHASES.index(phase)
-            log.append(f'【整库迁移】进入阶段: {phase}')
+            phase_label = PHASE_LABELS.get(phase, phase)
+            make_step_log(log, f'阶段 {phase_index} · {phase_label}')
 
             for si, mapping in enumerate(schema_mappings):
                 src_schema = mapping['source_schema']
                 tgt_schema = mapping.get('target_schema') or apply_identifier_case(src_schema, id_case)
-                log.append(f'  Schema [{si + 1}/{total_schemas}] {src_schema} → {tgt_schema}')
+                make_info_log(log, f'Schema [{si + 1}/{total_schemas}] {src_schema} → {tgt_schema}')
 
                 if phase == 'sequences':
-                    for seq_name in _list_objects(oracle_cur, src_schema, 'sequences'):
+                    seq_list = _list_objects(oracle_cur, src_schema, 'sequences')
+                    make_info_log(log, f'  序列数: {len(seq_list)}')
+                    seq_ok, seq_fail = 0, 0
+                    for seq_name in seq_list:
                         obj_id = f'{src_schema}.{seq_name}'
                         if obj_id in completed_objects:
                             continue
@@ -251,13 +293,20 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                                 task.conflict_strategy, seq_log, id_case=id_case,
                             )
                             completed_objects.add(obj_id)
+                            seq_ok += 1
                             log.extend([f'    {ln}' for ln in seq_log])
                         except Exception as e:
+                            seq_fail += 1
                             failed_objects.append({'object': obj_id, 'phase': phase, 'error': str(e)})
-                            log.append(f'    序列 {seq_name} 失败: {e}')
+                            make_error_log(log, f'    序列 {seq_name} 失败: {e}')
+                    if seq_ok or seq_fail:
+                        make_ok_log(log, f'  Schema {src_schema} 序列完成 ({seq_ok} 成功 / {seq_fail} 失败)')
 
                 elif phase == 'tables':
-                    for tbl in _list_objects(oracle_cur, src_schema, 'tables'):
+                    tbl_list = _list_objects(oracle_cur, src_schema, 'tables')
+                    make_info_log(log, f'  物理表数: {len(tbl_list)}')
+                    tbl_ok, tbl_fail = 0, 0
+                    for tbl in tbl_list:
                         obj_id = f'{src_schema}.{tbl}'
                         if obj_id in completed_objects:
                             continue
@@ -269,16 +318,21 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                                 task.conflict_strategy, tbl_log, task=task,
                             )
                             completed_objects.add(obj_id)
+                            tbl_ok += 1
                             log.extend([f'    {ln}' for ln in tbl_log[-3:]])
                         except Exception as e:
+                            tbl_fail += 1
                             failed_objects.append({'object': obj_id, 'phase': phase, 'error': str(e)})
-                            log.append(f'    表 {tbl} 失败: {e}')
+                            make_error_log(log, f'    表 {tbl} 失败: {e}')
+                    if tbl_ok or tbl_fail:
+                        make_ok_log(log, f'  Schema {src_schema} 物理表完成 ({tbl_ok} 成功 / {tbl_fail} 失败)')
 
                 elif phase == 'foreign_keys':
                     from .schema_converter import apply_foreign_keys_for_schema
                     fk_log: list[str] = []
                     fk_phase_id = f'__fk__{src_schema}'
                     if fk_phase_id in completed_objects:
+                        make_info_log(log, f'  Schema {src_schema} 外键已回放，跳过')
                         continue
                     try:
                         n = apply_foreign_keys_for_schema(
@@ -288,13 +342,16 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                         )
                         completed_objects.add(fk_phase_id)
                         log.extend([f'    {ln}' for ln in fk_log])
-                        log.append(f'    Schema {src_schema} 外键回放 {n} 个')
+                        make_ok_log(log, f'  Schema {src_schema} 外键回放 {n} 个')
                     except Exception as e:
                         failed_objects.append({'object': fk_phase_id, 'phase': phase, 'error': str(e)})
-                        log.append(f'    Schema {src_schema} 外键回放失败: {e}')
+                        make_error_log(log, f'  Schema {src_schema} 外键回放失败: {e}')
 
                 elif phase == 'views':
-                    for vname in _list_objects(oracle_cur, src_schema, 'views'):
+                    view_list = _list_objects(oracle_cur, src_schema, 'views')
+                    make_info_log(log, f'  视图数: {len(view_list)}')
+                    vw_ok, vw_fail = 0, 0
+                    for vname in view_list:
                         obj_id = f'{src_schema}.{vname}'
                         if obj_id in completed_objects:
                             continue
@@ -305,14 +362,21 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                             views.migrate_view(task.id, pgdb)
                             task.refresh_from_db()
                             completed_objects.add(obj_id)
-                            log.append(f'    视图 {vname} 完成')
+                            vw_ok += 1
+                            make_ok_log(log, f'    视图 {vname} 完成')
                         except Exception as e:
+                            vw_fail += 1
                             failed_objects.append({'object': obj_id, 'phase': phase, 'error': str(e)})
-                            log.append(f'    视图 {vname} 失败: {e}')
+                            make_error_log(log, f'    视图 {vname} 失败: {e}')
                         task.status = 'running'
+                    if vw_ok or vw_fail:
+                        make_ok_log(log, f'  Schema {src_schema} 视图完成 ({vw_ok} 成功 / {vw_fail} 失败)')
 
                 elif phase == 'materialized_views':
-                    for mv in _list_objects(oracle_cur, src_schema, 'materialized_views'):
+                    mv_list = _list_objects(oracle_cur, src_schema, 'materialized_views')
+                    make_info_log(log, f'  物化视图数: {len(mv_list)}')
+                    mv_ok, mv_fail = 0, 0
+                    for mv in mv_list:
                         obj_id = f'{src_schema}.{mv}'
                         if obj_id in completed_objects:
                             continue
@@ -323,27 +387,41 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                             views.migrate_materialized_view(task.id, pgdb)
                             task.refresh_from_db()
                             completed_objects.add(obj_id)
-                            log.append(f'    物化视图 {mv} 完成')
+                            mv_ok += 1
+                            make_ok_log(log, f'    物化视图 {mv} 完成')
                         except Exception as e:
+                            mv_fail += 1
                             failed_objects.append({'object': obj_id, 'phase': phase, 'error': str(e)})
-                            log.append(f'    物化视图 {mv} 失败: {e}')
+                            make_error_log(log, f'    物化视图 {mv} 失败: {e}')
                         task.status = 'running'
+                    if mv_ok or mv_fail:
+                        make_ok_log(log, f'  Schema {src_schema} 物化视图完成 ({mv_ok} 成功 / {mv_fail} 失败)')
 
                 elif phase == 'triggers':
-                    for tname in _list_objects(oracle_cur, src_schema, 'triggers'):
+                    trg_list = _list_objects(oracle_cur, src_schema, 'triggers')
+                    make_info_log(log, f'  触发器数: {len(trg_list)}')
+                    trg_ok, trg_fail = 0, 0
+                    for tname in trg_list:
                         obj_id = f'{src_schema}.{tname}'
                         if obj_id in completed_objects:
                             continue
                         try:
                             _, _, export_log = export_one_trigger(oracle_cur, src_schema, tname)
                             completed_objects.add(obj_id)
-                            log.append(f'    触发器 {tname} 已导出')
+                            trg_ok += 1
+                            log.append(export_log)
                         except Exception as e:
+                            trg_fail += 1
                             failed_objects.append({'object': obj_id, 'phase': phase, 'error': str(e)})
-                            log.append(f'    触发器 {tname} 失败: {e}')
+                            make_error_log(log, f'    触发器 {tname} 失败: {e}')
+                    if trg_ok or trg_fail:
+                        make_ok_log(log, f'  Schema {src_schema} 触发器导出完成 ({trg_ok} 成功 / {trg_fail} 失败)')
 
                 elif phase == 'routines':
-                    for rname in _list_objects(oracle_cur, src_schema, 'routines'):
+                    rtn_list = _list_objects(oracle_cur, src_schema, 'routines')
+                    make_info_log(log, f'  例程数: {len(rtn_list)}')
+                    rtn_ok, rtn_fail = 0, 0
+                    for rname in rtn_list:
                         obj_id = f'{src_schema}.{rname}'
                         if obj_id in completed_objects:
                             continue
@@ -354,11 +432,15 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                             views.migrate_routine(task.id, pgdb)
                             task.refresh_from_db()
                             completed_objects.add(obj_id)
-                            log.append(f'    例程 {rname} 完成')
+                            rtn_ok += 1
+                            make_ok_log(log, f'    例程 {rname} 完成')
                         except Exception as e:
+                            rtn_fail += 1
                             failed_objects.append({'object': obj_id, 'phase': phase, 'error': str(e)})
-                            log.append(f'    例程 {rname} 失败: {e}')
+                            make_error_log(log, f'    例程 {rname} 失败: {e}')
                         task.status = 'running'
+                    if rtn_ok or rtn_fail:
+                        make_ok_log(log, f'  Schema {src_schema} 例程完成 ({rtn_ok} 成功 / {rtn_fail} 失败)')
 
                 # 更新进度
                 progress = min(99.0, (
@@ -380,12 +462,13 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                 task.save(update_fields=['progress', 'view_progress', 'log', 'status', 'postgres_database'])
 
         current_phase = 'done'
+        make_step_log(log, '整库迁移结束')
         if failed_objects:
             task.status = 'partial'
-            log.append(f'【整库迁移】完成，部分对象失败 ({len(failed_objects)} 个)')
+            make_warn_log(log, f'部分对象失败 ({len(failed_objects)} 个)，详见 failed_objects')
         else:
             task.status = 'completed'
-            log.append('【整库迁移】全部完成')
+            make_ok_log(log, f'整库迁移全部完成，共迁移 {len(completed_objects)} 个对象')
         task.progress = 100.0
         task.view_progress = {
             'orchestration': 'full_database',
@@ -403,8 +486,8 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
         from .migration_errors import format_db_error, rollback_quietly, safe_close_db_resources
         rollback_quietly(pg_conn)
         task.status = 'failed'
-        log.append(format_db_error(e))
-        log.append(traceback.format_exc())
+        make_error_log(log, f'整库迁移异常: {format_db_error(e)}')
+        make_error_log(log, traceback.format_exc())
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()

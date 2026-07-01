@@ -115,29 +115,57 @@
               </h5>
             </div>
             <div class="card-body p-0 d-flex flex-column log-card-body">
-              <div v-if="selectedTask" class="px-3 py-2 border-bottom small log-meta">
+              <div v-if="selectedTask" class="px-3 py-2 border-bottom small log-meta-bar">
                 <span class="badge me-1" :class="getStatusBadgeClass(selectedTask.status)">
                   {{ getStatusText(selectedTask.status) }}
                 </span>
                 <span class="text-muted">{{ formatViewProgress(selectedTask) }}</span>
+                <span class="text-muted ms-2">共 {{ selectedLogTotalLines }} 行</span>
               </div>
-              <div class="log-panel flex-grow-1 p-3">
-                <template v-if="selectedLogTail">
-                  <pre class="log-pre mb-0">{{ selectedLogTail }}</pre>
-                </template>
-                <template v-else-if="taskStructuredLogs.length">
+              <!-- 日志工具栏：级别过滤 + 关键词搜索 + 自动滚动 + 复制 -->
+              <div v-if="selectedTask" class="log-toolbar px-3 py-2 border-bottom">
+                <div class="input-group input-group-sm">
+                  <span class="input-group-text"><i class="bi bi-funnel"></i></span>
+                  <select v-model="selectedLogLevelFilter" class="form-select">
+                    <option value="">全部级别</option>
+                    <option value="STEP">STEP · 阶段</option>
+                    <option value="INFO">INFO · 信息</option>
+                    <option value="OK">OK · 成功</option>
+                    <option value="WARN">WARN · 警告</option>
+                    <option value="ERROR">ERROR · 错误</option>
+                    <option value="DATA">DATA · 数据</option>
+                    <option value="SQL">SQL · 语句</option>
+                    <option value="META">META · 元数据</option>
+                  </select>
+                  <input v-model="selectedLogSearchTerm" type="text" class="form-control" placeholder="搜索日志内容...">
+                </div>
+                <div class="btn-group btn-group-sm ms-2">
+                  <button type="button" class="btn btn-outline-secondary" :class="{ active: autoScrollLog }" @click="autoScrollLog = !autoScrollLog" title="自动滚动到底部">
+                    <i class="bi bi-arrow-down-circle"></i>
+                  </button>
+                  <button type="button" class="btn btn-outline-secondary" @click="scrollSelectedLogToBottom" title="跳到底部">
+                    <i class="bi bi-chevron-double-down"></i>
+                  </button>
+                  <button type="button" class="btn btn-outline-secondary" @click="copySelectedLog" title="复制全文">
+                    <i class="bi bi-clipboard"></i>
+                  </button>
+                </div>
+              </div>
+              <div ref="selectedLogContainer" class="log-panel flex-grow-1">
+                <template v-if="filteredSelectedLogLines.length">
                   <div
-                    v-for="log in taskStructuredLogs"
-                    :key="log.id"
-                    class="log-line mb-1"
-                    :class="'log-' + (log.level || 'info').toLowerCase()"
+                    v-for="(line, idx) in filteredSelectedLogLines"
+                    :key="idx"
+                    class="log-line"
+                    :class="'log-' + line.level.toLowerCase()"
                   >
-                    <span class="log-time">{{ formatTime(log.created_at) }}</span>
-                    <span class="log-level">[{{ log.level }}]</span>
-                    {{ log.message }}
+                    <span class="log-time">{{ line.time }}</span>
+                    <span class="log-level-tag">[{{ line.level }}]</span>
+                    <span class="log-text">{{ line.text }}</span>
                   </div>
                 </template>
-                <p v-else class="text-muted mb-0">点击左侧任务查看日志</p>
+                <p v-else-if="selectedTask" class="text-muted small p-3 mb-0">没有匹配的日志行</p>
+                <p v-else class="text-muted mb-0 p-3">点击左侧任务查看日志</p>
               </div>
             </div>
           </div>
@@ -215,8 +243,9 @@
                   <router-link :to="`/task/${log.task_id}`" class="task-link">{{ log.task_name }}</router-link>
                   <span>{{ formatTime(log.created_at) }}</span>
                 </div>
-                <div class="log-line small" :class="'log-' + (log.level || 'info').toLowerCase()">
-                  <span class="log-level">[{{ log.level }}]</span> {{ log.message }}
+                <div class="log-line small" :class="'log-' + parseLogLevel(log).toLowerCase()">
+                  <span class="log-level-tag">[{{ parseLogLevel(log) }}]</span>
+                  <span class="log-text">{{ parseLogMessage(log) }}</span>
                 </div>
               </div>
               <p v-if="!data.recent_logs.length" class="text-muted text-center py-4 mb-0">暂无日志</p>
@@ -251,7 +280,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { migrationTaskApi } from '@/api'
 import type { TaskMonitorResponse, TaskMonitorItem, TaskMonitorLogEntry } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
@@ -264,6 +293,37 @@ const lastRefresh = ref<string>('')
 const selectedTaskId = ref<number | null>(null)
 const taskStructuredLogs = ref<TaskMonitorLogEntry[]>([])
 let timer: ReturnType<typeof setInterval> | null = null
+
+// ===== 日志面板相关 =====
+const selectedLogLevelFilter = ref('')
+const selectedLogSearchTerm = ref('')
+const autoScrollLog = ref(true)
+const selectedLogContainer = ref<HTMLElement | null>(null)
+
+interface ParsedLogLine {
+  level: string
+  text: string
+  time: string
+}
+
+const LEVEL_REGEX = /^\[(STEP|INFO|OK|WARN|ERROR|DATA|SQL|META)\]\s?(.*)$/
+
+/** 解析单行日志文本，识别 [LEVEL] 前缀；无前缀时按内容启发式判断 */
+function parsePlainLine(line: string): ParsedLogLine {
+  const m = line.match(LEVEL_REGEX)
+  if (m) return { level: m[1], text: m[2], time: '' }
+  const upper = line.toUpperCase()
+  if (line.startsWith('错误') || upper.includes('失败') || upper.includes('FAILED')) {
+    return { level: 'ERROR', text: line, time: '' }
+  }
+  if (line.startsWith('警告') || upper.includes('WARN')) {
+    return { level: 'WARN', text: line, time: '' }
+  }
+  if (line.startsWith('成功') || upper.includes('SUCCESS') || upper.includes('校验通过')) {
+    return { level: 'OK', text: line, time: '' }
+  }
+  return { level: 'INFO', text: line, time: '' }
+}
 
 /** 当前执行中的实时任务列表 */
 const liveTasks = computed(() => data.value?.running_tasks ?? data.value?.tasks ?? [])
@@ -282,6 +342,94 @@ const selectedTask = computed(() => {
 })
 
 const selectedLogTail = computed(() => selectedTask.value?.log_tail || '')
+
+/**
+ * 合并解析选中任务的日志行：
+ * 1) 优先使用 log_tail 文本（按行拆分，解析 [LEVEL] 前缀）
+ * 2) 若无 log_tail，则使用结构化日志 taskStructuredLogs（含时间戳）
+ */
+const parsedSelectedLogLines = computed<ParsedLogLine[]>(() => {
+  const tail = selectedLogTail.value
+  if (tail) {
+    return tail.split('\n').filter(l => l.length > 0).map(parsePlainLine)
+  }
+  // 结构化日志（API 返回的带时间戳日志）
+  return taskStructuredLogs.value.map(log => {
+    const lvl = (log.level || 'INFO').toUpperCase()
+    const msg = log.message || ''
+    const m = msg.match(LEVEL_REGEX)
+    if (m) {
+      return { level: m[1], text: m[2], time: formatTime(log.created_at) }
+    }
+    return { level: lvl, text: msg, time: formatTime(log.created_at) }
+  })
+})
+
+const selectedLogTotalLines = computed(() => parsedSelectedLogLines.value.length)
+
+const filteredSelectedLogLines = computed<ParsedLogLine[]>(() => {
+  let list = parsedSelectedLogLines.value
+  if (selectedLogLevelFilter.value) {
+    list = list.filter(l => l.level === selectedLogLevelFilter.value)
+  }
+  if (selectedLogSearchTerm.value.trim()) {
+    const term = selectedLogSearchTerm.value.trim().toLowerCase()
+    list = list.filter(l => l.text.toLowerCase().includes(term))
+  }
+  // 限制最多展示行数，避免大量日志拖慢渲染
+  const MAX = 1500
+  if (list.length > MAX) {
+    return list.slice(-MAX)
+  }
+  return list
+})
+
+function scrollSelectedLogToBottom() {
+  nextTick(() => {
+    if (selectedLogContainer.value) {
+      selectedLogContainer.value.scrollTop = selectedLogContainer.value.scrollHeight
+    }
+  })
+}
+
+async function copySelectedLog() {
+  const text = selectedLogTail.value || parsedSelectedLogLines.value
+    .map(l => l.time ? `${l.time} [${l.level}] ${l.text}` : `[${l.level}] ${l.text}`)
+    .join('\n')
+  if (!text) {
+    alert('暂无日志可复制')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    alert('日志已复制到剪贴板')
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    alert('日志已复制到剪贴板')
+  }
+}
+
+/** 解析「运行日志流」中单条结构化日志的级别 */
+function parseLogLevel(log: TaskMonitorLogEntry): string {
+  const lvl = (log.level || 'INFO').toUpperCase()
+  if (LEVEL_REGEX.test(lvl)) return lvl
+  const msg = log.message || ''
+  const m = msg.match(LEVEL_REGEX)
+  if (m) return m[1]
+  return lvl
+}
+
+/** 解析「运行日志流」中单条结构化日志的正文（去掉 [LEVEL] 前缀） */
+function parseLogMessage(log: TaskMonitorLogEntry): string {
+  const msg = log.message || ''
+  const m = msg.match(LEVEL_REGEX)
+  return m ? m[2] : msg
+}
 
 async function loadTaskLogs(taskId: number) {
   try {
@@ -327,6 +475,15 @@ function setupTimer() {
 }
 
 watch(autoRefresh, setupTimer)
+
+// 选中任务日志变化时自动滚动到底部
+watch([selectedLogTail, taskStructuredLogs], () => {
+  if (autoScrollLog.value) scrollSelectedLogToBottom()
+})
+
+watch(autoScrollLog, v => {
+  if (v) scrollSelectedLogToBottom()
+})
 
 onMounted(() => {
   loadMonitor()
@@ -465,16 +622,142 @@ function formatViewProgress(t: TaskMonitorItem): string {
   min-height: 320px;
 }
 
-.log-meta {
+.log-meta-bar {
   background: var(--table-row-hover);
 }
 
-.log-panel {
-  max-height: 400px;
-  overflow-y: auto;
-  background: var(--log-bg, #1e1e2e);
-  color: var(--log-fg, #cdd6f4);
+.log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  background: #f8fafc;
 }
+
+.log-toolbar .input-group {
+  flex: 1;
+  min-width: 220px;
+}
+
+.log-panel {
+  max-height: 420px;
+  overflow-y: auto;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.75rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.log-panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.log-panel::-webkit-scrollbar-track {
+  background: #1e293b;
+  border-radius: 4px;
+}
+
+.log-panel::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 4px;
+}
+
+.log-panel::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+.log-line {
+  padding: 0.15rem 0.5rem;
+  border-left: 3px solid transparent;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.log-line .log-time {
+  color: #64748b;
+  margin-right: 0.4rem;
+  font-size: 0.72rem;
+}
+
+.log-line .log-text {
+  color: #cbd5e1;
+}
+
+.log-level-tag {
+  display: inline-block;
+  min-width: 52px;
+  font-weight: 600;
+  margin-right: 0.35rem;
+  font-size: 0.72rem;
+}
+
+/* STEP · 阶段（天蓝） */
+.log-step {
+  color: #38bdf8;
+  border-left-color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.05);
+}
+.log-step .log-level-tag { color: #38bdf8; }
+
+/* INFO · 信息（浅蓝） */
+.log-info {
+  color: #93c5fd;
+}
+.log-info .log-level-tag { color: #60a5fa; }
+
+/* OK · 成功（绿） */
+.log-ok {
+  color: #86efac;
+  border-left-color: #22c55e;
+  background: rgba(34, 197, 94, 0.06);
+}
+.log-ok .log-level-tag { color: #4ade80; }
+
+/* WARN · 警告（黄） */
+.log-warn {
+  color: #fde68a;
+  border-left-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.06);
+}
+.log-warn .log-level-tag { color: #fbbf24; }
+
+/* ERROR · 错误（红） */
+.log-error {
+  color: #fca5a5;
+  border-left-color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+.log-error .log-level-tag { color: #f87171; }
+
+/* DATA · 数据（紫） */
+.log-data {
+  color: #d8b4fe;
+  border-left-color: #a855f7;
+  background: rgba(168, 85, 247, 0.05);
+}
+.log-data .log-level-tag { color: #c084fc; }
+
+/* SQL · 语句（粉） */
+.log-sql {
+  color: #fbcfe8;
+  border-left-color: #ec4899;
+  background: rgba(236, 72, 153, 0.05);
+}
+.log-sql .log-level-tag { color: #f472b6; }
+
+/* META · 元数据（灰） */
+.log-meta {
+  color: #cbd5e1;
+  border-left-color: #64748b;
+  background: rgba(100, 116, 139, 0.04);
+}
+.log-meta .log-level-tag { color: #94a3b8; }
+
+/* 兼容旧级别名 */
+.log-warning { color: #fde68a; border-left-color: #f59e0b; }
+.log-err { color: #fca5a5; border-left-color: #ef4444; }
 
 .log-pre {
   font-size: 0.8rem;
@@ -483,27 +766,6 @@ function formatViewProgress(t: TaskMonitorItem): string {
   color: inherit;
   background: transparent;
 }
-
-.log-line {
-  font-size: 0.8rem;
-  font-family: ui-monospace, monospace;
-}
-
-.log-time {
-  color: #6c7086;
-  margin-right: 0.5rem;
-}
-
-.log-level {
-  color: #89b4fa;
-  margin-right: 0.35rem;
-}
-
-.log-error,
-.log-err { color: #f38ba8; }
-.log-warning,
-.log-warn { color: #fab387; }
-.log-info { color: #a6e3a1; }
 
 .monitor-task-table thead th {
   background: var(--gradient);

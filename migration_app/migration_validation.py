@@ -77,17 +77,17 @@ def validate_row_counts(
         )
         if src_count == tgt_count:
             log_list.append(
-                f"【校验通过】{source_object}: 源端 {src_count} 行 = 目标端 {tgt_count} 行"
+                f"[OK] 行数校验通过 · {source_object}: 源端 {src_count} 行 = 目标端 {tgt_count} 行"
             )
             return True, src_count, tgt_count
         log_list.append(
-            f"【校验失败】{source_object}: 源端 {src_count} 行 ≠ 目标端 {tgt_count} 行，请人工核查"
+            f"[WARN] 行数校验失败 · {source_object}: 源端 {src_count} 行 ≠ 目标端 {tgt_count} 行，请人工核查"
         )
         return False, src_count, tgt_count
     except Exception as e:
         from .migration_errors import format_db_error
         logger.warning('行数校验异常: %s', e)
         log_list.append(
-            f"【校验跳过】{source_object}: 行数对比异常 ({format_db_error(e)})，请检查连接与权限"
+            f"[WARN] 行数校验跳过 · {source_object}: 行数对比异常 ({format_db_error(e)})，请检查连接与权限"
         )
         return True, -1, -1  # 校验失败不阻塞迁移，仅记日志

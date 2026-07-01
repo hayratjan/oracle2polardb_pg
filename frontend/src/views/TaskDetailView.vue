@@ -394,9 +394,53 @@
             <h5 class="section-title mb-3">
               <i class="bi bi-terminal me-1" style="font-size: 20px;"></i>
               日志
+              <span v-if="task.log" class="text-muted small ms-2">({{ logTotalLines }} 行)</span>
             </h5>
-            <div class="log-container">
-              <pre class="log-content">{{ task.log || '暂无日志' }}</pre>
+            <div class="log-toolbar mb-2">
+              <div class="input-group input-group-sm">
+                <span class="input-group-text"><i class="bi bi-funnel"></i></span>
+                <select v-model="logLevelFilter" class="form-select">
+                  <option value="">全部级别</option>
+                  <option value="STEP">STEP · 阶段</option>
+                  <option value="INFO">INFO · 信息</option>
+                  <option value="OK">OK · 成功</option>
+                  <option value="WARN">WARN · 警告</option>
+                  <option value="ERROR">ERROR · 错误</option>
+                  <option value="DATA">DATA · 数据</option>
+                  <option value="SQL">SQL · 语句</option>
+                  <option value="META">META · 元数据</option>
+                </select>
+                <input v-model="logSearchTerm" type="text" class="form-control" placeholder="搜索日志内容...">
+              </div>
+              <div class="btn-group btn-group-sm ms-2">
+                <button type="button" class="btn btn-outline-secondary" :class="{ active: autoScrollLog }" @click="autoScrollLog = !autoScrollLog" title="自动滚动到底部">
+                  <i class="bi bi-arrow-down-circle"></i>
+                </button>
+                <button type="button" class="btn btn-outline-secondary" @click="scrollLogToBottom" title="跳到底部">
+                  <i class="bi bi-chevron-double-down"></i>
+                </button>
+                <button type="button" class="btn btn-outline-secondary" @click="copyLog" title="复制全文">
+                  <i class="bi bi-clipboard"></i>
+                </button>
+                <button type="button" class="btn btn-outline-secondary" @click="downloadLog" title="下载日志">
+                  <i class="bi bi-download"></i>
+                </button>
+              </div>
+            </div>
+            <div ref="logContainer" class="log-container">
+              <template v-if="filteredLogLines.length">
+                <div
+                  v-for="(line, idx) in filteredLogLines"
+                  :key="idx"
+                  class="log-line"
+                  :class="'log-' + line.level.toLowerCase()"
+                >
+                  <span class="log-level-tag">[{{ line.level }}]</span>
+                  <span class="log-text">{{ line.text }}</span>
+                </div>
+              </template>
+              <p v-else-if="task.log" class="text-muted small p-3 mb-0">没有匹配的日志行</p>
+              <p v-else class="text-muted small p-3 mb-0">暂无日志</p>
             </div>
           </section>
         </div>
@@ -406,7 +450,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { migrationTaskApi } from '@/api'
 import type { MigrationTask } from '@/api'
@@ -419,6 +463,113 @@ const task = ref<MigrationTask | null>(null)
 let statusInterval: ReturnType<typeof setInterval> | null = null
 /** 执行中任务自动刷新间隔（毫秒） */
 const POLL_INTERVAL_MS = 3000
+
+// ===== 日志面板相关 =====
+const logLevelFilter = ref('')
+const logSearchTerm = ref('')
+const autoScrollLog = ref(true)
+const logContainer = ref<HTMLElement | null>(null)
+
+interface ParsedLogLine {
+  level: string
+  text: string
+}
+
+const LEVEL_REGEX = /^\[(STEP|INFO|OK|WARN|ERROR|DATA|SQL|META)\]\s?(.*)$/
+
+/** 把 task.log 拆成带 level 的行列表 */
+const parsedLogLines = computed<ParsedLogLine[]>(() => {
+  const text = task.value?.log || ''
+  if (!text) return []
+  return text.split('\n').map(line => {
+    const m = line.match(LEVEL_REGEX)
+    if (m) return { level: m[1], text: m[2] }
+    // 旧格式（无 [LEVEL] 前缀）：依据内容启发式判断
+    const upper = line.toUpperCase()
+    if (line.startsWith('错误') || upper.includes('失败') || upper.includes('FAILED')) {
+      return { level: 'ERROR', text: line }
+    }
+    if (line.startsWith('警告') || upper.includes('WARN')) {
+      return { level: 'WARN', text: line }
+    }
+    if (line.startsWith('成功') || upper.includes('SUCCESS') || upper.includes('校验通过')) {
+      return { level: 'OK', text: line }
+    }
+    return { level: 'INFO', text: line }
+  })
+})
+
+const logTotalLines = computed(() => parsedLogLines.value.length)
+
+const filteredLogLines = computed<ParsedLogLine[]>(() => {
+  let list = parsedLogLines.value
+  if (logLevelFilter.value) {
+    list = list.filter(l => l.level === logLevelFilter.value)
+  }
+  if (logSearchTerm.value.trim()) {
+    const term = logSearchTerm.value.trim().toLowerCase()
+    list = list.filter(l => l.text.toLowerCase().includes(term))
+  }
+  // 限制最多展示行数，避免大量日志拖慢渲染
+  const MAX = 2000
+  if (list.length > MAX) {
+    return list.slice(-MAX)
+  }
+  return list
+})
+
+function scrollLogToBottom() {
+  nextTick(() => {
+    if (logContainer.value) {
+      logContainer.value.scrollTop = logContainer.value.scrollHeight
+    }
+  })
+}
+
+async function copyLog() {
+  const text = task.value?.log || ''
+  if (!text) {
+    alert('暂无日志可复制')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    alert('日志已复制到剪贴板')
+  } catch {
+    // 回退方案
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    alert('日志已复制到剪贴板')
+  }
+}
+
+function downloadLog() {
+  const text = task.value?.log || ''
+  if (!text) {
+    alert('暂无日志可下载')
+    return
+  }
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `migration_log_task_${task.value?.id ?? 'unknown'}.log`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// 日志更新时自动滚动到底部
+watch(() => task.value?.log, () => {
+  if (autoScrollLog.value) scrollLogToBottom()
+})
+
+watch(autoScrollLog, v => {
+  if (v) scrollLogToBottom()
+})
 
 // 源对象列表（表/视图）：来自 source_objects 或 source_object
 const sourceListInlineMax = 40
@@ -1044,13 +1195,131 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
-.log-container {
-  background: var(--background);
-  border-radius: 0.5rem;
-  padding: 1rem;
-  max-height: 400px;
-  overflow-y: auto;
+.log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
+
+.log-toolbar .input-group {
+  flex: 1;
+  min-width: 280px;
+}
+
+.log-container {
+  background: #0f172a;
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  max-height: 520px;
+  overflow-y: auto;
+  border: 1px solid #1e293b;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: #cbd5e1;
+}
+
+.log-container::-webkit-scrollbar {
+  width: 8px;
+}
+
+.log-container::-webkit-scrollbar-track {
+  background: #1e293b;
+  border-radius: 4px;
+}
+
+.log-container::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 4px;
+}
+
+.log-container::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+.log-line {
+  padding: 0.1rem 0.25rem;
+  border-radius: 0.15rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-left: 3px solid transparent;
+  padding-left: 0.5rem;
+  margin-bottom: 0.05rem;
+}
+
+.log-line:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.log-level-tag {
+  display: inline-block;
+  min-width: 56px;
+  font-weight: 600;
+  margin-right: 0.4rem;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.log-text {
+  color: #cbd5e1;
+}
+
+.log-step {
+  color: #38bdf8;
+  border-left-color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.05);
+  font-weight: 500;
+}
+.log-step .log-level-tag { color: #38bdf8; }
+
+.log-info {
+  color: #93c5fd;
+}
+.log-info .log-level-tag { color: #60a5fa; }
+
+.log-ok {
+  color: #86efac;
+  border-left-color: #22c55e;
+  background: rgba(34, 197, 94, 0.06);
+}
+.log-ok .log-level-tag { color: #4ade80; }
+
+.log-warn {
+  color: #fde68a;
+  border-left-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.06);
+}
+.log-warn .log-level-tag { color: #fbbf24; }
+
+.log-error {
+  color: #fca5a5;
+  border-left-color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+  font-weight: 500;
+}
+.log-error .log-level-tag { color: #f87171; }
+
+.log-data {
+  color: #d8b4fe;
+  border-left-color: #a855f7;
+  background: rgba(168, 85, 247, 0.05);
+}
+.log-data .log-level-tag { color: #c084fc; }
+
+.log-sql {
+  color: #fbcfe8;
+  border-left-color: #ec4899;
+  background: rgba(236, 72, 153, 0.05);
+}
+.log-sql .log-level-tag { color: #f472b6; }
+
+.log-meta {
+  color: #a7f3d0;
+  border-left-color: #14b8a6;
+  background: rgba(20, 184, 166, 0.05);
+}
+.log-meta .log-level-tag { color: #5eead4; }
 
 .log-content {
   color: var(--text);

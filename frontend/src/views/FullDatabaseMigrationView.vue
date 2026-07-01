@@ -109,11 +109,30 @@
               </div>
             </div>
             <p class="text-muted small mb-2">迁移对象类型（按依赖顺序执行）</p>
-            <div class="d-flex flex-wrap gap-3">
-              <div v-for="(label, key) in objectTypeLabels" :key="key" class="form-check">
-                <input class="form-check-input" type="checkbox" :id="'ot-' + key" v-model="objectTypes[key]">
-                <label class="form-check-label" :for="'ot-' + key">{{ label }}</label>
+            <div class="object-type-grid">
+              <div
+                v-for="item in objectTypeOptions"
+                :key="item.key"
+                class="object-type-card"
+                :class="{ active: objectTypes[item.key] }"
+                @click="toggleObjectType(item.key)"
+              >
+                <div class="d-flex align-items-center gap-2">
+                  <div class="object-type-icon" :style="{ background: item.bg, color: item.color }">
+                    <i :class="['bi', item.icon]"></i>
+                  </div>
+                  <div class="object-type-info">
+                    <div class="object-type-name">{{ item.label }}</div>
+                    <div class="object-type-desc">{{ item.desc }}</div>
+                  </div>
+                  <input class="form-check-input ms-auto" type="checkbox" :id="'ot-' + item.key" v-model="objectTypes[item.key]" @click.stop>
+                </div>
               </div>
+            </div>
+            <div class="d-flex gap-2 mt-2">
+              <button type="button" class="btn btn-sm btn-outline-secondary" @click="selectAllObjectTypes">全选</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" @click="invertObjectTypes">反选</button>
+              <span class="text-muted small ms-auto align-self-center">已选 {{ selectedObjectTypeCount }} / {{ objectTypeOptions.length }}</span>
             </div>
             <div class="form-check mt-3">
               <input v-model="autoPrepare" class="form-check-input" type="checkbox" id="autoPrep">
@@ -183,14 +202,14 @@ const conflictStrategy = ref('error')
 const identifierCase = ref('lower')
 const autoPrepare = ref(true)
 
-const objectTypeLabels: Record<string, string> = {
-  sequences: '序列',
-  tables: '物理表',
-  views: '视图',
-  materialized_views: '物化视图',
-  triggers: '触发器',
-  routines: '例程',
-}
+const objectTypeOptions = [
+  { key: 'sequences',         label: '序列',         icon: 'bi-list-ol',          desc: '序号发生器',          bg: 'rgba(245, 158, 11, 0.15)', color: '#d97706' },
+  { key: 'tables',            label: '物理表',       icon: 'bi-table',           desc: '表结构 + 数据',       bg: 'rgba(37, 99, 235, 0.15)',  color: '#2563eb' },
+  { key: 'views',             label: '视图',         icon: 'bi-eye',             desc: 'CREATE VIEW DDL',     bg: 'rgba(139, 92, 246, 0.15)', color: '#7c3aed' },
+  { key: 'materialized_views',label: '物化视图',     icon: 'bi-eye-fill',        desc: '物化查询结果',        bg: 'rgba(168, 85, 247, 0.15)', color: '#9333ea' },
+  { key: 'triggers',          label: '触发器',       icon: 'bi-lightning',       desc: '导出源码 + 模板',     bg: 'rgba(220, 38, 38, 0.15)',  color: '#dc2626' },
+  { key: 'routines',          label: '例程',         icon: 'bi-code-square',     desc: '过程 / 函数',         bg: 'rgba(16, 185, 129, 0.15)', color: '#10b981' },
+]
 
 const objectTypes = ref<Record<string, boolean>>({
   sequences: true,
@@ -200,6 +219,22 @@ const objectTypes = ref<Record<string, boolean>>({
   triggers: true,
   routines: true,
 })
+
+const toggleObjectType = (key: string) => {
+  objectTypes.value[key] = !objectTypes.value[key]
+}
+
+const selectAllObjectTypes = () => {
+  objectTypeOptions.forEach(o => { objectTypes.value[o.key] = true })
+}
+
+const invertObjectTypes = () => {
+  objectTypeOptions.forEach(o => { objectTypes.value[o.key] = !objectTypes.value[o.key] })
+}
+
+const selectedObjectTypeCount = computed(() =>
+  objectTypeOptions.filter(o => objectTypes.value[o.key]).length
+)
 
 const canSubmit = computed(() =>
   oracleConnection.value > 0 &&
@@ -273,3 +308,71 @@ const handleCreate = async (autoStart: boolean) => {
 
 onMounted(loadConnections)
 </script>
+
+<style scoped>
+.full-database-migration-view {
+  animation: fadeIn 0.4s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.object-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.object-type-card {
+  border: 2px solid var(--border, #e2e8f0);
+  border-radius: 0.6rem;
+  padding: 0.75rem;
+  background: var(--surface, #fff);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.object-type-card:hover {
+  border-color: var(--primary, #2563eb);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+  transform: translateY(-1px);
+}
+
+.object-type-card.active {
+  border-color: var(--primary, #2563eb);
+  background: rgba(37, 99, 235, 0.04);
+  box-shadow: 0 0 0 1px var(--primary, #2563eb) inset;
+}
+
+.object-type-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 0.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  flex-shrink: 0;
+}
+
+.object-type-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.object-type-name {
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--text, #1f2937);
+}
+
+.object-type-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted, #94a3b8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+</style>

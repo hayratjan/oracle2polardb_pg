@@ -180,33 +180,38 @@ def switch_postgres_database(request, task_id):
 def migrate_materialized_view(task_id, postgres_database=None):
     """迁移物化视图"""
     task = get_object_or_404(MigrationTask, pk=task_id)
-    
+
     # 更新任务状态
     task.status = 'running'
     task.started_at = timezone.now()
     task.save()
-    
+
+    from .task_logging import (
+        build_log_line, make_step_log, make_info_log, make_ok_log,
+        make_warn_log, make_error_log, make_meta_log, make_sql_log,
+    )
+
     log = []
-    
-    # 记录数据库信息
+    make_step_log(log, f'物化视图迁移任务 #{task_id} 启动')
     if postgres_database:
-        log.append(f"目标PostgreSQL数据库: {postgres_database}")
+        make_info_log(log, f'目标 PostgreSQL 数据库: {postgres_database}')
 
     oracle_conn = oracle_cursor = pg_conn = pg_cursor = None
     try:
         # 连接Oracle数据库
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
-        
+
         # 连接PostgreSQL数据库
         pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
         pg_cursor = pg_conn.cursor()
-        
+
         # 获取PostgreSQL数据库名
         pg_cursor.execute("SELECT current_database()")
         current_db = pg_cursor.fetchone()[0]
-        log.append(f"已连接到PostgreSQL数据库: {current_db}")
-        
+        make_ok_log(log, f'已连接 PostgreSQL 数据库: {current_db}')
+        make_ok_log(log, '已连接 Oracle 源端')
+
         # 优先使用 QUERY 列（纯查询体），回退 TEXT
         oracle_cursor.execute(
             """
@@ -218,21 +223,23 @@ def migrate_materialized_view(task_id, postgres_database=None):
         )
         result = oracle_cursor.fetchone()
         if not result:
+            make_error_log(log, f'找不到物化视图 {task.source_schema}.{task.source_object}')
             raise Exception(f"找不到物化视图 {task.source_schema}.{task.source_object}")
 
         mview_text = result[0] or result[1]
-        log.append(f"获取到物化视图定义: {str(mview_text)[:500]}")
+        make_meta_log(log, f'物化视图定义 (前500字符): {str(mview_text)[:500]}')
 
         pg_mview_text, manual_items = convert_oracle_to_pg_mview(mview_text)
-        log.append(f"转换后的 PostgreSQL 物化视图查询体: {pg_mview_text[:500]}")
+        make_meta_log(log, f'转换后 PG 查询体 (前500字符): {pg_mview_text[:500]}')
         if manual_items:
-            log.append(f"需人工审查: {', '.join(manual_items)}")
+            make_warn_log(log, f'需人工审查 ({len(manual_items)} 项): {", ".join(manual_items)}')
 
         id_case = getattr(task, 'identifier_case', 'lower') or 'lower'
         target_schema = (task.target_schema or 'public').strip()
         mview_name = apply_identifier_case(task.source_object, id_case)
         qualified_mview = build_qualified_table_name(target_schema, mview_name)
         strategy = task.conflict_strategy or 'error'
+        make_info_log(log, f'目标: {target_schema}.{mview_name} | 冲突策略: {strategy} | 大小写: {id_case}')
 
         pg_cursor.execute(
             """
@@ -243,36 +250,40 @@ def migrate_materialized_view(task_id, postgres_database=None):
         )
         if pg_cursor.fetchone():
             if strategy == 'skip':
-                log.append(f"物化视图 {target_schema}.{mview_name} 已存在，跳过")
+                make_ok_log(log, f'物化视图 {target_schema}.{mview_name} 已存在，跳过')
                 task.status = 'completed'
                 task.log = '\n'.join(log)
                 task.completed_at = timezone.now()
                 task.save()
                 return
             if strategy == 'error':
+                make_error_log(log, f'物化视图 {target_schema}.{mview_name} 已存在')
                 raise Exception(f"物化视图 {target_schema}.{mview_name} 已存在")
+            make_warn_log(log, f'冲突策略 replace，DROP 已存在的物化视图 {target_schema}.{mview_name}')
             pg_cursor.execute(f"DROP MATERIALIZED VIEW IF EXISTS {qualified_mview} CASCADE")
             pg_conn.commit()
 
         create_mview_sql = f"CREATE MATERIALIZED VIEW {qualified_mview} AS\n{pg_mview_text}"
+        make_sql_log(log, f'执行 DDL: {create_mview_sql[:300]}{"..." if len(create_mview_sql) > 300 else ""}')
         pg_cursor.execute(create_mview_sql)
         pg_conn.commit()
-        
-        log.append(f"成功创建PostgreSQL物化视图 {task.target_schema}.{task.source_object}")
-        
+
+        make_ok_log(log, f'成功创建物化视图 {target_schema}.{mview_name}')
+
         # 更新任务状态
         task.status = 'completed'
+        task.progress = 100
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
-        
+
     except Exception as e:
         from .migration_errors import format_db_error, rollback_quietly
         rollback_quietly(pg_conn)
         error_msg = format_db_error(e)
         trace = traceback.format_exc()
-        log.append(f"错误: {error_msg}")
-        log.append(f"详细错误: {trace}")
+        make_error_log(log, f'物化视图迁移失败: {error_msg}')
+        make_error_log(log, f'详细错误: {trace}')
         task.status = 'failed'
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
@@ -308,9 +319,16 @@ def _migrate_view_definition(task_id, postgres_database=None):
     task.status = 'running'
     task.started_at = timezone.now()
     task.save()
+
+    from .task_logging import (
+        make_step_log, make_info_log, make_ok_log,
+        make_warn_log, make_error_log, make_meta_log, make_sql_log,
+    )
+
     log = []
+    make_step_log(log, f'视图定义迁移任务 #{task_id} 启动')
     if postgres_database:
-        log.append(f"目标 PostgreSQL 数据库: {postgres_database}")
+        make_info_log(log, f'目标 PostgreSQL 数据库: {postgres_database}')
 
     try:
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
@@ -318,7 +336,8 @@ def _migrate_view_definition(task_id, postgres_database=None):
         pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
         pg_cursor = pg_conn.cursor()
         pg_cursor.execute("SELECT current_database()")
-        log.append(f"已连接 PostgreSQL: {pg_cursor.fetchone()[0]}")
+        make_ok_log(log, f'已连接 PostgreSQL: {pg_cursor.fetchone()[0]}')
+        make_ok_log(log, '已连接 Oracle 源端')
 
         if task.source_objects and task.source_objects.strip():
             views = [v.strip() for v in task.source_objects.split(',') if v.strip()]
@@ -326,6 +345,7 @@ def _migrate_view_definition(task_id, postgres_database=None):
             views = [task.source_object.strip()] if task.source_object else []
         if not views:
             raise Exception("未指定要迁移的视图")
+        make_info_log(log, f'待迁移视图数: {len(views)}')
 
         id_case = getattr(task, 'identifier_case', 'lower') or 'lower'
         target_schema = (task.target_schema or 'public').strip()
@@ -333,7 +353,8 @@ def _migrate_view_definition(task_id, postgres_database=None):
         failed, manual_review_all = [], []
 
         for idx, view_name in enumerate(views):
-            log.append(f"=== 创建视图定义 ({idx + 1}/{len(views)}): {task.source_schema}.{view_name} ===")
+            make_step_log(log, f'创建视图定义 {task.source_schema}.{view_name}',
+                          total=len(views), index=idx)
             oracle_cursor.execute(
                 "SELECT TEXT FROM ALL_VIEWS WHERE OWNER = :schema AND VIEW_NAME = :view_name",
                 schema=task.source_schema,
@@ -342,13 +363,13 @@ def _migrate_view_definition(task_id, postgres_database=None):
             row = oracle_cursor.fetchone()
             if not row:
                 failed.append(view_name)
-                log.append(f"找不到视图 {task.source_schema}.{view_name}")
+                make_error_log(log, f'找不到视图 {task.source_schema}.{view_name}')
                 continue
 
             pg_query, manual_items = convert_oracle_to_pg_view(row[0])
             if manual_items:
                 manual_review_all.extend(manual_items)
-                log.append(f"需人工审查的语法: {', '.join(manual_items)}")
+                make_warn_log(log, f'需人工审查 ({len(manual_items)} 项): {", ".join(manual_items)}')
 
             target_view = apply_identifier_case(
                 (task.target_object or view_name).strip() if len(views) == 1
@@ -367,41 +388,47 @@ def _migrate_view_definition(task_id, postgres_database=None):
             exists = pg_cursor.fetchone() is not None
             if exists:
                 if strategy == 'skip':
-                    log.append(f"视图 {target_schema}.{target_view} 已存在，跳过")
+                    make_ok_log(log, f'视图 {target_schema}.{target_view} 已存在，跳过')
                     continue
                 if strategy == 'error':
+                    make_error_log(log, f'视图 {target_schema}.{target_view} 已存在')
                     raise Exception(f"视图 {target_schema}.{target_view} 已存在")
+                make_warn_log(log, f'冲突策略 replace，DROP 视图 {target_schema}.{target_view}')
                 pg_cursor.execute(f"DROP VIEW IF EXISTS {qualified_view} CASCADE")
                 pg_conn.commit()
 
             create_sql = f"CREATE VIEW {qualified_view} AS\n{pg_query}"
-            log.append(f"CREATE VIEW SQL:\n{create_sql}")
+            make_sql_log(log, f'CREATE VIEW SQL (前300字符): {create_sql[:300]}{"..." if len(create_sql) > 300 else ""}')
             try:
                 pg_cursor.execute(create_sql)
                 pg_conn.commit()
-                log.append(f"成功创建视图 {target_schema}.{target_view}")
+                make_ok_log(log, f'成功创建视图 {target_schema}.{target_view}')
             except Exception as ddl_err:
                 pg_conn.rollback()
                 failed.append(view_name)
-                log.append(f"创建视图失败: {ddl_err}")
+                make_error_log(log, f'创建视图失败: {ddl_err}')
 
         oracle_cursor.close()
         oracle_conn.close()
         pg_cursor.close()
         pg_conn.close()
 
+        make_step_log(log, '任务结束')
         if manual_review_all:
-            log.append("【提示】部分 Oracle 专有语法需人工复核后再投入生产")
+            make_warn_log(log, f'共 {len(manual_review_all)} 项 Oracle 专有语法需人工复核后再投入生产')
         if failed:
             task.status = 'partial' if len(failed) < len(views) else 'failed'
+            make_error_log(log, f'失败 ({len(failed)}): {", ".join(failed)}')
         else:
             task.status = 'completed'
+            task.progress = 100
+            make_ok_log(log, f'全部视图创建成功 ({len(views) - len(failed)}/{len(views)})')
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
     except Exception as e:
-        log.append(str(e))
-        log.append(traceback.format_exc())
+        make_error_log(log, f'任务异常: {e}')
+        make_error_log(log, traceback.format_exc())
         task.status = 'failed'
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
@@ -411,77 +438,87 @@ def _migrate_view_definition(task_id, postgres_database=None):
 def migrate_routine(task_id, postgres_database=None):
     """迁移例程（存储过程、函数）"""
     task = get_object_or_404(MigrationTask, pk=task_id)
-    
+
     # 更新任务状态
     task.status = 'running'
     task.started_at = timezone.now()
     task.save()
-    
+
+    from .task_logging import (
+        make_step_log, make_info_log, make_ok_log,
+        make_warn_log, make_error_log, make_meta_log, make_sql_log,
+    )
+
     log = []
-    
-    # 记录数据库信息
+    make_step_log(log, f'例程迁移任务 #{task_id} 启动')
     if postgres_database:
-        log.append(f"目标PostgreSQL数据库: {postgres_database}")
-    
+        make_info_log(log, f'目标 PostgreSQL 数据库: {postgres_database}')
+
     try:
         # 连接Oracle数据库
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
-        
+
         # 连接PostgreSQL数据库
         pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
         pg_cursor = pg_conn.cursor()
-        
+
         # 获取PostgreSQL数据库名
         pg_cursor.execute("SELECT current_database()")
         current_db = pg_cursor.fetchone()[0]
-        log.append(f"已连接到PostgreSQL数据库: {current_db}")
-        
+        make_ok_log(log, f'已连接 PostgreSQL 数据库: {current_db}')
+        make_ok_log(log, '已连接 Oracle 源端')
+
         # 获取存储过程或函数定义
         query = """
-        SELECT TEXT FROM ALL_SOURCE 
+        SELECT TEXT FROM ALL_SOURCE
         WHERE OWNER = :schema AND NAME = :routine_name
         ORDER BY LINE
         """
         oracle_cursor.execute(query, schema=task.source_schema, routine_name=task.source_object)
         results = oracle_cursor.fetchall()
-        
+
         if not results:
+            make_error_log(log, f'找不到例程 {task.source_schema}.{task.source_object}')
             raise Exception(f"找不到例程 {task.source_schema}.{task.source_object}")
-        
+
         routine_text = '\n'.join([row[0] for row in results])
-        log.append(f"获取到例程定义: {routine_text}")
-        
+        line_count = len(results)
+        make_meta_log(log, f'例程定义: {line_count} 行 / {len(routine_text)} 字符')
+        make_meta_log(log, f'前 300 字符预览: {routine_text[:300]}')
+
         # 转换为 PostgreSQL 函数语法（基础替换，完整 PL/SQL 需人工）
         pg_routine_text, manual_items = convert_oracle_to_pg_routine(routine_text)
-        log.append(f"转换后的 PostgreSQL 函数定义: {pg_routine_text}")
+        make_meta_log(log, f'转换后 PG 定义 (前 300 字符): {pg_routine_text[:300]}')
         if manual_items:
-            log.append(f"需人工审查: {', '.join(manual_items)}")
-        
+            make_warn_log(log, f'需人工审查 ({len(manual_items)} 项): {", ".join(manual_items)}')
+
         # 创建PostgreSQL函数
+        make_sql_log(log, f'执行 CREATE FUNCTION: {pg_routine_text[:200]}{"..." if len(pg_routine_text) > 200 else ""}')
         pg_cursor.execute(pg_routine_text)
         pg_conn.commit()
-        
-        log.append(f"成功创建PostgreSQL函数 {task.target_schema}.{task.source_object}")
-        
+
+        make_ok_log(log, f'成功创建 PostgreSQL 函数 {task.target_schema}.{task.source_object}')
+
         # 关闭连接
         oracle_cursor.close()
         oracle_conn.close()
         pg_cursor.close()
         pg_conn.close()
-        
+
         # 更新任务状态
         task.status = 'completed'
+        task.progress = 100
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
-        
+
     except Exception as e:
         error_msg = str(e)
         trace = traceback.format_exc()
-        log.append(f"错误: {error_msg}")
-        log.append(f"详细错误: {trace}")
-        
+        make_error_log(log, f'例程迁移失败: {error_msg}')
+        make_error_log(log, f'详细错误: {trace}')
+
         # 更新任务状态
         task.status = 'failed'
         task.log = '\n'.join(log)
@@ -1652,29 +1689,38 @@ def migrate_trigger(task_id, postgres_database=None):
     不向目标库自动下发 DDL；任务状态为 exported（已导出待人工处理）。
     支持 source_objects 批量导出。
     """
+    from .task_logging import (
+        make_step_log, make_info_log, make_ok_log,
+        make_warn_log, make_error_log,
+    )
     from .trigger_export import export_one_trigger, parse_trigger_names
 
     task = get_object_or_404(MigrationTask, pk=task_id)
     task.status = 'running'
     task.started_at = timezone.now()
     task.save()
-    log = [
-        "【触发器迁移说明】本任务仅导出 Oracle 源码与 PL/pgSQL 改写模板，不会在目标库自动创建触发器。",
-        "请在任务日志中复制模板，人工完成业务逻辑改写后在 PolarDB-PG 执行。",
-    ]
+    log = []
+    make_step_log(log, f'触发器导出任务 #{task_id} 启动')
+    make_info_log(log, '本任务仅导出 Oracle 源码与 PL/pgSQL 改写模板，不会在目标库自动创建触发器')
+    make_info_log(log, '请在任务日志中复制模板，人工完成业务逻辑改写后在 PolarDB-PG 执行')
     if postgres_database:
-        log.append(f"参考目标 PostgreSQL 数据库: {postgres_database}")
+        make_info_log(log, f'参考目标 PostgreSQL 数据库: {postgres_database}')
 
     try:
         oracle_conn = get_oracle_connection(task.oracle_connection.id)
         oracle_cursor = oracle_conn.cursor()
+        make_ok_log(log, '已连接 Oracle 源端')
 
         trigger_names = parse_trigger_names(task)
         if not trigger_names:
+            make_error_log(log, '未指定要导出的触发器')
             raise Exception("未指定要导出的触发器")
+        make_info_log(log, f'待导出触发器数: {len(trigger_names)}')
 
         exported, failed = 0, []
-        for tname in trigger_names:
+        for idx, tname in enumerate(trigger_names):
+            make_step_log(log, f'导出触发器 {task.source_schema}.{tname}',
+                          total=len(trigger_names), index=idx)
             meta, _body, export_log = export_one_trigger(
                 oracle_cursor, task.source_schema, tname,
             )
@@ -1688,22 +1734,25 @@ def migrate_trigger(task_id, postgres_database=None):
         oracle_cursor.close()
         oracle_conn.close()
 
+        make_step_log(log, '任务结束')
         if exported == 0:
             task.status = 'failed'
+            make_error_log(log, f'全部导出失败 ({len(failed)}): {", ".join(failed)}')
         elif failed:
             task.status = 'partial'
-            log.append(f"部分导出成功 {exported} 个，失败: {', '.join(failed)}")
+            make_ok_log(log, f'部分导出成功 ({exported}/{len(trigger_names)})')
+            make_error_log(log, f'失败 ({len(failed)}): {", ".join(failed)}')
         else:
             task.status = 'exported'
-            log.append(f"已成功导出 {exported} 个触发器，状态为「已导出待人工处理」")
+            make_ok_log(log, f'已成功导出 {exported} 个触发器，状态为「已导出待人工处理」')
         task.progress = 100
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
     except Exception as e:
         task.status = 'failed'
-        log.append(str(e))
-        log.append(traceback.format_exc())
+        make_error_log(log, f'任务异常: {e}')
+        make_error_log(log, traceback.format_exc())
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()

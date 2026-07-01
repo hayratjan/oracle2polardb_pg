@@ -1,6 +1,10 @@
 """
 视图数据物化到 PolarDB-PG 表：migrate_view 与 migrate_view_to_table 共用实现。
 支持分批读取、进度跟踪、取消、部分成功、行数校验。
+
+日志采用统一前缀格式 `[LEVEL] message`，便于前端解析着色：
+  [STEP] 阶段步骤    [INFO] 一般信息    [OK] 成功    [WARN] 警告
+  [ERROR] 错误      [DATA] 数据导入    [SQL] DDL/DML    [META] 元数据
 """
 from __future__ import annotations
 
@@ -27,6 +31,24 @@ from .pg_identifiers import (
     build_pg_column_definition,
     build_qualified_table_name,
     quote_identifier,
+)
+from .task_logging import (
+    LEVEL_DATA,
+    LEVEL_ERROR,
+    LEVEL_INFO,
+    LEVEL_OK,
+    LEVEL_SQL,
+    LEVEL_STEP,
+    LEVEL_WARN,
+    build_log_line,
+    make_data_log,
+    make_error_log,
+    make_info_log,
+    make_meta_log,
+    make_ok_log,
+    make_sql_log,
+    make_step_log,
+    make_warn_log,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,7 +98,7 @@ def _filter_columns(columns, selected_fields: List[str], log: List[str]):
             missing.append(field)
     if missing:
         raise ValueError(f"以下字段在视图中不存在: {', '.join(missing)}")
-    log.append(f"用户选择字段: {', '.join(selected_fields)}")
+    make_info_log(log, f"用户选择字段 ({len(filtered)} 个): {', '.join(selected_fields)}")
     return filtered
 
 
@@ -103,7 +125,7 @@ def materialize_one_view(
     conflict_strategy = task.conflict_strategy or 'error'
     multi_view = total_views > 1
 
-    log.append(f"=== 处理视图 ({view_index + 1}/{total_views}): {source_schema}.{view_name} ===")
+    make_step_log(log, f'视图物化 {source_schema}.{view_name}', total=total_views, index=view_index)
 
     # 读取视图定义（仅记录，物化模式不用于 DDL）
     oracle_cursor.execute(
@@ -113,9 +135,10 @@ def materialize_one_view(
     )
     view_row = oracle_cursor.fetchone()
     if not view_row:
+        make_error_log(log, f'找不到视图 {source_schema}.{view_name}')
         return False, f"找不到视图 {source_schema}.{view_name}"
     view_text = view_row[0]
-    log.append(f"获取到视图定义（物化模式仅作记录）: {str(view_text)[:500]}")
+    make_meta_log(log, f'视图定义（仅记录）: {str(view_text)[:500]}')
 
     # 列元数据
     oracle_cursor.execute(
@@ -130,6 +153,7 @@ def materialize_one_view(
     )
     columns = list(oracle_cursor.fetchall())
     if not columns:
+        make_error_log(log, f'找不到视图 {source_schema}.{view_name} 的列信息')
         return False, f"找不到视图 {source_schema}.{view_name} 的列信息"
 
     selected_fields: List[str] = []
@@ -140,12 +164,15 @@ def materialize_one_view(
     try:
         columns = _filter_columns(columns, selected_fields, log)
     except ValueError as e:
+        make_error_log(log, str(e))
         return False, str(e)
+
+    make_meta_log(log, f'视图列数: {len(columns)}')
 
     target_table = _resolve_target_table_name(task, view_name, multi_view=multi_view)
     qualified_table = build_qualified_table_name(target_schema, target_table)
     display_name = f"{target_schema}.{target_table}"
-    log.append(f"目标表: {display_name}")
+    make_info_log(log, f'目标表: {display_name}（大小写: {id_case}）')
 
     # 建表 DDL
     column_defs = []
@@ -154,7 +181,7 @@ def materialize_one_view(
         pg_type = convert_oracle_to_pg_type(data_type, data_length, data_precision, data_scale)
         if data_type == 'VARCHAR2' and (data_length is None or data_length == 0):
             pg_type = 'VARCHAR(255)'
-            log.append(f"警告: 列 {col_name} 的 VARCHAR 长度为0，已调整为 VARCHAR(255)")
+            make_warn_log(log, f'列 {col_name} 的 VARCHAR 长度为 0，已调整为 VARCHAR(255)')
         column_defs.append(
             build_pg_column_definition(col_name, pg_type, nullable, id_case=id_case)
         )
@@ -167,29 +194,31 @@ def materialize_one_view(
 
     if table_exists:
         if conflict_strategy == 'error':
+            make_error_log(log, f'表 {display_name} 已存在（冲突策略: error）')
             return False, f"表 {display_name} 已存在"
         if conflict_strategy == 'skip':
-            log.append(f"表 {display_name} 已存在，跳过")
+            make_ok_log(log, f'表 {display_name} 已存在，跳过（冲突策略: skip）')
             return True, None
         if conflict_strategy == 'replace':
-            log.append(f"冲突策略 replace，删除表 {display_name}")
+            make_warn_log(log, f'冲突策略 replace，删除表 {display_name}')
             pg_cursor.execute(f"DROP TABLE IF EXISTS {qualified_table}")
             pg_conn.commit()
             table_exists = False
         elif conflict_strategy == 'truncate':
-            log.append(f"冲突策略 truncate，清空表 {display_name}")
+            make_warn_log(log, f'冲突策略 truncate，清空表 {display_name}')
             pg_cursor.execute(f"TRUNCATE TABLE {qualified_table}")
             pg_conn.commit()
         elif conflict_strategy == 'append':
-            log.append(f"冲突策略 append，向表 {display_name} 追加数据")
+            make_info_log(log, f'冲突策略 append，向表 {display_name} 追加数据')
 
     if not table_exists:
         try:
             pg_cursor.execute(create_sql)
             pg_conn.commit()
-            log.append(f"成功创建表 {display_name}")
+            make_ok_log(log, f'成功创建表 {display_name}（{len(column_defs)} 列）')
         except Exception as e:
-            log.append(f"建表失败:\n{create_sql}")
+            make_error_log(log, f'建表失败: {e}')
+            make_sql_log(log, create_sql)
             return False, str(e)
 
     # 统计行数
@@ -197,12 +226,13 @@ def materialize_one_view(
     try:
         oracle_cursor.execute(f"SELECT COUNT(*) FROM {source_schema}.{view_name}")
         total_count = int(oracle_cursor.fetchone()[0])
-        log.append(f"视图 {view_name} 总行数: {total_count}")
+        make_meta_log(log, f'视图 {view_name} 总行数: {total_count}')
     except Exception as count_err:
         err_str = str(count_err).upper()
         if 'ORA-00942' in err_str or '00942' in err_str:
+            make_error_log(log, f'无法访问源视图 {source_schema}.{view_name}: {count_err}')
             return False, f"无法访问源视图 {source_schema}.{view_name}: {count_err}"
-        log.append(f"未获取总行数，进度按已迁移行数估算: {count_err}")
+        make_warn_log(log, f'未获取总行数，进度按已迁移行数估算: {count_err}')
 
     # 分批导数
     if selected_fields:
@@ -216,6 +246,7 @@ def materialize_one_view(
     progress_interval = MIGRATION_PROGRESS_SAVE_ROWS
     oracle_cursor.arraysize = fetch_batch
     oracle_cursor.execute(oracle_query)
+    make_info_log(log, f'开始分批读取 (batch_size={fetch_batch}, commit_every={commit_every})')
 
     column_names = [
         apply_identifier_case(desc[0], id_case) for desc in oracle_cursor.description
@@ -232,7 +263,7 @@ def materialize_one_view(
     while True:
         task.refresh_from_db()
         if task.cancel_requested:
-            log.append(f"用户取消，视图 {view_name} 已导入 {total_rows} 行")
+            make_warn_log(log, f'用户取消，视图 {view_name} 已导入 {total_rows} 行')
             return False, 'canceled'
 
         rows = oracle_cursor.fetchmany(fetch_batch)
@@ -253,9 +284,10 @@ def materialize_one_view(
             pg_conn.rollback()
             col_name = getattr(getattr(trunc_err, 'diag', None), 'column_name', None)
             if not col_name or col_name in widened_columns:
+                make_error_log(log, f'字符串截断: {trunc_err}')
                 return False, str(trunc_err)
             widened_columns.add(col_name)
-            log.append(f"列 {col_name} 字符串截断，自动扩展为 TEXT")
+            make_warn_log(log, f'列 {col_name} 字符串截断，自动扩展为 TEXT')
             pg_cursor.execute(
                 f"ALTER TABLE {qualified_table} "
                 f"ALTER COLUMN {quote_identifier(col_name)} TYPE TEXT"
@@ -272,6 +304,7 @@ def materialize_one_view(
             )
         except psycopg2.Error as pg_err:
             pg_conn.rollback()
+            make_error_log(log, f'写入失败: {pg_err}')
             return False, str(pg_err)
 
         total_rows += len(rows)
@@ -306,15 +339,18 @@ def materialize_one_view(
             task.save(update_fields=['view_progress', 'progress'])
             last_saved_pct = int(progress_pct)
             last_saved_rows = total_rows
-            log.append(f"【分批】视图 {view_name} 已迁移 {total_rows}/{total_count} 行 ({progress_pct:.1f}%)")
+            make_data_log(
+                log,
+                f'视图 {view_name} 已迁移 {total_rows}/{total_count} 行 ({progress_pct:.1f}%)',
+            )
 
     if batches_since_commit > 0:
         pg_conn.commit()
 
     if total_rows == 0:
-        log.append(f"视图 {view_name} 无数据行")
+        make_warn_log(log, f'视图 {view_name} 无数据行')
     else:
-        log.append(f"成功从视图导入 {total_rows} 行到表 {display_name}")
+        make_ok_log(log, f'成功从视图导入 {total_rows} 行到表 {display_name}')
 
     # 行数校验
     validate_row_counts(
@@ -349,8 +385,9 @@ def run_view_materialization_task(
     task.save()
 
     log: List[str] = []
+    make_step_log(log, f'视图物化任务 #{task_id} 启动')
     if postgres_database:
-        log.append(f"目标 PostgreSQL 数据库: {postgres_database}")
+        make_info_log(log, f'目标 PostgreSQL 数据库: {postgres_database}')
 
     oracle_conn = None
     pg_conn = None
@@ -360,11 +397,13 @@ def run_view_materialization_task(
         pg_conn = get_postgres_connection(task.postgres_connection.id, postgres_database)
         pg_cursor = pg_conn.cursor()
         pg_cursor.execute('SELECT current_database()')
-        log.append(f"已连接 PostgreSQL: {pg_cursor.fetchone()[0]}")
+        make_ok_log(log, f'已连接 PostgreSQL: {pg_cursor.fetchone()[0]}')
+        make_ok_log(log, '已连接 Oracle 源端')
 
         views = _resolve_view_names(task)
         if not views:
             raise ValueError('未指定要迁移的视图')
+        make_info_log(log, f'待迁移视图数: {len(views)}')
 
         successful, failed, canceled = [], [], False
         total = len(views)
@@ -393,32 +432,34 @@ def run_view_materialization_task(
             else:
                 failed.append(view_name)
                 if err:
-                    log.append(f"视图 {view_name} 失败: {err}")
+                    make_error_log(log, f'视图 {view_name} 失败: {err}')
                 try:
                     pg_conn.rollback()
                 except Exception:
                     pass
 
+        make_step_log(log, '任务结束')
         if canceled:
             task.status = 'canceled'
-            log.append('任务已取消')
+            make_warn_log(log, '任务已取消（已迁移的视图已保留）')
         elif failed and successful:
             task.status = 'partial'
-            log.append(f"部分成功: {', '.join(successful)}；失败: {', '.join(failed)}")
+            make_ok_log(log, f'部分成功 ({len(successful)}/{total}): {", ".join(successful)}')
+            make_error_log(log, f'失败 ({len(failed)}): {", ".join(failed)}')
         elif failed and not successful:
             task.status = 'failed'
-            log.append(f"全部失败: {', '.join(failed)}")
+            make_error_log(log, f'全部失败 ({len(failed)}): {", ".join(failed)}')
         else:
             task.status = 'completed'
-            log.append(f"全部视图物化成功: {', '.join(successful)}")
+            make_ok_log(log, f'全部视图物化成功 ({len(successful)}/{total}): {", ".join(successful)}')
         task.progress = 100.0 if task.status == 'completed' else task.progress
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
 
     except Exception as e:
-        log.append(str(e))
-        log.append(traceback.format_exc())
+        make_error_log(log, f'任务异常: {e}')
+        make_error_log(log, traceback.format_exc())
         task.status = 'failed'
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()

@@ -1,9 +1,17 @@
 """
 Oracle 触发器导出与 PL/pgSQL 改写模板生成。
+
+日志采用统一前缀格式 `[LEVEL] message`，便于前端解析着色：
+  [STEP] 阶段步骤    [INFO] 一般信息    [OK] 成功    [WARN] 警告
+  [ERROR] 错误      [META] 元数据      [SQL] 源码/模板
 """
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
+
+from .task_logging import (
+    build_log_line,
+)
 
 
 def build_plpgsql_trigger_template(
@@ -82,6 +90,7 @@ def export_one_trigger(
     """
     导出单个触发器元数据与源码。
     返回 (元数据字典, 源码正文, 日志文本)。
+    日志文本为多行字符串，每行以 [LEVEL] 前缀开头，便于前端着色。
     """
     oracle_cursor.execute(
         """
@@ -93,7 +102,7 @@ def export_one_trigger(
     )
     meta_row = oracle_cursor.fetchone()
     if not meta_row:
-        return None, '', f"找不到触发器 {source_schema}.{trigger_name}"
+        return None, '', build_log_line('ERROR', f'找不到触发器 {source_schema}.{trigger_name}')
 
     meta = {
         'name': meta_row[0],
@@ -113,6 +122,7 @@ def export_one_trigger(
         {'o': source_schema.upper(), 'n': trigger_name.upper()},
     )
     body = '\n'.join(r[0] for r in oracle_cursor.fetchall() if r[0])
+    body_lines = body.count('\n') + 1 if body else 0
     if len(body) > max_body_chars:
         body_display = body[:max_body_chars] + '\n...(截断，完整源码请从 Oracle 导出)'
     else:
@@ -126,12 +136,26 @@ def export_one_trigger(
         schema=source_schema.lower(),
     )
 
-    log_text = (
-        f"---- 触发器 {meta['name']} ----\n"
-        f"元数据: type={meta['type']}, event={meta['event']}, table={meta['table']}, status={meta['status']}\n"
-        f"---- Oracle 源码 ----\n{body_display}\n"
-        f"---- PL/pgSQL 改写模板 ----\n{template}\n"
-    )
+    # 构建结构化多行日志（每行带 [LEVEL] 前缀）
+    log_parts: List[str] = [
+        build_log_line('STEP', f'触发器导出: {source_schema}.{trigger_name}'),
+        build_log_line('META', f'名称: {meta["name"]}'),
+        build_log_line('META', f'类型: {meta["type"]} | 事件: {meta["event"]} | 表: {meta["table"]} | 状态: {meta["status"]}'),
+        build_log_line('INFO', f'源码行数: {body_lines} 字符: {len(body)}'),
+    ]
+    if meta.get('description'):
+        log_parts.append(build_log_line('META', f'描述: {meta["description"]}'))
+    # Oracle 源码：以多行形式附加，每行缩进 4 空格以保留格式
+    log_parts.append(build_log_line('SQL', 'Oracle 源码:'))
+    for line in body_display.splitlines() or ['(空)']:
+        log_parts.append(f'    {line}')
+    # 改写模板：同上
+    log_parts.append(build_log_line('SQL', 'PL/pgSQL 改写模板:'))
+    for line in template.splitlines():
+        log_parts.append(f'    {line}')
+    log_parts.append(build_log_line('OK', f'触发器 {trigger_name} 导出完成'))
+
+    log_text = '\n'.join(log_parts)
     return meta, body, log_text
 
 

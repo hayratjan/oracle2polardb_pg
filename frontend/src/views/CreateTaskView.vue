@@ -117,16 +117,24 @@
                         <i class="bi bi-check-all me-1"></i>
                         全选
                       </button>
+                      <button type="button" class="btn btn-sm btn-outline-secondary me-2" @click="invertSelection" :disabled="filteredObjects.length === 0">
+                        <i class="bi bi-arrow-left-right me-1"></i>
+                        反选
+                      </button>
                       <button type="button" class="btn btn-sm btn-outline-secondary" @click="clearAllObjects" :disabled="selectedSourceObjects.length === 0">
                         <i class="bi bi-x-lg me-1"></i>
                         清空
                       </button>
-                      <span class="selected-count text-muted ms-3">
-                        已选择: <strong>{{ selectedSourceObjects.length }}</strong> / {{ filteredObjects.length }}
+                      <span class="selected-count text-muted ms-auto">
+                        已选 <strong class="text-primary">{{ selectedSourceObjects.length }}</strong>
+                        / {{ filteredObjects.length }} 个
                       </span>
                     </div>
                     <div class="search-box mb-2">
-                      <input v-model="searchTerm" type="text" class="form-control-sm" placeholder="搜索对象名称..." :disabled="sourceObjects.length === 0">
+                      <div class="position-relative">
+                        <i class="bi bi-search position-absolute search-icon"></i>
+                        <input v-model="searchTerm" type="text" class="form-control-sm ps-4" placeholder="按对象名称模糊搜索（不区分大小写）" :disabled="sourceObjects.length === 0">
+                      </div>
                     </div>
                     <div v-if="loadingObjects" class="text-center py-3">
                       <div class="spinner-border spinner-border-sm text-primary" role="status">
@@ -135,23 +143,27 @@
                       <span class="ms-2 text-muted">加载对象列表中...</span>
                     </div>
                     <div v-else-if="sourceObjects.length === 0 && form.oracle_connection && form.source_schema" class="text-center py-3 text-muted">
-                      <i class="bi bi-inbox mb-2"></i>
+                      <i class="bi bi-inbox mb-2" style="font-size: 1.5rem;"></i>
                       <p class="mb-0">点击"刷新对象列表"按钮加载可用对象</p>
                     </div>
                     <div v-else-if="filteredObjects.length > 0" class="source-objects-list">
-                      <div class="form-check" v-for="obj in filteredObjects" :key="obj">
+                      <div class="form-check" v-for="obj in filteredObjects" :key="obj"
+                           :class="{ 'is-selected': selectedSourceObjects.includes(obj) }">
                         <input class="form-check-input" type="checkbox" :id="'obj-' + obj" :value="obj" v-model="selectedSourceObjects">
                         <label class="form-check-label" :for="'obj-' + obj">
-                          {{ obj }}
-                          <span v-if="sourceObjectTypes[obj]" class="badge bg-secondary ms-1">{{ sourceObjectTypes[obj] }}</span>
+                          <i :class="['bi', getObjectIcon(obj), 'me-1 text-muted']"></i>
+                          <span class="obj-name">{{ obj }}</span>
+                          <span v-if="sourceObjectTypes[obj]" class="badge bg-light text-dark ms-1 small">{{ sourceObjectTypes[obj] }}</span>
                         </label>
                       </div>
                     </div>
                     <div v-else-if="sourceObjects.length > 0 && filteredObjects.length === 0" class="text-center py-3 text-muted">
+                      <i class="bi bi-emoji-frown mb-2" style="font-size: 1.5rem;"></i>
                       <p class="mb-0">没有找到匹配的对象</p>
                     </div>
                     <div v-else class="text-center py-3 text-muted">
-                      <p class="mb-0">请先选择Oracle连接和源Schema</p>
+                      <i class="bi bi-database-slash mb-2" style="font-size: 1.5rem;"></i>
+                      <p class="mb-0">请先选择 Oracle 连接和源 Schema</p>
                     </div>
                   </div>
                 </div>
@@ -545,6 +557,27 @@ const clearAllObjects = () => {
   selectedSourceObjects.value = []
 }
 
+/** 反选：将当前过滤结果中的对象反转选择状态 */
+const invertSelection = () => {
+  const set = new Set(selectedSourceObjects.value)
+  filteredObjects.value.forEach(obj => {
+    if (set.has(obj)) set.delete(obj)
+    else set.add(obj)
+  })
+  selectedSourceObjects.value = Array.from(set)
+}
+
+/** 根据当前任务类型返回合适的对象图标 */
+const getObjectIcon = (obj: string): string => {
+  const t = form.value.task_type
+  if (t === 'view' || t === 'view_to_table' || t === 'view_to_sqlite') return 'bi-eye'
+  if (t === 'materialized_view') return 'bi-eye-fill'
+  if (t === 'trigger') return 'bi-lightning'
+  if (t === 'routine') return 'bi-code-square'
+  if (t === 'sequence') return 'bi-list-ol'
+  return 'bi-table'
+}
+
 const openBrowseDirectories = async () => {
   showBrowseModal.value = true
   browseCurrentPath.value = form.value.sqlite_directory?.trim() || ''
@@ -805,27 +838,37 @@ h5 {
   margin-left: auto;
 }
 
+.search-box .search-icon {
+  top: 50%;
+  transform: translateY(-50%);
+  left: 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
 .search-box input {
   border-radius: 0.375rem;
   border: 1px solid var(--input-border);
-  padding: 0.5rem 0.75rem;
+  padding: 0.5rem 0.75rem 0.5rem 2rem;
   font-size: 0.875rem;
   transition: all 0.3s ease;
+  width: 100%;
 }
 
 .search-box input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 0.2rem var(--shadow);
+  outline: none;
 }
 
 .source-objects-list {
-  max-height: 400px;
+  max-height: 420px;
   overflow-y: auto;
-  padding: 0.5rem;
+  padding: 0.25rem;
   background-color: var(--surface);
   border-radius: 0.375rem;
   border: 1px solid var(--border);
-  padding: 30px;
 }
 
 .source-objects-list .form-check {
@@ -833,10 +876,15 @@ h5 {
   border-bottom: 1px solid var(--divider);
   margin-bottom: 0;
   transition: background-color 0.2s ease;
+  border-radius: 0.25rem;
 }
 
 .source-objects-list .form-check:hover {
   background-color: var(--background);
+}
+
+.source-objects-list .form-check.is-selected {
+  background-color: rgba(37, 99, 235, 0.06);
 }
 
 .source-objects-list .form-check:last-child {
@@ -858,14 +906,20 @@ h5 {
   user-select: none;
   flex: 1;
   word-break: break-all;
+  display: inline-flex;
+  align-items: center;
 }
 
 .source-objects-list .form-check-label:hover {
-  color: #667eea;
+  color: #2563eb;
+}
+
+.source-objects-list .form-check-label .obj-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .source-objects-list .form-check-input:checked + .form-check-label {
-  color: #667eea;
+  color: #2563eb;
   font-weight: 500;
 }
 
