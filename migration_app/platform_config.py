@@ -16,12 +16,14 @@ CACHE_TTL = 30
 # 与 batch_config 默认值保持一致
 DEFAULT_MIGRATION: Dict[str, Any] = {
     'default_identifier_case': 'lower',
-    'default_conflict_strategy': 'error',
-    'enable_batch_migration': True,
-    'batch_size': 5000,
+    'default_conflict_strategy': 'truncate',
+    'enable_batch_migration': False,
+    'batch_size': 100,
+    'fetch_batch_size': 5000,
     'commit_every_batches': 2,
     'progress_save_rows': 10000,
-    'parallel_table_workers': 16,
+    # v2.3: 并行度默认降至 8，避免 16 路并发写入对目标库造成过大压力
+    'parallel_table_workers': 8,
     'copy_row_threshold': 100_000,
     'enable_fk_replay': True,
 }

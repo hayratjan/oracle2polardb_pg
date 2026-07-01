@@ -199,7 +199,8 @@ class PlatformConfigAPITest(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        self.user = User.objects.create_user(username='cfguser', password='testpass')
+        # v2.3: SystemSettingsAPIView 需要 IsAdmin 权限,测试用户需为 staff
+        self.user = User.objects.create_superuser(username='cfgadmin', password='testpass', email='admin@test.local')
         self.client.force_authenticate(user=self.user)
 
     def test_migration_settings_persist(self):
