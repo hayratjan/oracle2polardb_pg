@@ -3,7 +3,7 @@ from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.contrib import messages
-from .models import OracleConnection, PostgresConnection, MigrationTask
+from .models import OracleConnection, PostgresConnection, MigrationTask, AuditLog
 from .batch_config import (
     MIGRATION_COMMIT_EVERY_BATCHES,
     MIGRATION_FETCH_BATCH_SIZE,
@@ -58,6 +58,23 @@ logger = logging.getLogger(__name__)
 
 # 全局线程池
 _task_executor = None
+
+
+def record_audit(request, action, target_type='', target_id=None, payload=None, result='success'):
+    """记录审计日志"""
+    try:
+        AuditLog.objects.create(
+            user=request.user if request.user.is_authenticated else None,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            ip_address=request.META.get('REMOTE_ADDR'),
+            user_agent=request.META.get('HTTP_USER_AGENT', '')[:255],
+            payload=payload,
+            result=result,
+        )
+    except Exception as e:
+        logger.error(f'记录审计日志失败: {e}', exc_info=True)
 
 def get_task_executor():
     """获取全局任务执行器"""
@@ -2234,6 +2251,16 @@ def save_oracle_connection(request):
                 password=password
             )
             
+            # 记录审计日志
+            record_audit(
+                request,
+                action='create_oracle_connection',
+                target_type='connection',
+                target_id=connection.id,
+                payload={'name': name, 'host': host, 'service_name': service_name},
+                result='success'
+            )
+            
             return JsonResponse({'status': 'success', 'message': '连接保存成功'})
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': str(e)})
@@ -2251,6 +2278,15 @@ def delete_oracle_connection(request):
             
             connection = OracleConnection.objects.get(id=connection_id)
             connection.delete()
+            
+            # 记录审计日志
+            record_audit(
+                request,
+                action='delete_oracle_connection',
+                target_type='connection',
+                target_id=connection_id,
+                result='success'
+            )
             
             return JsonResponse({'status': 'success', 'message': '连接删除成功'})
         except OracleConnection.DoesNotExist:
@@ -2310,6 +2346,17 @@ def edit_oracle_connection(request):
                 connection.password = password
             
             connection.save()
+            
+            # 记录审计日志
+            record_audit(
+                request,
+                action='edit_oracle_connection',
+                target_type='connection',
+                target_id=connection_id,
+                payload={'name': name, 'host': host},
+                result='success'
+            )
+            
             return JsonResponse({'status': 'success', 'message': '连接更新成功'})
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': str(e)})
@@ -2364,6 +2411,16 @@ def add_pg_connection(request):
                 password=password,
                 sslmode=sslmode,
                 status='active'
+            )
+            
+            # 记录审计日志
+            record_audit(
+                request,
+                action='create_postgres_connection',
+                target_type='connection',
+                target_id=connection.id,
+                payload={'name': name, 'host': host, 'database': database},
+                result='success'
             )
             
             return JsonResponse({'status': 'success'})
@@ -2533,6 +2590,16 @@ def delete_pg_connection(request):
             connection_id = request.POST.get('connection_id')
             connection = PostgresConnection.objects.get(id=connection_id, user=request.user)
             connection.delete()
+            
+            # 记录审计日志
+            record_audit(
+                request,
+                action='delete_postgres_connection',
+                target_type='connection',
+                target_id=connection_id,
+                result='success'
+            )
+            
             return JsonResponse({'status': 'success'})
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': str(e)})
@@ -2588,6 +2655,17 @@ def edit_pg_connection(request):
                 connection.sslmode = (sslmode or '').strip()
             
             connection.save()
+            
+            # 记录审计日志
+            record_audit(
+                request,
+                action='edit_postgres_connection',
+                target_type='connection',
+                target_id=connection_id,
+                payload={'name': name, 'host': host, 'database': database},
+                result='success'
+            )
+            
             return JsonResponse({'status': 'success'})
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': str(e)})

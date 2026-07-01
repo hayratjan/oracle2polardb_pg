@@ -1,6 +1,6 @@
 from django.shortcuts import render, get_object_or_404
 from django.http import JsonResponse
-from .models import MigrationTask
+from .models import MigrationTask, AuditLog
 from .batch_config import (
     MIGRATION_COMMIT_EVERY_BATCHES,
     MIGRATION_FETCH_BATCH_SIZE,
@@ -22,6 +22,23 @@ import sqlite3
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def record_audit(request, action, target_type='', target_id=None, payload=None, result='success'):
+    """记录审计日志"""
+    try:
+        AuditLog.objects.create(
+            user=request.user if request.user.is_authenticated else None,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            ip_address=request.META.get('REMOTE_ADDR'),
+            user_agent=request.META.get('HTTP_USER_AGENT', '')[:255],
+            payload=payload,
+            result=result,
+        )
+    except Exception as e:
+        logger.error(f'记录审计日志失败: {e}', exc_info=True)
 
 SQLITE_ALLOWED_SUFFIXES = ('.sqlite', '.sqlite3', '.db')
 
@@ -371,6 +388,16 @@ def start_task(request, task_id):
             task.save()
             logger.info(f"任务状态已置为待执行: 任务ID={task_id}, resume={resume}")
             
+            # 记录审计日志
+            record_audit(
+                request,
+                action='start_task',
+                target_type='task',
+                target_id=task_id,
+                payload={'resume': resume, 'postgres_database': postgres_database},
+                result='success'
+            )
+            
             # 确保任务状态已被更新并可以被客户端查询到
             from django.db import connection
             connection.close()
@@ -581,6 +608,15 @@ def cancel_task(request, task_id):
                 task.save()
                 message = "任务已取消"
                 logger.info(f"任务 {task_id} 已标记为取消")
+                
+                # 记录审计日志
+                record_audit(
+                    request,
+                    action='cancel_task',
+                    target_type='task',
+                    target_id=task_id,
+                    result='success'
+                )
             else:
                 message = f"无法取消处于 {task.status} 状态的任务"
                 logger.warning(message)
@@ -639,6 +675,16 @@ def delete_task(request, task_id):
             
             task.delete()
             logger.info(f"任务 {task_id} 已删除")
+            
+            # 记录审计日志
+            record_audit(
+                request,
+                action='delete_task',
+                target_type='task',
+                target_id=task_id,
+                result='success'
+            )
+            
             return JsonResponse({'status': 'success'})
         except Exception as e:
             error_message = f"删除任务失败: {str(e)}"

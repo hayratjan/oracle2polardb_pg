@@ -10,7 +10,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.http import JsonResponse
 from django.conf import settings
-from .models import OracleConnection, PostgresConnection, MigrationTask
+from .models import OracleConnection, PostgresConnection, MigrationTask, AuditLog
+from .permissions import IsAdmin, IsOperatorOrAdmin, IsViewerOrAbove
 from .serializers import (
     OracleConnectionSerializer,
     PostgresConnectionSerializer,
@@ -47,11 +48,27 @@ def _safe_error(e: Exception, prefix: str = '操作失败') -> Response:
 class OracleConnectionViewSet(viewsets.ModelViewSet):
     queryset = OracleConnection.objects.all().order_by('id')
     serializer_class = OracleConnectionSerializer
+    
+    def get_permissions(self):
+        """根据操作类型返回不同的权限类"""
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            # 创建/修改/删除需要操作员或管理员权限
+            return [IsOperatorOrAdmin()]
+        # 只读操作只需登录即可
+        return [permissions.IsAuthenticated()]
 
 
 class PostgresConnectionViewSet(viewsets.ModelViewSet):
     queryset = PostgresConnection.objects.all().order_by('id')
     serializer_class = PostgresConnectionSerializer
+    
+    def get_permissions(self):
+        """根据操作类型返回不同的权限类"""
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            # 创建/修改/删除需要操作员或管理员权限
+            return [IsOperatorOrAdmin()]
+        # 只读操作只需登录即可
+        return [permissions.IsAuthenticated()]
     
     @action(detail=True, methods=['post'])
     def test(self, request, pk=None):
@@ -168,6 +185,14 @@ class MigrationTaskViewSet(viewsets.ModelViewSet):
     # 按创建时间倒序，避免分页时 UnorderedObjectListWarning
     queryset = MigrationTask.objects.all().order_by('-created_at')
     serializer_class = MigrationTaskSerializer
+    
+    def get_permissions(self):
+        """根据操作类型返回不同的权限类"""
+        if self.action == 'delete':
+            # 删除任务需要操作员或管理员权限
+            return [IsOperatorOrAdmin()]
+        # 其他操作只需登录即可
+        return [permissions.IsAuthenticated()]
 
     def retrieve(self, request, *args, **kwargs):
         """任务详情；仅当 ?reconcile=1 时修正孤儿 running（避免频繁 GET 误杀仍在其它进程执行的任务）。"""
@@ -601,123 +626,125 @@ class DatabaseInfoAPIView(APIView):
 
 class OracleSchemasAPIView(APIView):
     def get(self, request):
+        connection = cursor = None
         try:
             connection_id = request.query_params.get('connection_id')
-            
+
             if not connection_id:
                 return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             from . import views
             connection = views.get_oracle_connection(connection_id)
             cursor = connection.cursor()
-            
+
             query = """
-            SELECT USERNAME 
-            FROM ALL_USERS 
+            SELECT USERNAME
+            FROM ALL_USERS
             WHERE USERNAME NOT IN ('SYS', 'SYSTEM', 'OUTLN', 'DBSNMP', 'APPQOSSYS', 'AUDSYS', 'CTXSYS', 'DVSYS', 'GSMADMIN_INTERNAL', 'LBACSYS', 'MDSYS', 'OJVMSYS', 'OLAPSYS', 'ORDDATA', 'ORDSYS', 'REMOTE_SCHEDULER_AGENT', 'WMSYS', 'XDB')
             ORDER BY USERNAME
             """
             cursor.execute(query)
             schemas = [row[0] for row in cursor.fetchall()]
-            cursor.close()
-            connection.close()
-            
+
             return Response({
                 'status': 'success',
                 'schemas': schemas
             })
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            safe_close_db_resources(cursor, connection)
 
 
 class OracleTablesAPIView(APIView):
     def get(self, request):
+        connection = cursor = None
         try:
             connection_id = request.query_params.get('connection_id')
             schema = request.query_params.get('schema')
-            
+
             if not connection_id or not schema:
                 return Response({'status': 'error', 'message': '缺少必要参数：connection_id, schema'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             from . import views
             connection = views.get_oracle_connection(connection_id)
             cursor = connection.cursor()
-            
+
             query = """
-            SELECT TABLE_NAME 
-            FROM ALL_TABLES 
-            WHERE OWNER = :schema 
+            SELECT TABLE_NAME
+            FROM ALL_TABLES
+            WHERE OWNER = :schema
             ORDER BY TABLE_NAME
             """
             cursor.execute(query, schema=schema)
             tables = [row[0] for row in cursor.fetchall()]
-            cursor.close()
-            connection.close()
-            
+
             return Response({
                 'status': 'success',
                 'tables': tables
             })
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            safe_close_db_resources(cursor, connection)
 
 
 class OracleUsersAPIView(APIView):
     def get(self, request):
+        connection = cursor = None
         try:
             connection_id = request.query_params.get('connection_id')
-            
+
             if not connection_id:
                 return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             from . import views
             connection = views.get_oracle_connection(connection_id)
             cursor = connection.cursor()
-            
+
             query = """
-            SELECT USERNAME 
-            FROM ALL_USERS 
+            SELECT USERNAME
+            FROM ALL_USERS
             WHERE USERNAME NOT IN ('SYS', 'SYSTEM', 'OUTLN', 'DBSNMP', 'APPQOSSYS', 'AUDSYS', 'CTXSYS', 'DVSYS', 'GSMADMIN_INTERNAL', 'LBACSYS', 'MDSYS', 'OJVMSYS', 'OLAPSYS', 'ORDDATA', 'ORDSYS', 'REMOTE_SCHEDULER_AGENT', 'WMSYS', 'XDB')
             ORDER BY USERNAME
             """
             cursor.execute(query)
             users = [row[0] for row in cursor.fetchall()]
-            cursor.close()
-            connection.close()
-            
+
             return Response({
                 'status': 'success',
                 'users': users
             })
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            safe_close_db_resources(cursor, connection)
 
 
 class PgSchemasAPIView(APIView):
     def get(self, request):
+        conn = cursor = None
         try:
             connection_id = request.query_params.get('connection_id')
             database = request.query_params.get('database')
             limit = request.query_params.get('limit', 1000)
-            
+
             if not connection_id:
                 return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             from .models import PostgresConnection
             from .views import _pg_connect_kwargs
             pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
             target_database = database or pg_conn.database
+
+            # 检查目标数据库是否存在
+            check_conn = check_cursor = None
             try:
-                conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, 'postgres'))
-                cursor = conn.cursor()
-                
-                # 检查目标数据库是否存在
-                cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", [target_database])
-                db_exists = cursor.fetchone()
-                
-                cursor.close()
-                conn.close()
-                
+                check_conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, 'postgres'))
+                check_cursor = check_conn.cursor()
+                check_cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", [target_database])
+                db_exists = check_cursor.fetchone()
+
                 if not db_exists:
                     # 如果目标数据库不存在，返回空列表
                     return Response({
@@ -727,97 +754,102 @@ class PgSchemasAPIView(APIView):
                     })
             except Exception as check_error:
                 pass
+            finally:
+                safe_close_db_resources(check_cursor, check_conn)
+
             conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, target_database))
             cursor = conn.cursor()
-            
+
             cursor.execute("""
-            SELECT schema_name 
-            FROM information_schema.schemata 
+            SELECT schema_name
+            FROM information_schema.schemata
             WHERE schema_name NOT IN ('pg_catalog', 'information_schema')
             ORDER BY schema_name
             LIMIT %s
             """, [limit])
-            
+
             schemas = [row[0] for row in cursor.fetchall()]
-            cursor.close()
-            conn.close()
-            
+
             return Response({
                 'status': 'success',
                 'schemas': schemas
             })
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            safe_close_db_resources(cursor, conn)
 
 
 class PgTablesAPIView(APIView):
     def get(self, request):
+        conn = cursor = None
         try:
             connection_id = request.query_params.get('connection_id')
             schema = request.query_params.get('schema')
             database = request.query_params.get('database')
-            
+
             if not connection_id or not schema:
                 return Response({'status': 'error', 'message': '缺少必要参数：connection_id, schema'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             from .models import PostgresConnection
             from .views import _pg_connect_kwargs
             pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
             conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, database or pg_conn.database))
             cursor = conn.cursor()
-            
+
             cursor.execute("""
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_schema = %s 
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = %s
             AND table_type = 'BASE TABLE'
             ORDER BY table_name
             """, [schema])
-            
+
             tables = [row[0] for row in cursor.fetchall()]
-            cursor.close()
-            conn.close()
-            
+
             return Response({
                 'status': 'success',
                 'tables': tables
             })
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            safe_close_db_resources(cursor, conn)
 
 
 class PgUsersAPIView(APIView):
     def get(self, request):
+        conn = cursor = None
         try:
             connection_id = request.query_params.get('connection_id')
             database = request.query_params.get('database')
-            
+
             if not connection_id:
                 return Response({'status': 'error', 'message': '未提供连接ID'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             from .models import PostgresConnection
             from .views import _pg_connect_kwargs
             pg_conn = get_object_or_404(PostgresConnection, pk=connection_id)
             conn = psycopg2.connect(**_pg_connect_kwargs(pg_conn, database or pg_conn.database))
             cursor = conn.cursor()
-            
+
             cursor.execute("""
-            SELECT usename 
-            FROM pg_user 
+            SELECT usename
+            FROM pg_user
             WHERE usename NOT IN ('postgres')
             ORDER BY usename
             """)
-            
+
             users = [row[0] for row in cursor.fetchall()]
-            cursor.close()
-            conn.close()
-            
+
             return Response({
                 'status': 'success',
                 'users': users
             })
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            safe_close_db_resources(cursor, conn)
 
 
 class MigrationSettingsAPIView(APIView):
@@ -843,7 +875,12 @@ class MigrationSettingsAPIView(APIView):
 
 class SystemSettingsAPIView(APIView):
     """系统设置读写接口（持久化至 PlatformConfig）"""
-    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_permissions(self):
+        """GET 操作只需登录，POST 操作需要管理员权限"""
+        if self.request.method == 'POST':
+            return [IsAdmin()]
+        return [permissions.IsAuthenticated()]
 
     def get(self, request):
         try:
@@ -857,8 +894,39 @@ class SystemSettingsAPIView(APIView):
             from .platform_config import save_system_settings
             data = request.data or {}
             settings = save_system_settings(data)
+            
+            # 记录审计日志
+            try:
+                AuditLog.objects.create(
+                    user=request.user if request.user.is_authenticated else None,
+                    action='update_system_settings',
+                    target_type='settings',
+                    target_id=None,
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                    user_agent=request.META.get('HTTP_USER_AGENT', '')[:255],
+                    payload=data,
+                    result='success',
+                )
+            except Exception as audit_err:
+                logger.error(f'记录审计日志失败: {audit_err}', exc_info=True)
+            
             return Response({'status': 'success', 'message': '保存成功', 'data': settings})
         except Exception as e:
+            # 记录失败的审计日志
+            try:
+                AuditLog.objects.create(
+                    user=request.user if request.user.is_authenticated else None,
+                    action='update_system_settings',
+                    target_type='settings',
+                    target_id=None,
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                    user_agent=request.META.get('HTTP_USER_AGENT', '')[:255],
+                    payload=request.data,
+                    result='failed',
+                )
+            except Exception as audit_err:
+                logger.error(f'记录审计日志失败: {audit_err}', exc_info=True)
+            
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -998,6 +1066,7 @@ class PgTablespacesAPIView(APIView):
 
 class PgCreateDatabaseAPIView(APIView):
     """创建 PolarDB-PG 数据库"""
+    permission_classes = [IsAdmin]
 
     def post(self, request):
         try:
@@ -1019,6 +1088,7 @@ class PgCreateDatabaseAPIView(APIView):
 
 class PgCreateTablespaceAPIView(APIView):
     """创建 PolarDB-PG 表空间"""
+    permission_classes = [IsAdmin]
 
     def post(self, request):
         try:
@@ -1037,6 +1107,7 @@ class PgCreateTablespaceAPIView(APIView):
 
 class PgCreateUserAPIView(APIView):
     """创建 PolarDB-PG 用户/角色"""
+    permission_classes = [IsAdmin]
 
     def post(self, request):
         try:

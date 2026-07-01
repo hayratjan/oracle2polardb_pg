@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.conf import settings
 import os
 
 
@@ -276,3 +277,95 @@ class PlatformConfig(models.Model):
     def save(self, *args, **kwargs):
         self.pk = 1
         super().save(*args, **kwargs)
+
+
+class UserRole(models.TextChoices):
+    """用户角色枚举"""
+    ADMIN = 'admin', '管理员'
+    OPERATOR = 'operator', '操作员'
+    VIEWER = 'viewer', '只读用户'
+
+
+class UserProfile(models.Model):
+    """用户角色配置（一对一关联 User，兼容性好）"""
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='profile',
+        verbose_name='用户'
+    )
+    role = models.CharField(
+        max_length=20,
+        choices=UserRole.choices,
+        default=UserRole.VIEWER,
+        verbose_name='角色'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        db_table = 'migration_user_profile'
+        verbose_name = '用户角色配置'
+        verbose_name_plural = '用户角色配置'
+
+    def __str__(self):
+        return f"{self.user.username} ({self.get_role_display()})"
+
+
+class AuditLog(models.Model):
+    """审计日志模型"""
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='操作用户'
+    )
+    action = models.CharField(
+        max_length=50,
+        verbose_name='操作类型'
+    )  # start_task, cancel_task, delete_task, create_connection, update_settings 等
+    target_type = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name='目标类型'
+    )  # task, connection, settings
+    target_id = models.IntegerField(
+        null=True,
+        blank=True,
+        verbose_name='目标 ID'
+    )
+    ip_address = models.GenericIPAddressField(
+        null=True,
+        blank=True,
+        verbose_name='IP 地址'
+    )
+    user_agent = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name='User Agent'
+    )
+    payload = models.JSONField(
+        null=True,
+        blank=True,
+        verbose_name='操作参数'
+    )
+    result = models.CharField(
+        max_length=20,
+        default='success',
+        verbose_name='结果'
+    )  # success, failed, denied
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='操作时间'
+    )
+
+    class Meta:
+        db_table = 'migration_audit_log'
+        ordering = ['-created_at']
+        verbose_name = '审计日志'
+        verbose_name_plural = '审计日志'
+
+    def __str__(self):
+        username = self.user.username if self.user else '匿名'
+        return f"[{self.created_at}] {username} - {self.action} ({self.result})"

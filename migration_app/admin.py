@@ -1,5 +1,8 @@
 from django.contrib import admin
-from .models import OracleConnection, PostgresConnection, MigrationTask, MigrationTaskLog, PlatformConfig
+from .models import (
+    OracleConnection, PostgresConnection, MigrationTask,
+    MigrationTaskLog, PlatformConfig, AuditLog, UserProfile
+)
 
 
 @admin.register(MigrationTaskLog)
@@ -33,3 +36,20 @@ class MigrationTaskAdmin(admin.ModelAdmin):
 @admin.register(PlatformConfig)
 class PlatformConfigAdmin(admin.ModelAdmin):
     list_display = ('id', 'default_conflict_strategy', 'batch_size', 'max_concurrent_tasks', 'updated_at')
+
+
+@admin.register(AuditLog)
+class AuditLogAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'action', 'target_type', 'target_id', 'ip_address', 'result', 'created_at')
+    list_filter = ('action', 'target_type', 'result', 'created_at')
+    search_fields = ('user__username', 'action', 'ip_address')
+    readonly_fields = ('user', 'action', 'target_type', 'target_id', 'ip_address', 'user_agent', 'payload', 'result', 'created_at')
+    date_hierarchy = 'created_at'
+
+
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'role', 'created_at', 'updated_at')
+    list_filter = ('role', 'created_at')
+    search_fields = ('user__username',)
+    raw_id_fields = ('user',)
