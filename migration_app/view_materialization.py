@@ -73,8 +73,10 @@ def _resolve_target_table_name(
     id_case = getattr(task, 'identifier_case', 'lower') or 'lower'
     target_prefix = (task.target_object or '').strip()
     if multi_view:
+        # v2.3.1: 多视图模式下未指定前缀时,默认用源 schema 名作为前缀
+        # 避免整库迁移 1330 个视图时强制要求用户填写前缀
         if not target_prefix:
-            raise ValueError('多视图迁移时必须指定目标表名前缀')
+            target_prefix = (task.source_schema or 'view').strip()
         return apply_identifier_case(f"{target_prefix}_{view_name}", id_case)
     derived = (task.target_object or task.source_object or view_name).strip()
     if not derived:
