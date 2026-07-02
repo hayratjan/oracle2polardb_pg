@@ -68,6 +68,8 @@ export interface MigrationTask {
   last_schedule_run?: string
   /** 主键对齐单次允许对比的最大行数（源、目标两侧） */
   sync_max_pkey_rows?: number
+  /** 视图迁移模式：definition=创建视图（视图→视图）；materialize=物化为表（视图→表，默认） */
+  view_migration_mode?: string
   /** 目标环境配置（库/表空间/用户/Schema） */
   target_provisioning?: TargetProvisioningConfig
   migration_report?: Record<string, unknown>

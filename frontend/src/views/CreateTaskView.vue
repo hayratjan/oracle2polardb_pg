@@ -40,6 +40,24 @@
                 </div>
               </div>
 
+              <div v-if="form.task_type === 'view'" class="row g-3 mt-2 border rounded p-3 bg-light">
+                <div class="col-12"><strong class="text-muted">视图迁移模式</strong></div>
+                <div class="col-md-6">
+                  <label class="form-label">迁移方式</label>
+                  <select v-model="form.view_migration_mode" class="form-select-sm">
+                    <option value="definition">创建视图（视图→视图，仅转换 SQL 定义）</option>
+                    <option value="materialize">物化为表（视图→表，搬数据）</option>
+                  </select>
+                </div>
+                <div class="col-12 small text-muted" v-if="form.view_migration_mode === 'definition'">
+                  将 Oracle 视图 SQL 语法转换为 PostgreSQL 语法后在目标库 <code>CREATE VIEW</code>，不迁移数据。
+                  仅做 SQL 转换，复杂 Oracle 专有语法需人工复核。
+                </div>
+                <div class="col-12 small text-muted" v-else>
+                  将 Oracle 视图查询结果写入目标库的新表（<code>CREATE TABLE ... AS SELECT</code>），物化为实际数据。
+                </div>
+              </div>
+
               <div v-if="form.task_type === 'table'" class="row g-3 mt-2 border rounded p-3 bg-light">
                 <div class="col-12"><strong class="text-muted">增量与定时（可选）</strong></div>
                 <div class="col-md-4">
@@ -417,6 +435,7 @@ const form = ref<MigrationTask>({
   schedule_enabled: false,
   schedule_interval_minutes: 60,
   sync_max_pkey_rows: 500000,
+  view_migration_mode: 'materialize',
 })
 
 /** 水位列或主键对齐模式才允许勾选定时 */
