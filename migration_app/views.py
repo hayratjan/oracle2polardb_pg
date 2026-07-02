@@ -742,13 +742,40 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
     # 获取表结构
     # v2.3: 增加 IDENTITY_COLUMN/VIRTUAL_COLUMN/HIDDEN_COLUMN/DATA_DEFAULT 字段
     # 用于识别 Oracle 12c+ 自增列、虚拟列、不可见列并生成对应的 PG DDL
-    column_query = """
+    # v2.3.1: 兼容 Oracle 11g 及更早版本(ALL_TAB_COLUMNS 无 HIDDEN_COLUMN 等字段)
+    #         先检测版本,12c+ 才查这些字段
+    column_query_12c = """
     SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, COLUMN_ID,
            IDENTITY_COLUMN, VIRTUAL_COLUMN, HIDDEN_COLUMN, DATA_DEFAULT
     FROM ALL_TAB_COLUMNS
     WHERE OWNER = :schema AND TABLE_NAME = :table_name
     ORDER BY COLUMN_ID
     """
+    column_query_11g = """
+    SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, COLUMN_ID,
+           'NO' AS IDENTITY_COLUMN, 'NO' AS VIRTUAL_COLUMN, 'NO' AS HIDDEN_COLUMN, DATA_DEFAULT
+    FROM ALL_TAB_COLUMNS
+    WHERE OWNER = :schema AND TABLE_NAME = :table_name
+    ORDER BY COLUMN_ID
+    """
+    # 检测 Oracle 版本,12c+ 才支持 IDENTITY_COLUMN/VIRTUAL_COLUMN/HIDDEN_COLUMN
+    try:
+        oracle_cursor.execute("SELECT banner FROM v$version WHERE banner LIKE 'Oracle%'")
+        version_banner = oracle_cursor.fetchone()
+        is_oracle_12c_plus = False
+        if version_banner:
+            import re as _re
+            m = _re.search(r'Oracle\s+(\d+)', version_banner[0])
+            if m and int(m.group(1)) >= 12:
+                is_oracle_12c_plus = True
+    except Exception:
+        is_oracle_12c_plus = False  # 无法获取版本时走 11g 查询(更兼容)
+
+    if is_oracle_12c_plus:
+        column_query = column_query_12c
+    else:
+        column_query = column_query_11g
+
     oracle_cursor.execute(column_query, schema=source_schema, table_name=table_name)
     columns = oracle_cursor.fetchall()
     if not columns:
