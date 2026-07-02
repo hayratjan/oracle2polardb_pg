@@ -446,7 +446,7 @@ LOGGING = {
         },
         'migration_app': {
             'handlers': ['console'],
-            'level': 'DEBUG' if DEBUG else 'INFO',
+            'level': 'INFO',  # v2.3.1: 统一 INFO，避免 DEBUG 刷屏
             'propagate': False,
         },
         # 第三方库噪音降级

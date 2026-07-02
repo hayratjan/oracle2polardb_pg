@@ -1378,7 +1378,7 @@ def migrate_table(task_id, postgres_database=None):
 
 def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None, data_scale=None):
     """将Oracle数据类型转换为PostgreSQL数据类型"""
-    logger.debug(f"转换数据类型: {oracle_type}, 长度={data_length}, 精度={data_precision}, 小数位={data_scale}")
+    # v2.3.1: 移除逐列 DEBUG 日志，避免整库迁移时上万次输出刷屏
     
     oracle_type = oracle_type.upper()
     
