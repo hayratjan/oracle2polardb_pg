@@ -394,6 +394,39 @@ def migrate_view(task_id, postgres_database=None):
     )
 
 
+def _check_view_dependencies(pg_query, target_tables, target_schema, log):
+    """
+    v2.3.2: 扫描视图 SQL 中的 FROM/JOIN 表引用，检查目标 schema 是否已存在该表。
+    PostgreSQL 将未加引号的标识符折叠为小写，故统一取小写比较。
+
+    只做轻量级启发式检查（非完整 SQL 解析），用于提前预警依赖缺失，
+    不会阻止 CREATE VIEW 执行（仍由 PG 在执行时报精确错误）。
+    """
+    from .task_logging import make_warn_log
+    if not pg_query or not target_tables:
+        return
+    # 匹配 FROM / JOIN 后的表名（不含逗号、空格、子查询括号）
+    # 不匹配 schema.table 中的 schema 部分，只取最后的表名
+    ref_pattern = re.compile(
+        r'\b(?:FROM|JOIN)\s+(?:[\w]+\.)?([a-zA-Z_][a-zA-Z0-9_]*)',
+        re.IGNORECASE,
+    )
+    # 排除 SQL 关键字（如 FROM SELECT 子查询中的 SELECT）
+    sql_keywords = {
+        'select', 'where', 'group', 'order', 'having', 'union',
+        'intersect', 'minus', 'dual', 'subquery',
+    }
+    found = set()
+    for m in ref_pattern.finditer(pg_query):
+        tbl = m.group(1).lower()
+        if tbl not in sql_keywords and len(tbl) > 1:
+            found.add(tbl)
+    missing = [t for t in found if t not in target_tables]
+    if missing:
+        make_warn_log(log, f'  依赖预检: 视图 SQL 引用了目标 schema 不存在的表: {", ".join(sorted(missing))}')
+        make_warn_log(log, f'  提示: 请先迁移上述基表到 {target_schema},否则 CREATE VIEW 会报"关系不存在"')
+
+
 def _migrate_view_definition(task_id, postgres_database=None):
     """在目标库创建 CREATE VIEW（Oracle 语法经 convert_oracle_to_pg_view 转换）。"""
     task = get_object_or_404(MigrationTask, pk=task_id)
@@ -444,6 +477,18 @@ def _migrate_view_definition(task_id, postgres_database=None):
         pg_cursor.execute(f'SET search_path TO {target_schema}, public')
         make_info_log(log, f'已设置 search_path: {target_schema}, public')
 
+        # v2.3.2: 预取目标 schema 中所有表/视图名，用于视图 SQL 基表依赖预检查
+        pg_cursor.execute(
+            """
+            SELECT c.relname FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = %s AND c.relkind IN ('r', 'v', 'm', 'f', 'p')
+            """,
+            (target_schema,),
+        )
+        target_tables = {row[0].lower() for row in pg_cursor.fetchall()}
+        make_info_log(log, f'目标 schema {target_schema} 现有表/视图数: {len(target_tables)}')
+
         for idx, view_name in enumerate(views):
             make_step_log(log, f'创建视图定义 {task.source_schema}.{view_name}',
                           total=len(views), index=idx)
@@ -472,23 +517,53 @@ def _migrate_view_definition(task_id, postgres_database=None):
                 )
             qualified_view = build_qualified_table_name(target_schema, target_view)
 
+            # v2.3.2: 基表依赖预检查 — 扫描视图 SQL 中的 FROM/JOIN 引用，
+            # 检查引用的表是否已在目标 schema 中存在（PG 将未加引号的标识符折叠为小写）
+            _check_view_dependencies(pg_query, target_tables, target_schema, log)
+
+            # v2.3.2: 使用 pg_class 替代 information_schema.tables
+            # 后者有权限过滤（pg_has_role/has_table_privilege），可能漏检其他用户创建的对象
             pg_cursor.execute(
                 """
-                SELECT 1 FROM information_schema.views
-                WHERE table_schema = %s AND table_name = %s
+                SELECT c.relkind FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = %s AND c.relname = %s
                 """,
-                (target_schema, apply_identifier_case(target_view, id_case)),
+                (target_schema, target_view),
             )
-            exists = pg_cursor.fetchone() is not None
-            if exists:
+            row_exists = pg_cursor.fetchone()
+            if row_exists:
+                relkind = row_exists[0]
+                relkind_map = {
+                    'r': 'BASE TABLE', 'v': 'VIEW', 'm': 'MATERIALIZED VIEW',
+                    'S': 'SEQUENCE', 'f': 'FOREIGN TABLE', 'p': 'PARTITIONED TABLE',
+                }
+                obj_type = relkind_map.get(relkind, f'RELKIND={relkind}')
                 if strategy == 'skip':
-                    make_ok_log(log, f'视图 {target_schema}.{target_view} 已存在，跳过')
+                    make_ok_log(log, f'目标对象 {target_schema}.{target_view} 已存在（{obj_type}），跳过')
                     continue
                 if strategy == 'error':
-                    make_error_log(log, f'视图 {target_schema}.{target_view} 已存在')
-                    raise Exception(f"视图 {target_schema}.{target_view} 已存在")
-                make_warn_log(log, f'冲突策略 replace，DROP 视图 {target_schema}.{target_view}')
+                    # v2.3.2: 改为 continue 而非 raise，避免单个已存在对象中断整批迁移
+                    make_error_log(log, f'目标对象 {target_schema}.{target_view} 已存在（{obj_type}）')
+                    failed.append(view_name)
+                    continue
+                # replace 策略：根据对象类型执行对应 DROP
+                make_warn_log(log, f'冲突策略 replace，DROP {obj_type} {target_schema}.{target_view}')
+                if relkind == 'v':
+                    pg_cursor.execute(f"DROP VIEW IF EXISTS {qualified_view} CASCADE")
+                elif relkind == 'm':
+                    pg_cursor.execute(f"DROP MATERIALIZED VIEW IF EXISTS {qualified_view} CASCADE")
+                elif relkind == 'S':
+                    pg_cursor.execute(f"DROP SEQUENCE IF EXISTS {qualified_view} CASCADE")
+                else:
+                    pg_cursor.execute(f"DROP TABLE IF EXISTS {qualified_view} CASCADE")
+                pg_conn.commit()
+            elif strategy == 'replace':
+                # v2.3.2: 安全兜底 — 即使 pg_class 未找到（如刚提交的对象在事务快照外），
+                # replace 策略也执行全部 DROP（IF EXISTS 保证不会报错）
                 pg_cursor.execute(f"DROP VIEW IF EXISTS {qualified_view} CASCADE")
+                pg_cursor.execute(f"DROP MATERIALIZED VIEW IF EXISTS {qualified_view} CASCADE")
+                pg_cursor.execute(f"DROP TABLE IF EXISTS {qualified_view} CASCADE")
                 pg_conn.commit()
 
             create_sql = f"CREATE VIEW {qualified_view} AS\n{pg_query}"
@@ -509,6 +584,9 @@ def _migrate_view_definition(task_id, postgres_database=None):
                 elif 'syntax error' in err_msg.lower() or '语法错误' in err_msg:
                     make_warn_log(log, f'  可能原因: 视图 SQL 含 Oracle 专有语法未被转换')
                     make_warn_log(log, f'  建议: 请查看上方 [SQL] 日志中的 CREATE VIEW 语句,手动修正后执行')
+                elif '已经存在' in err_msg or 'already exists' in err_msg.lower():
+                    make_warn_log(log, f'  可能原因: 目标对象 {target_schema}.{target_view} 已存在但未被存在性检查捕获')
+                    make_warn_log(log, f'  建议: 手动执行 DROP 后重试,或将冲突策略改为 replace')
 
         make_step_log(log, '任务结束')
         if manual_review_all:
