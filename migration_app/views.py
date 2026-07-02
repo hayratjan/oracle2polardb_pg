@@ -439,6 +439,11 @@ def _migrate_view_definition(task_id, postgres_database=None):
             target_prefix = (task.source_schema or 'v').strip()
             make_info_log(log, f'多视图模式: 未指定目标前缀，使用源 schema 名作为前缀: {target_prefix}')
 
+        # v2.3.1: 设置 search_path 到目标 schema，使视图 SQL 中不带 schema 前缀的
+        # 基表引用能被 PG 正确解析（Oracle 视图 SQL 通常不带 schema 前缀）
+        pg_cursor.execute(f'SET search_path TO {target_schema}, public')
+        make_info_log(log, f'已设置 search_path: {target_schema}, public')
+
         for idx, view_name in enumerate(views):
             make_step_log(log, f'创建视图定义 {task.source_schema}.{view_name}',
                           total=len(views), index=idx)
@@ -495,7 +500,15 @@ def _migrate_view_definition(task_id, postgres_database=None):
             except Exception as ddl_err:
                 pg_conn.rollback()
                 failed.append(view_name)
+                err_msg = str(ddl_err)
                 make_error_log(log, f'创建视图失败: {ddl_err}')
+                # v2.3.1: 识别常见错误并给出修复建议
+                if '不存在' in err_msg or 'does not exist' in err_msg.lower():
+                    make_warn_log(log, f'  可能原因: 视图依赖的基表未迁移到目标 schema {target_schema}')
+                    make_warn_log(log, f'  建议: 请先完成基表迁移,再重试视图迁移;或检查表名大小写是否匹配')
+                elif 'syntax error' in err_msg.lower() or '语法错误' in err_msg:
+                    make_warn_log(log, f'  可能原因: 视图 SQL 含 Oracle 专有语法未被转换')
+                    make_warn_log(log, f'  建议: 请查看上方 [SQL] 日志中的 CREATE VIEW 语句,手动修正后执行')
 
         make_step_log(log, '任务结束')
         if manual_review_all:
