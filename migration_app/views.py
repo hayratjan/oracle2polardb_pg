@@ -432,6 +432,12 @@ def _migrate_view_definition(task_id, postgres_database=None):
         target_schema = (task.target_schema or 'public').strip()
         strategy = task.conflict_strategy or 'error'
         failed, manual_review_all = [], []
+        multi_view = len(views) > 1
+        # v2.3.1: 多视图模式下未指定前缀时，默认用源 schema 名作为前缀
+        target_prefix = (task.target_object or '').strip()
+        if multi_view and not target_prefix:
+            target_prefix = (task.source_schema or 'v').strip()
+            make_info_log(log, f'多视图模式: 未指定目标前缀，使用源 schema 名作为前缀: {target_prefix}')
 
         for idx, view_name in enumerate(views):
             make_step_log(log, f'创建视图定义 {task.source_schema}.{view_name}',
@@ -452,11 +458,13 @@ def _migrate_view_definition(task_id, postgres_database=None):
                 manual_review_all.extend(manual_items)
                 make_warn_log(log, f'需人工审查 ({len(manual_items)} 项): {", ".join(manual_items)}')
 
-            target_view = apply_identifier_case(
-                (task.target_object or view_name).strip() if len(views) == 1
-                else apply_identifier_case(f"{(task.target_object or 'v')}_{view_name}", id_case),
-                id_case,
-            )
+            # v2.3.1: 修复嵌套 apply_identifier_case bug + 多视图前缀逻辑
+            if multi_view:
+                target_view = apply_identifier_case(f"{target_prefix}_{view_name}", id_case)
+            else:
+                target_view = apply_identifier_case(
+                    (task.target_object or view_name).strip(), id_case
+                )
             qualified_view = build_qualified_table_name(target_schema, target_view)
 
             pg_cursor.execute(
@@ -489,11 +497,6 @@ def _migrate_view_definition(task_id, postgres_database=None):
                 failed.append(view_name)
                 make_error_log(log, f'创建视图失败: {ddl_err}')
 
-        oracle_cursor.close()
-        oracle_conn.close()
-        pg_cursor.close()
-        pg_conn.close()
-
         make_step_log(log, '任务结束')
         if manual_review_all:
             make_warn_log(log, f'共 {len(manual_review_all)} 项 Oracle 专有语法需人工复核后再投入生产')
@@ -514,6 +517,15 @@ def _migrate_view_definition(task_id, postgres_database=None):
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()
         task.save()
+    finally:
+        # v2.3.1: 修复连接泄漏，保证异常时也关闭连接
+        from .migration_errors import safe_close_db_resources
+        safe_close_db_resources(
+            locals().get('oracle_cursor'),
+            locals().get('oracle_conn'),
+            locals().get('pg_cursor'),
+            locals().get('pg_conn'),
+        )
 
 
 def migrate_routine(task_id, postgres_database=None):
