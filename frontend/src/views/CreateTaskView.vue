@@ -587,7 +587,7 @@ const invertSelection = () => {
 }
 
 /** 根据当前任务类型返回合适的对象图标 */
-const getObjectIcon = (obj: string): string => {
+const getObjectIcon = (_obj: string): string => {
   const t = form.value.task_type
   if (t === 'view' || t === 'view_to_table' || t === 'view_to_sqlite') return 'bi-eye'
   if (t === 'materialized_view') return 'bi-eye-fill'

@@ -164,7 +164,15 @@
 <script setup lang="ts">
 import { ref, watch, reactive } from 'vue'
 import { databaseApi, targetEnvApi } from '@/api'
-import type { TargetProvisioningConfig } from '@/api'
+import type { TargetProvisioningConfig, TargetResourceConfig } from '@/api'
+
+/** 本地使用的目标环境配置类型：database/tablespace/user/schema 均已初始化，不为 undefined */
+type LocalTargetProvisioning = Omit<TargetProvisioningConfig, 'database' | 'tablespace' | 'user' | 'schema'> & {
+  database: TargetResourceConfig
+  tablespace: TargetResourceConfig
+  user: TargetResourceConfig
+  schema: TargetResourceConfig
+}
 
 const props = withDefaults(defineProps<{
   postgresConnection: number
@@ -181,7 +189,7 @@ const emit = defineEmits<{
 }>()
 
 /** 本地资源配置 */
-const local = reactive<TargetProvisioningConfig>({
+const local = reactive<LocalTargetProvisioning>({
   database: { mode: 'existing', name: '', encoding: 'UTF8' },
   tablespace: { mode: 'skip', name: '', location: '' },
   user: { mode: 'skip', username: '', password: '', createdb: false },

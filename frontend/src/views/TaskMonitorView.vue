@@ -28,7 +28,7 @@
             <i :class="['bi', item.icon]"></i>
           </div>
           <div>
-            <div class="stat-card-number">{{ data.summary[item.key as keyof typeof data.summary] }}</div>
+            <div class="stat-card-number">{{ (data.summary as any)[item.key] }}</div>
             <div class="stat-card-label">{{ item.label }}</div>
           </div>
         </div>
@@ -518,13 +518,6 @@ const getStatusText = (status: string) => {
     aborted: '异常停止',
   }
   return m[status] || status
-}
-
-const getIncrementalLabel = (t: TaskMonitorItem) => {
-  if (t.incremental_mode === 'pk_mirror') return '主键对齐'
-  if (t.incremental_mode === 'timestamp') return '水位列'
-  if (t.schedule_enabled) return '定时'
-  return '全量'
 }
 
 const formatDate = (s?: string) => (s ? new Date(s).toLocaleString('zh-CN') : '-')

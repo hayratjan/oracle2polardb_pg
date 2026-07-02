@@ -672,7 +672,7 @@ const viewProgressEntries = computed(() => {
     }
   }
   if (typeof vp !== 'object' || Array.isArray(vp)) return []
-  return Object.entries(vp).filter(([k]) => !ALL_TABLES_KEYS.includes(k))
+  return Object.entries(vp).filter(([k]) => !ALL_TABLES_KEYS.includes(k)) as [string, any][]
 })
 
 const formatNumber = (n?: number | null) => {
@@ -901,7 +901,7 @@ const isTerminalStatus = (status: string) => canRerun(status)
 
 const migrationReport = computed(() => {
   const r = task.value?.migration_report
-  return r && typeof r === 'object' ? (r as Record<string, unknown>) : null
+  return r && typeof r === 'object' ? (r as any) : null
 })
 
 const downloadReport = async () => {
