@@ -190,9 +190,10 @@ def get_postgres_pooled_connection(connection_id, database=None, *, connect_time
     # 在锁外获取连接，避免死锁
     try:
         connection = pool.getconn()
+        # v2.3.1: 移除对 db_to_use 的引用（该变量仅在创建池时定义，池已存在时未定义）
         logger.debug(
             f"从 PostgreSQL 连接池获取连接成功: "
-            f"connection_id={connection_id}, database={db_to_use}"
+            f"connection_id={connection_id}, pool_key={pool_key}"
         )
         return connection
     except Exception as e:
