@@ -256,11 +256,15 @@ def validate_row_hashes(
             if primary_key not in columns:
                 columns.insert(0, primary_key)
 
-        # 构建拼接表达式
-        # Oracle: 用 || 连接，NULL 替换为空字符串
-        ora_cols = " || '|' || ".join(f'NVL(TO_CHAR("{c}"), \'\')' for c in columns)
-        # PG: 用 || 连接，NULL 替换为空字符串
-        pg_cols = " || '|' || ".join(f'COALESCE("{c}"::text, \'\')' for c in columns)
+        # v2.4: 修复哈希格式不一致问题
+        # 原实现: Oracle 用 TO_CHAR(col) → '22-JUL-26',PG 用 col::text → '2026-07-22'
+        # 相同数据哈希必不等,导致校验系统性假阳性
+        # 修复: 两端统一使用 to_char(col, 'YYYY-MM-DD HH24:MI:SS') 格式化
+        # 数值类型两端 to_char 输出一致,日期/时间戳两端格式串兼容
+        _ORA_FMT = "'YYYY-MM-DD HH24:MI:SS'"
+        _PG_FMT = "'YYYY-MM-DD HH24:MI:SS'"
+        ora_cols = " || '|' || ".join(f'NVL(to_char("{c}", {_ORA_FMT}), \'\')' for c in columns)
+        pg_cols = " || '|' || ".join(f'COALESCE(to_char("{c}", {_PG_FMT}), \'\')' for c in columns)
 
         tgt_tbl = pg_table_name or target_table
         qualified = build_qualified_table_name(target_schema, tgt_tbl)

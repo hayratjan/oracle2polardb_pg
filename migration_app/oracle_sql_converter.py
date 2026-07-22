@@ -16,6 +16,16 @@ _MANUAL_REVIEW_PATTERNS = [
     (r'\bROWNUM\b', 'ROWNUM 伪列'),
     (r'\bSYS\.DBMS_', 'Oracle DBMS 包调用'),
     (r':NEW\b|:OLD\b', '触发器 :NEW/:OLD 引用'),
+    # v2.4: 新增 PL/SQL 专有语法检测
+    (r'\bFORALL\b', 'FORALL 批量绑定(PG 需改写为 FOREACH 或循环)'),
+    (r'\bBULK\s+COLLECT\b', 'BULK COLLECT INTO(PG 需改写为 cursor loop 或 array_agg)'),
+    (r'\bPRAGMA\s+', 'PRAGMA 指令(PG 无对应,需人工处理)'),
+    (r'\bAUTONOMOUS_TRANSACTION\b', '自治事务(PG 无原生支持,需 dblink 或独立连接)'),
+    (r'\bCREATE\s+(?:OR\s+REPLACE\s+)?PACKAGE\b', 'Oracle PACKAGE(PG 无包概念,需拆分为 schema+函数)'),
+    (r'\bDBMS_SQL\b', 'DBMS_SQL 动态 SQL(PG 需改用 EXECUTE 或 PL/pgSQL 动态 SQL)'),
+    (r'\bUTL_FILE\b|\bUTL_HTTP\b|\bUTL_MAIL\b', 'UTL_* 包(PG 无对应,需人工改写)'),
+    (r'\bPIVOT\b|\bUNPIVOT\b', 'PIVOT/UNPIVOT(PG 需用 crosstab 或 CASE WHEN 改写)'),
+    (r'\bMODEL\b\s', 'MODEL 子句(PG 无对应,需人工改写)'),
 ]
 
 
@@ -94,13 +104,17 @@ def convert_oracle_to_pg_sql(
 
 
 def convert_oracle_to_pg_view(oracle_view_text: str) -> Tuple[str, List[str]]:
-    """将 Oracle 视图定义转为 PostgreSQL CREATE VIEW 可用的查询体。"""
-    return convert_oracle_to_pg_sql(oracle_view_text)
+    """将 Oracle 视图定义转为 PostgreSQL CREATE VIEW 可用的查询体。
+
+    v2.4: 复用 routine 的全部替换函数(此前视图仅做 4 项基础替换,
+    缺失 ROWNUM/TO_DATE/TO_CHAR/TO_NUMBER 等,导致视图 SQL 执行报错)。
+    """
+    return convert_oracle_to_pg_routine(oracle_view_text)
 
 
 def convert_oracle_to_pg_mview(oracle_mview_text: str) -> Tuple[str, List[str]]:
     """将 Oracle 物化视图定义转为 PostgreSQL 物化视图查询体。"""
-    return convert_oracle_to_pg_sql(oracle_mview_text)
+    return convert_oracle_to_pg_routine(oracle_mview_text)
 
 
 def _replace_to_date(text: str) -> str:
@@ -116,14 +130,33 @@ def _replace_to_date(text: str) -> str:
 
 
 def _replace_to_char(text: str) -> str:
-    """TO_CHAR(expr) → expr::text（简单替换，格式化参数丢失需人工复核）。"""
-    # 仅替换单参数 TO_CHAR(x) → x::text
-    return re.sub(r'\bTO_CHAR\s*\(', 'CAST(', text, flags=re.IGNORECASE)
+    """TO_CHAR 转换为 PG 兼容写法。
+
+    v2.4 修复:
+    - 单参数 TO_CHAR(x) → x::text
+    - 双参数 TO_CHAR(x, fmt) → to_char(x, fmt) (PG 原生支持 to_char,
+      但格式串与 Oracle 不完全兼容,保留并加入 manual_items)
+    此前实现将 TO_CHAR( 直接替换为 CAST(,丢失格式化参数导致语法错误。
+    """
+    # 双参数: TO_CHAR(expr, 'fmt') → to_char(expr, 'fmt')
+    # PG 的 to_char 与 Oracle 格式串不完全兼容,需人工复核但语法可执行
+    text = re.sub(
+        r'\bTO_CHAR\s*\(\s*([^,()]+(?:\([^()]*\))?[^,]*?)\s*,\s*(\'[^\']*\')\s*\)',
+        r'to_char(\1, \2)',
+        text,
+        flags=re.IGNORECASE,
+    )
+    # 单参数: TO_CHAR(x) → x::text
+    text = re.sub(r'\bTO_CHAR\s*\(\s*([^)]+?)\s*\)', r'\1::text', text, flags=re.IGNORECASE)
+    return text
 
 
 def _replace_to_number(text: str) -> str:
     """TO_NUMBER(expr) → expr::numeric。"""
-    return re.sub(r'\bTO_NUMBER\s*\(', 'CAST(', text, flags=re.IGNORECASE)
+    # 单参数 → ::numeric
+    text = re.sub(r'\bTO_NUMBER\s*\(\s*([^,)]+?)\s*\)', r'\1::numeric', text, flags=re.IGNORECASE)
+    # 双参数 TO_NUMBER(x, fmt) 保留(PG 无对应),加入 manual_items 由 detect 处理
+    return text
 
 
 def _replace_rownum(text: str) -> str:

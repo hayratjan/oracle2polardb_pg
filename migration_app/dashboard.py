@@ -73,7 +73,7 @@ def task_list(request):
     """
     显示所有迁移任务
     """
-    from django.core.paginator import Paginator
+    from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
     
     # 获取查询参数
     search = request.GET.get('search', '').strip()
@@ -102,7 +102,7 @@ def task_list(request):
     page_number = request.GET.get('page', 1)
     try:
         page_obj = paginator.page(page_number)
-    except:
+    except (EmptyPage, PageNotAnInteger):
         page_obj = paginator.page(1)
     
     return render(request, 'migration_app/task_list.html', {
@@ -283,15 +283,11 @@ def task_status(request, task_id):
 @csrf_exempt
 def start_task(request, task_id):
     """启动迁移任务"""
-    # 添加详细的请求调试日志
-    logger.info(f"收到启动任务请求: 任务ID={task_id}")
-    logger.info(f"请求方法: {request.method}")
-    logger.info(f"请求头: {dict(request.headers)}")
-    if request.body:
-        logger.info(f"请求体: {request.body.decode('utf-8')}")
-    logger.info(f"Content-Type: {request.content_type}")
-    
-    if request.method in ['POST', 'GET']:
+    # v2.4: 移除请求头/体调试日志(含 Cookie/Authorization/密码字段,泄露敏感信息)
+    # 仅保留必要审计信息
+    logger.info(f"收到启动任务请求: 任务ID={task_id} 方法={request.method} 用户={request.user.username if request.user.is_authenticated else 'anon'}")
+
+    if request.method == 'POST':
         try:
             logger.info(f"开始处理启动任务: 任务ID={task_id}")
             task = get_object_or_404(MigrationTask, pk=task_id)
@@ -456,8 +452,9 @@ def start_task(request, task_id):
                     logger.info(f"提交全 Schema 编排任务: {task.source_schema}")
                     def run_full_schema():
                         try:
+                            # v2.4: 移除 importlib.reload(v) — 在线程内重载模块会影响所有线程,
+                            # 导致其它线程持有的旧引用进入半重载状态,引发 NameError/AttributeError
                             import migration_app.views as v
-                            importlib.reload(v)
                             v.migrate_schema_orchestration(task.id, postgres_database)
                         except Exception as ex:
                             logger.error(f"编排迁移异常: {str(ex)}", exc_info=True)
@@ -588,12 +585,10 @@ def start_task(request, task_id):
 @csrf_exempt
 def cancel_task(request, task_id):
     """取消迁移任务"""
-    # 添加详细的请求调试日志
-    logger.info(f"收到取消任务请求: 任务ID={task_id}")
-    logger.info(f"请求方法: {request.method}")
-    logger.info(f"请求头: {dict(request.headers)}")
-    
-    if request.method in ['POST', 'GET']:
+    # v2.4: 移除请求头调试日志(含 Cookie 等敏感信息),仅保留必要审计信息
+    logger.info(f"收到取消任务请求: 任务ID={task_id} 方法={request.method} 用户={request.user.username if request.user.is_authenticated else 'anon'}")
+
+    if request.method == 'POST':
         try:
             task = get_object_or_404(MigrationTask, pk=task_id)
             logger.info(f"任务信息: {task.name}, 当前状态: {task.status}")
@@ -799,7 +794,9 @@ def switch_postgres_database(request, task_id):
     except MigrationTask.DoesNotExist:
         return JsonResponse({'status': 'error', 'message': '任务不存在'})
     except Exception as e:
-        return JsonResponse({'status': 'error', 'message': str(e)})
+        # v2.4: 脱敏后再返回前端,避免泄露数据库错误细节/路径/密码字段
+        from .migration_errors import format_db_error
+        return JsonResponse({'status': 'error', 'message': format_db_error(e)})
 
 # 数据查询API函数
 @login_required
@@ -1155,7 +1152,8 @@ def browse_directories(request):
     except PermissionError:
         return JsonResponse({'status': 'error', 'message': '没有权限访问该目录'}, status=403)
     except Exception as e:
-        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+        from .migration_errors import format_db_error
+        return JsonResponse({'status': 'error', 'message': format_db_error(e)}, status=500)
 
 # 添加缺失的迁移函数
 def migrate_view_to_table(task_id, postgres_database=None):

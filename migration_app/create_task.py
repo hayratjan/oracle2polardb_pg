@@ -5,6 +5,7 @@ import json
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth.decorators import login_required
 from .models import MigrationTask, OracleConnection, PostgresConnection
 from .target_provisioning import prepare_target_env
 from .platform_config import apply_task_creation_defaults
@@ -128,6 +129,7 @@ def validate_task_data(data):
     }
 
 @csrf_exempt
+@login_required
 def create_task_validated(request):
     """创建迁移任务，包含增强的验证逻辑"""
     if request.method == 'GET':

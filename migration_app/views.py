@@ -28,6 +28,13 @@ from .oracle_sql_converter import (
     convert_oracle_to_pg_view,
     is_routine_safe_to_execute as _is_routine_safe,
 )
+# v2.4: 顶部统一导入错误脱敏工具,供 except 分支统一调用
+from .migration_errors import format_db_error as _format_db_error_top
+
+
+def format_db_error(exc, **kw):
+    """模块内统一脱敏包装(兼容已在 except 中局部 import 的写法)。"""
+    return _format_db_error_top(exc, **kw)
 from .pg_identifiers import (
     apply_identifier_case,
     build_pg_column_definition,
@@ -76,16 +83,19 @@ def record_audit(request, action, target_type='', target_id=None, payload=None, 
     except Exception as e:
         logger.error(f'记录审计日志失败: {e}', exc_info=True)
 
+# v2.4: 全局线程池初始化锁,防止多线程并发时创建多个 ThreadPoolExecutor
+_executor_lock = threading.Lock()
+
+
 def get_task_executor():
-    """获取全局任务执行器"""
+    """获取全局任务执行器(线程安全初始化)。"""
     global _task_executor
-    
+    # 双重检查锁定模式,避免每次调用都获取锁
     if _task_executor is None:
-        logger.info("初始化任务执行线程池")
-        
-        # 创建一个有5个工作线程的线程池
-        _task_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="migration_task_")
-        
+        with _executor_lock:
+            if _task_executor is None:
+                logger.info("初始化任务执行线程池")
+                _task_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="migration_task_")
     return _task_executor
 
 # 在模块初始化时预热线程池
@@ -256,7 +266,7 @@ def switch_postgres_database(request, task_id):
     except MigrationTask.DoesNotExist:
         return JsonResponse({'status': 'error', 'message': '任务不存在'})
     except Exception as e:
-        return JsonResponse({'status': 'error', 'message': str(e)})
+        return JsonResponse({'status': 'error', 'message': format_db_error(e)})
 
 def migrate_materialized_view(task_id, postgres_database=None):
     """迁移物化视图"""
@@ -704,7 +714,11 @@ def migrate_routine(task_id, postgres_database=None):
         task.save()
 
     except Exception as e:
-        error_msg = str(e)
+        # v2.4: 修复异常分支不 rollback 不 close 的资源泄漏
+        from .migration_errors import format_db_error, rollback_quietly, safe_close_db_resources
+        rollback_quietly(pg_conn)
+        safe_close_db_resources(oracle_cursor, oracle_conn, pg_cursor, pg_conn)
+        error_msg = format_db_error(e)
         trace = traceback.format_exc()
         make_error_log(log, f'例程迁移失败: {error_msg}')
         make_error_log(log, f'详细错误: {trace}')
@@ -1029,8 +1043,9 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
                     user_cancelled = True
                     log_list.append(f"用户取消，已迁移表 {table_name} 共 {total_rows} 行（未提交批次将回滚）")
                     break
-            except Exception:
-                pass
+            except Exception as _cancel_err:
+                # v2.4: 关键路径取消检测失败不能静默,否则任务无法响应取消
+                logger.warning(f"检测取消标志失败(任务将无法响应取消): {_cancel_err}", exc_info=True)
         rows = oracle_cursor.fetchmany()
         if not rows:
             break
@@ -1482,9 +1497,34 @@ def migrate_table(task_id, postgres_database=None):
 def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None, data_scale=None):
     """将Oracle数据类型转换为PostgreSQL数据类型"""
     # v2.3.1: 移除逐列 DEBUG 日志，避免整库迁移时上万次输出刷屏
-    
-    oracle_type = oracle_type.upper()
-    
+
+    if not oracle_type:
+        return 'TEXT'
+    oracle_type = oracle_type.upper().strip()
+
+    # v2.4: 预处理 - Oracle ALL_TAB_COLUMNS.DATA_TYPE 返回 'TIMESTAMP(6) WITH TIME ZONE'
+    # 但 type_map 的 key 是 'TIMESTAMP WITH TIME ZONE'(不带精度),直接查表永不命中
+    # 这里将带精度的 TIMESTAMP 变体归一化,并提取精度用于后续 PG 类型
+    ts_precision = data_scale
+    m = re.match(r'^TIMESTAMP\((\d+)\)\s+(.+)$', oracle_type)
+    if m:
+        ts_precision = int(m.group(1))
+        suffix = m.group(2).strip()  # 'TIME ZONE' / 'LOCAL TIME ZONE'
+        if suffix == 'WITH TIME ZONE':
+            # TIMESTAMP(n) WITH TIME ZONE → TIMESTAMPTZ(n)
+            return f"TIMESTAMPTZ({ts_precision})" if ts_precision is not None else "TIMESTAMPTZ"
+        if suffix == 'WITH LOCAL TIME ZONE':
+            # Oracle 的 WITH LOCAL TIME ZONE 语义在 PG 中无完美对应,用 TIMESTAMPTZ 近似
+            return f"TIMESTAMPTZ({ts_precision})" if ts_precision is not None else "TIMESTAMPTZ"
+        # 其它 TIMESTAMP(n) 形式按普通 TIMESTAMP 处理
+        oracle_type = 'TIMESTAMP'
+
+    # v2.4: 处理不带精度的 'TIMESTAMP WITH TIME ZONE' / 'TIMESTAMP WITH LOCAL TIME ZONE'
+    if oracle_type == 'TIMESTAMP WITH TIME ZONE':
+        return "TIMESTAMPTZ"
+    if oracle_type == 'TIMESTAMP WITH LOCAL TIME ZONE':
+        return "TIMESTAMPTZ"
+
     # 基本数据类型映射
     type_map = {
         'NUMBER': 'NUMERIC',
@@ -1493,7 +1533,7 @@ def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None
         # Oracle DATE 含时分秒，映射为 TIMESTAMP(0) 避免 PG DATE 截断
         'DATE': 'TIMESTAMP(0)',
         'TIMESTAMP WITH TIME ZONE': 'TIMESTAMPTZ',
-        'TIMESTAMP WITH LOCAL TIME ZONE': 'TIMESTAMP',
+        'TIMESTAMP WITH LOCAL TIME ZONE': 'TIMESTAMPTZ',
         'TIMESTAMP': 'TIMESTAMP',
         'CLOB': 'TEXT',
         'NCLOB': 'TEXT',
@@ -1520,8 +1560,15 @@ def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None
         # BINARY_FLOAT/DOUBLE 已在上面映射
         # Oracle BOOLEAN（PL/SQL 中使用，表列不直接支持但兼容）
         'BOOLEAN': 'BOOLEAN',
+        # v2.4: 新增缺失类型
+        'PLS_INTEGER': 'INTEGER',
+        'BINARY_INTEGER': 'INTEGER',
+        'JSON': 'JSONB',
+        'OBJECT': 'TEXT',
+        'SYS.ANYDATA': 'TEXT',
+        'SYS.ANYTYPE': 'TEXT',
     }
-    
+
     if oracle_type == 'NUMBER':
         # 根据精度和小数位处理NUMBER类型
         if data_precision is not None:
@@ -1563,7 +1610,7 @@ def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None
     elif oracle_type.startswith('INTERVAL'):
         # 处理 INTERVAL YEAR TO MONTH / INTERVAL DAY TO SECOND
         # 可能带精度如 INTERVAL YEAR(2) TO MONTH / INTERVAL DAY(2) TO SECOND(6)
-        import re
+        # v2.4: 删除局部 import re,使用模块顶部的全局 import(否则会 UnboundLocalError)
         m = re.match(r'INTERVAL\s+YEAR\s*(?:\((\d+)\))?\s*TO\s*MONTH', oracle_type)
         if m:
             precision = m.group(1) or '2'
@@ -1768,7 +1815,8 @@ def migrate_all_tables(task_id, postgres_database=None):
                     parallel_workers=MIGRATION_PARALLEL_TABLE_WORKERS,
                 )
                 task.log = '\n'.join(log)
-            task.save(update_fields=['progress', 'view_progress', 'log'])
+                # v2.4: save 移入锁内,避免并发调用时字段被覆写后写入中间状态
+                task.save(update_fields=['progress', 'view_progress', 'log'])
 
         def _should_cancel() -> bool:
             task.refresh_from_db()
@@ -2398,7 +2446,7 @@ def test_oracle_connection(request):
                 return JsonResponse({'status': 'success'})
             return JsonResponse({'status': 'error', 'message': err_msg or '连接测试失败'})
         except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)})
+            return JsonResponse({'status': 'error', 'message': format_db_error(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
 @login_required
@@ -2439,7 +2487,7 @@ def save_oracle_connection(request):
             
             return JsonResponse({'status': 'success', 'message': '连接保存成功'})
         except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)})
+            return JsonResponse({'status': 'error', 'message': format_db_error(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
 @login_required
@@ -2468,7 +2516,7 @@ def delete_oracle_connection(request):
         except OracleConnection.DoesNotExist:
             return JsonResponse({'status': 'error', 'message': '连接不存在'})
         except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)})
+            return JsonResponse({'status': 'error', 'message': format_db_error(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
 @login_required
@@ -2535,7 +2583,7 @@ def edit_oracle_connection(request):
             
             return JsonResponse({'status': 'success', 'message': '连接更新成功'})
         except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)})
+            return JsonResponse({'status': 'error', 'message': format_db_error(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})
 
 # PolarDB-PG数据库连接管理
@@ -2564,7 +2612,7 @@ def get_pg_connections(request):
         } for conn in connections]
         return JsonResponse({'status': 'success', 'connections': data})
     except Exception as e:
-        return JsonResponse({'status': 'error', 'message': str(e)})
+        return JsonResponse({'status': 'error', 'message': format_db_error(e)})
 
 
 @login_required
@@ -2601,7 +2649,7 @@ def add_pg_connection(request):
             
             return JsonResponse({'status': 'success'})
         except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)})
+            return JsonResponse({'status': 'error', 'message': format_db_error(e)})
     return JsonResponse({'status': 'error', 'message': 'Invalid request method'})
 
 from django.views.decorators.csrf import csrf_exempt
@@ -2778,7 +2826,7 @@ def delete_pg_connection(request):
             
             return JsonResponse({'status': 'success'})
         except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)})
+            return JsonResponse({'status': 'error', 'message': format_db_error(e)})
     return JsonResponse({'status': 'error', 'message': 'Invalid request method'})
 
 @login_required
@@ -2844,5 +2892,5 @@ def edit_pg_connection(request):
             
             return JsonResponse({'status': 'success'})
         except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)})
+            return JsonResponse({'status': 'error', 'message': format_db_error(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})

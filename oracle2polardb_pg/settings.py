@@ -421,16 +421,24 @@ LOGGING = {
             'style': '{',
         },
     },
+    # v2.4: 挂载 log_sanitize.SanitizeFilter,自动脱敏日志中的密码字段
+    'filters': {
+        'sanitize': {
+            '()': 'migration_app.log_sanitize.SanitizeFilter',
+        },
+    },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
+            'filters': ['sanitize'],  # 业务日志统一脱敏
         },
         # 慢查询告警：超过 1 秒的 SQL 打印告警
         'slow_sql': {
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
             'level': 'WARNING',
+            'filters': ['sanitize'],
         },
     },
     'loggers': {

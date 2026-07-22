@@ -330,13 +330,17 @@ def _detect_and_apply_updates(
     if not common_keys:
         return 0
 
-    # 构建 Oracle 端行哈希表达式：NVL(TO_CHAR(col), '') || '|' || ...
+    # v2.4: 修复哈希格式不一致问题
+    # 原实现: Oracle TO_CHAR(date) → '22-JUL-26',PG date::text → '2026-07-22'
+    # 相同数据哈希必不等,触发无意义 UPDATE
+    # 修复: 两端统一使用 to_char(col, 'YYYY-MM-DD HH24:MI:SS') 格式化
+    _ORA_FMT = "'YYYY-MM-DD HH24:MI:SS'"
+    _PG_FMT = "'YYYY-MM-DD HH24:MI:SS'"
     ora_hash_expr = " || '|' || ".join(
-        f"NVL(TO_CHAR(\"{c}\"), '')" for c in all_cols
+        f"NVL(to_char(\"{c}\", {_ORA_FMT}), '')" for c in all_cols
     )
-    # 构建 PG 端行哈希表达式：COALESCE(col::text, '') || '|' || ...
     pg_hash_expr = " || '|' || ".join(
-        f'COALESCE("{c}"::text, \'\')' for c in col_names_lower
+        f'COALESCE(to_char("{c}", {_PG_FMT}), \'\')' for c in col_names_lower
     )
 
     batch_size = 500
