@@ -105,7 +105,11 @@ if not DEBUG:
     SECURE_BROWSER_XSS_FILTER = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    # v2.4: 仅在反向代理后启用 SECURE_PROXY_SSL_HEADER
+    # 若 gunicorn 直接对外暴露(无 nginx/cdn),客户端可伪造 X-Forwarded-Proto 绕过 HTTPS 校验
+    # 默认生产启用(假定前置反向代理),通过 USE_X_FORWARDED_PROTO=false 关闭
+    if os.environ.get('USE_X_FORWARDED_PROTO', 'true').lower() in ('1', 'true', 'yes'):
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     X_FRAME_OPTIONS = 'DENY'
 else:
     X_FRAME_OPTIONS = 'SAMEORIGIN'

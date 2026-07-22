@@ -1,5 +1,20 @@
 from rest_framework import serializers
+from django.core.validators import RegexValidator
 from .models import OracleConnection, PostgresConnection, MigrationTask, MigrationTaskLog
+
+# v2.4: 纵深防御 —— 在 API 入口拦截非法标识符,避免依赖每个 SQL 拼接点
+# 仅放行 [A-Za-z_][A-Za-z0-9_]* ,杜绝分号/引号/空格等注入字符穿透
+_IDENTIFIER_VALIDATOR = RegexValidator(
+    r'^[A-Za-z_][A-Za-z0-9_]*$',
+    message='标识符仅允许字母/数字/下划线,且不能以数字开头',
+    code='invalid_identifier',
+)
+# 可空字段用此(允许空字符串通过,非空时才校验)
+_OPTIONAL_IDENTIFIER_VALIDATOR = RegexValidator(
+    r'^([A-Za-z_][A-Za-z0-9_]*)?$',
+    message='标识符仅允许字母/数字/下划线,且不能以数字开头(可为空)',
+    code='invalid_identifier',
+)
 
 
 class OracleConnectionSerializer(serializers.ModelSerializer):
@@ -37,6 +52,24 @@ class MigrationTaskSerializer(serializers.ModelSerializer):
     sqlite_path = serializers.ReadOnlyField()
     oracle_connection_name = serializers.CharField(source='oracle_connection.name', read_only=True)
     postgres_connection_name = serializers.CharField(source='postgres_connection.name', read_only=True)
+    # v2.4: 标识符字段入口正则校验(纵深防御,SQL 拼接点另有 safe_oracle_identifier/quote_identifier 兜底)
+    source_schema = serializers.CharField(max_length=50, validators=[_IDENTIFIER_VALIDATOR])
+    target_schema = serializers.CharField(
+        max_length=50, required=False, allow_blank=True, allow_null=True,
+        validators=[_OPTIONAL_IDENTIFIER_VALIDATOR],
+    )
+    source_object = serializers.CharField(
+        max_length=100, required=False, allow_blank=True, allow_null=True,
+        validators=[_OPTIONAL_IDENTIFIER_VALIDATOR],
+    )
+    target_object = serializers.CharField(
+        max_length=100, required=False, allow_blank=True, allow_null=True,
+        validators=[_OPTIONAL_IDENTIFIER_VALIDATOR],
+    )
+    watermark_column = serializers.CharField(
+        max_length=128, required=False, allow_blank=True,
+        validators=[_OPTIONAL_IDENTIFIER_VALIDATOR],
+    )
 
     class Meta:
         model = MigrationTask

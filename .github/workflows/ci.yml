@@ -34,6 +34,19 @@ jobs:
           DJANGO_DEBUG: "false"
           ORACLE_CLIENT_LIB: ""
 
+      - name: Install security linter
+        run: pip install bandit
+
+      - name: Run bandit security scan
+        # v2.4: 静态扫描安全问题(medium 及以上),防新增高危代码
+        # 跳过说明:
+        #   B105=硬编码密码(测试用密码误报)
+        #   B311=random(非密码学用途的 random 误报)
+        #   B608=SQL 注入(本项目大量合法 SQL 拼接已用 safe_oracle_identifier/
+        #         quote_identifier 保护,bandit 不识别安全函数会误报;
+        #         SQL 注入防护靠 serializer 入口校验 + 运行时安全函数双重保障)
+        run: bandit -r migration_app -x 'tests.py,migrations' -ll -s B105,B311,B608
+
   frontend-build:
     runs-on: ubuntu-latest
     defaults:
