@@ -22,6 +22,12 @@ import logging
 import random
 from typing import List, Optional, Tuple
 
+from .pg_identifiers import (
+    build_qualified_table_name,
+    quote_identifier,
+    safe_oracle_identifier,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,7 +40,9 @@ def count_oracle_rows(
     bind_params: Optional[dict] = None,
 ) -> int:
     """统计 Oracle 源对象行数。"""
-    sql = f"SELECT COUNT(*) FROM {source_schema}.{object_name}"
+    # v2.4: schema/object 经 safe_oracle_identifier 强校验,防注入
+    src_qualified = f"{safe_oracle_identifier(source_schema)}.{safe_oracle_identifier(object_name)}"
+    sql = f"SELECT COUNT(*) FROM {src_qualified}"
     if where_sql:
         sql += f" {where_sql}"
     if bind_params:
@@ -52,8 +60,6 @@ def count_pg_rows(
     pg_table_name: Optional[str] = None,
 ) -> int:
     """统计 PostgreSQL 目标表行数。"""
-    from .pg_identifiers import build_qualified_table_name
-
     tbl = pg_table_name or table_name
     qualified = build_qualified_table_name(target_schema, tbl)
     pg_cursor.execute(f"SELECT COUNT(*) FROM {qualified}")
@@ -136,8 +142,6 @@ def validate_aggregates(
     Returns:
         True 表示全部通过或跳过，False 表示有差异。
     """
-    from .pg_identifiers import build_qualified_table_name
-
     try:
         # 自动查询数值列（NUMBER/FLOAT/BINARY_*）
         if not columns:
@@ -158,21 +162,25 @@ def validate_aggregates(
 
         tgt_tbl = pg_table_name or target_table
         qualified = build_qualified_table_name(target_schema, tgt_tbl)
+        # v2.4: 源端 schema/object 强校验,列名 Oracle 端 safe_oracle_identifier、PG 端 quote_identifier
+        _src_qualified = f"{safe_oracle_identifier(source_schema)}.{safe_oracle_identifier(source_object)}"
         all_pass = True
 
         for col in columns:
+            ora_col = safe_oracle_identifier(col)
+            pg_col = quote_identifier(col)
             # Oracle 端聚合
             oracle_cursor.execute(
-                f"SELECT NVL(SUM(\"{col}\"), 0), NVL(COUNT(\"{col}\"), 0), "
-                f"NVL(MIN(\"{col}\"), 0), NVL(MAX(\"{col}\"), 0) "
-                f"FROM {source_schema}.\"{source_object}\""
+                f"SELECT NVL(SUM(\"{ora_col}\"), 0), NVL(COUNT(\"{ora_col}\"), 0), "
+                f"NVL(MIN(\"{ora_col}\"), 0), NVL(MAX(\"{ora_col}\"), 0) "
+                f"FROM {_src_qualified}"
             )
             o_sum, o_cnt, o_min, o_max = oracle_cursor.fetchone()
 
             # PG 端聚合
             pg_cursor.execute(
-                f'SELECT COALESCE(SUM("{col}"), 0), COALESCE(COUNT("{col}"), 0), '
-                f'COALESCE(MIN("{col}"), 0), COALESCE(MAX("{col}"), 0) '
+                f'SELECT COALESCE(SUM({pg_col}), 0), COALESCE(COUNT({pg_col}), 0), '
+                f'COALESCE(MIN({pg_col}), 0), COALESCE(MAX({pg_col}), 0) '
                 f'FROM {qualified}'
             )
             p_sum, p_cnt, p_min, p_max = pg_cursor.fetchone()
@@ -236,8 +244,6 @@ def validate_row_hashes(
     Returns:
         (是否一致, 校验行数, 差异行数)
     """
-    from .pg_identifiers import build_qualified_table_name
-
     try:
         # 自动获取列列表
         if not columns:
@@ -263,11 +269,20 @@ def validate_row_hashes(
         # 数值类型两端 to_char 输出一致,日期/时间戳两端格式串兼容
         _ORA_FMT = "'YYYY-MM-DD HH24:MI:SS'"
         _PG_FMT = "'YYYY-MM-DD HH24:MI:SS'"
-        ora_cols = " || '|' || ".join(f'NVL(to_char("{c}", {_ORA_FMT}), \'\')' for c in columns)
-        pg_cols = " || '|' || ".join(f'COALESCE(to_char("{c}", {_PG_FMT}), \'\')' for c in columns)
+        # v2.4: 列名经安全函数包装,Oracle 用大写形式,PG 用双引号转义
+        ora_cols = " || '|' || ".join(
+            f"NVL(to_char(\"{safe_oracle_identifier(c)}\", {_ORA_FMT}), '')" for c in columns
+        )
+        pg_cols = " || '|' || ".join(
+            f"COALESCE(to_char({quote_identifier(c)}, {_PG_FMT}), '')" for c in columns
+        )
 
         tgt_tbl = pg_table_name or target_table
         qualified = build_qualified_table_name(target_schema, tgt_tbl)
+        # v2.4: 源端 schema/object 强校验;primary_key 同样校验
+        _src_qualified = f"{safe_oracle_identifier(source_schema)}.{safe_oracle_identifier(source_object)}"
+        _ora_pk = safe_oracle_identifier(primary_key)
+        _pg_pk = quote_identifier(primary_key)
 
         total_checked = 0
         mismatch_count = 0
@@ -276,9 +291,9 @@ def validate_row_hashes(
         for batch_idx in range(max_batches):
             # Oracle 端：按主键排序，取本批
             oracle_cursor.execute(
-                f'SELECT "{primary_key}", MD5({ora_cols}) '
-                f'FROM {source_schema}."{source_object}" '
-                f'ORDER BY "{primary_key}" '
+                f'SELECT "{_ora_pk}", MD5({ora_cols}) '
+                f'FROM {_src_qualified} '
+                f'ORDER BY "{_ora_pk}" '
                 f'OFFSET {offset} ROWS FETCH NEXT {batch_size} ROWS ONLY'
             )
             ora_rows = oracle_cursor.fetchall()
@@ -292,10 +307,10 @@ def validate_row_hashes(
             min_pk = ora_keys[0]
             max_pk = ora_keys[-1]
             pg_cursor.execute(
-                f'SELECT "{primary_key}"::text, MD5({pg_cols}) '
+                f'SELECT {_pg_pk}::text, MD5({pg_cols}) '
                 f'FROM {qualified} '
-                f'WHERE "{primary_key}"::text >= %s AND "{primary_key}"::text <= %s '
-                f'ORDER BY "{primary_key}"::text'
+                f'WHERE {_pg_pk}::text >= %s AND {_pg_pk}::text <= %s '
+                f'ORDER BY {_pg_pk}::text'
             )
             pg_rows = pg_cursor.fetchall()
             pg_map = {str(r[0]): r[1] for r in pg_rows}
@@ -360,8 +375,6 @@ def validate_sample_rows(
     Returns:
         (是否一致, 抽样行数, 差异行数)
     """
-    from .pg_identifiers import build_qualified_table_name
-
     try:
         if not columns:
             oracle_cursor.execute(
@@ -374,12 +387,17 @@ def validate_sample_rows(
             )
             columns = [r[0] for r in oracle_cursor.fetchall()]
 
+        # v2.4: schema/object/primary_key/列名全部经安全函数包装,防注入
+        _src_qualified = f"{safe_oracle_identifier(source_schema)}.{safe_oracle_identifier(source_object)}"
+        _ora_pk = safe_oracle_identifier(primary_key)
+        _pg_pk = quote_identifier(primary_key)
+
         # Oracle 端随机抽取主键
         oracle_cursor.execute(
-            f'SELECT "{primary_key}" FROM ('
-            f'  SELECT "{primary_key}" FROM {source_schema}."{source_object}" '
+            f'SELECT "{_ora_pk}" FROM ('
+            f'  SELECT "{_ora_pk}" FROM {_src_qualified} '
             f'  ORDER BY DBMS_RANDOM.VALUE'
-            f') WHERE ROWNUM <= {sample_count}'
+            f') WHERE ROWNUM <= {int(sample_count)}'
         )
         sampled_pks = [str(r[0]) for r in oracle_cursor.fetchall()]
 
@@ -390,16 +408,16 @@ def validate_sample_rows(
         tgt_tbl = pg_table_name or target_table
         qualified = build_qualified_table_name(target_schema, tgt_tbl)
 
-        # 构建列引用
-        ora_col_list = ', '.join(f'"{c}"' for c in columns)
-        pg_col_list = ', '.join(f'"{c}"' for c in columns)
+        # 构建列引用(Oracle 列大写,PG 列带双引号)
+        ora_col_list = ', '.join(f'"{safe_oracle_identifier(c)}"' for c in columns)
+        pg_col_list = ', '.join(quote_identifier(c) for c in columns)
 
         mismatch_count = 0
         for pk in sampled_pks:
             # Oracle 端
             oracle_cursor.execute(
-                f'SELECT {ora_col_list} FROM {source_schema}."{source_object}" '
-                f'WHERE "{primary_key}" = :pk',
+                f'SELECT {ora_col_list} FROM {_src_qualified} '
+                f'WHERE "{_ora_pk}" = :pk',
                 {'pk': pk},
             )
             ora_row = oracle_cursor.fetchone()
@@ -407,7 +425,7 @@ def validate_sample_rows(
             # PG 端
             pg_cursor.execute(
                 f'SELECT {pg_col_list} FROM {qualified} '
-                f'WHERE "{primary_key}"::text = %s',
+                f'WHERE {_pg_pk}::text = %s',
                 (pk,),
             )
             pg_row = pg_cursor.fetchone()

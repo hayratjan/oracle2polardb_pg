@@ -8,6 +8,8 @@
 import threading
 import atexit
 import logging
+from typing import Optional
+
 import cx_Oracle
 import psycopg2
 from psycopg2 import pool as pg_pool
@@ -258,6 +260,44 @@ def close_all_pools():
         _pg_pools.clear()
 
     logger.info("所有数据库连接池已关闭")
+
+
+def invalidate_oracle_pool(connection_id: int) -> None:
+    """v2.4: 按 connection_id 失效单个 Oracle 连接池。
+
+    在 OracleConnection.save() 信号中调用,确保密码修改后旧池被清理,
+    下次获取连接时用新密码重建池。
+    """
+    with _oracle_pool_lock:
+        pool = _oracle_pools.pop(connection_id, None)
+        if pool:
+            try:
+                pool.close()
+                logger.info(f"Oracle 连接池已失效(connection_id={connection_id}),下次获取将重建")
+            except Exception as e:
+                logger.warning(f"失效 Oracle 连接池失败(connection_id={connection_id}): {e}")
+
+
+def invalidate_postgres_pool(connection_id: int, database: Optional[str] = None) -> None:
+    """v2.4: 按 connection_id 失效 PostgreSQL 连接池。
+
+    在 PostgresConnection.save() 信号中调用,确保密码/主机修改后旧池被清理。
+    若 database 为 None,则失效该 connection_id 下的所有库的池。
+    """
+    with _pg_pool_lock:
+        # 失效指定库或该 connection_id 下的全部
+        keys_to_remove = [
+            k for k in list(_pg_pools.keys())
+            if k[0] == connection_id and (database is None or k[1] == database)
+        ]
+        for k in keys_to_remove:
+            pool = _pg_pools.pop(k, None)
+            if pool:
+                try:
+                    pool.closeall()
+                    logger.info(f"PostgreSQL 连接池已失效(pool_key={k}),下次获取将重建")
+                except Exception as e:
+                    logger.warning(f"失效 PostgreSQL 连接池失败(pool_key={k}): {e}")
 
 
 def get_pool_stats():

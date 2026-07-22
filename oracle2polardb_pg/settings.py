@@ -34,10 +34,8 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Initialize Oracle client（生产/开发通过 ORACLE_CLIENT_LIB 指定；CI 可留空跳过）
-_ORACLE_CLIENT_LIB = os.environ.get(
-    'ORACLE_CLIENT_LIB',
-    r'/Users/xiaohaige/Downloads/instantclient_23_3',
-)
+# v2.4: 不再硬编码开发者本地路径,默认空字符串;需要时通过环境变量显式提供
+_ORACLE_CLIENT_LIB = os.environ.get('ORACLE_CLIENT_LIB', '')
 if _ORACLE_CLIENT_LIB:
     try:
         cx_Oracle.init_oracle_client(lib_dir=_ORACLE_CLIENT_LIB)
@@ -179,6 +177,12 @@ WSGI_APPLICATION = 'oracle2polardb_pg.wsgi.application'
 if os.environ.get('DATABASE_URL'):
     import dj_database_url
     DATABASES = {'default': dj_database_url.parse(os.environ['DATABASE_URL'])}
+    # v2.4: PostgreSQL 启用持久连接+健康检查,避免每个请求新建 TCP 连接导致连接数飙升
+    # CONN_MAX_AGE: 连接复用秒数;CONN_HEALTH_CHECKS: 复用前 ping 一次避免拿到失效连接
+    _db_engine = DATABASES['default'].get('ENGINE', '')
+    if 'postgresql' in _db_engine:
+        DATABASES['default'].setdefault('CONN_MAX_AGE', int(os.environ.get('DB_CONN_MAX_AGE', '60')))
+        DATABASES['default'].setdefault('CONN_HEALTH_CHECKS', True)
 else:
     DATABASES = {
         'default': {
@@ -353,20 +357,18 @@ SPECTACULAR_SETTINGS = {
 }
 
 # CORS 配置：生产严格白名单，开发允许所有
+# v2.4: 修复开发环境白名单与 ALLOW_ALL 冗余(django-cors-headers 在 ALLOW_ALL=True 时忽略白名单)
 if IS_PROD:
     _cors = os.environ.get('CORS_ALLOWED_ORIGINS', '').strip()
     CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors.split(',') if o.strip()] if _cors else []
     CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOW_CREDENTIALS = True
 else:
-    CORS_ALLOWED_ORIGINS = [
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-    ]
-    CORS_ALLOW_ALL_ORIGINS = True  # 仅开发环境允许所有来源
-
-CORS_ALLOW_CREDENTIALS = True
+    # 开发环境直接放行所有来源,不再同时维护白名单(避免误导)
+    CORS_ALLOWED_ORIGINS = []
+    CORS_ALLOW_ALL_ORIGINS = True
+    # 开发环境若放行所有来源,则不能启用 credentials(CORS 规范要求)
+    CORS_ALLOW_CREDENTIALS = False
 
 # Celery：设置环境变量 CELERY_BROKER_URL（如 redis://127.0.0.1:6379/0）后，迁移任务由 Worker 执行
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', '')

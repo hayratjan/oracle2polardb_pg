@@ -11,21 +11,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, List, Sequence, Tuple
 
-
-def _safe_oracle_ident(name: str) -> str:
-    """校验 Oracle 未加引号标识符（大写字母、数字、下划线）。"""
-    import re
-
-    n = (name or "").strip().upper().replace('"', "")
-    if not n or not re.match(r"^[A-Z][A-Z0-9_]*$", n):
-        raise ValueError(f"非法 Oracle 标识符: {name}")
-    return n
-
-
-def _quote_pg_ident(name: str) -> str:
-    """PostgreSQL 双引号标识符。"""
-    s = str(name).replace('"', '""')
-    return f'"{s}"'
+from .pg_identifiers import quote_identifier as _quote_pg_ident
+from .pg_identifiers import safe_oracle_identifier as _safe_oracle_ident
 
 
 def _norm_pk_cell(value: Any) -> Any:

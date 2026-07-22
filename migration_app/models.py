@@ -19,6 +19,13 @@ class OracleConnection(models.Model):
         if self.password:
             self.password = maybe_encrypt_password(self.password)
         super().save(*args, **kwargs)
+        # v2.4: 保存后失效旧连接池,确保密码/主机修改后下次获取用新配置重建池
+        try:
+            from .connection_pool import invalidate_oracle_pool
+            invalidate_oracle_pool(self.pk)
+        except Exception:
+            # 连接池失效失败不应阻止保存,下次重启时池会自然重建
+            pass
 
     def __str__(self):
         return self.name
@@ -53,6 +60,12 @@ class PostgresConnection(models.Model):
         if self.password:
             self.password = maybe_encrypt_password(self.password)
         super().save(*args, **kwargs)
+        # v2.4: 保存后失效旧连接池,确保密码/主机修改后下次获取用新配置重建池
+        try:
+            from .connection_pool import invalidate_postgres_pool
+            invalidate_postgres_pool(self.pk)
+        except Exception:
+            pass
 
     class Meta:
         verbose_name = 'PostgreSQL连接'

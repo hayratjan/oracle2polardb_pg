@@ -31,6 +31,7 @@ from .pg_identifiers import (
     build_pg_column_definition,
     build_qualified_table_name,
     quote_identifier,
+    safe_oracle_identifier,
 )
 from .task_logging import (
     LEVEL_DATA,
@@ -226,7 +227,9 @@ def materialize_one_view(
     # 统计行数
     total_count = 0
     try:
-        oracle_cursor.execute(f"SELECT COUNT(*) FROM {source_schema}.{view_name}")
+        # v2.4: schema/view 名经 safe_oracle_identifier 强校验,防注入
+        _src_qualified = f"{safe_oracle_identifier(source_schema)}.{safe_oracle_identifier(view_name)}"
+        oracle_cursor.execute(f"SELECT COUNT(*) FROM {_src_qualified}")
         total_count = int(oracle_cursor.fetchone()[0])
         make_meta_log(log, f'视图 {view_name} 总行数: {total_count}')
     except Exception as count_err:
@@ -237,11 +240,12 @@ def materialize_one_view(
         make_warn_log(log, f'未获取总行数，进度按已迁移行数估算: {count_err}')
 
     # 分批导数
+    _src_qualified = f"{safe_oracle_identifier(source_schema)}.{safe_oracle_identifier(view_name)}"
     if selected_fields:
         oracle_cols = ', '.join(c[0] for c in columns)
-        oracle_query = f"SELECT {oracle_cols} FROM {source_schema}.{view_name}"
+        oracle_query = f"SELECT {oracle_cols} FROM {_src_qualified}"
     else:
-        oracle_query = f"SELECT * FROM {source_schema}.{view_name}"
+        oracle_query = f"SELECT * FROM {_src_qualified}"
 
     fetch_batch = MIGRATION_FETCH_BATCH_SIZE
     commit_every = MIGRATION_COMMIT_EVERY_BATCHES

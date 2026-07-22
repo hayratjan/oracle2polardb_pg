@@ -1,14 +1,19 @@
+# v2.4: 锁定核心依赖版本范围,避免构建不可复现
+# 生成 lock: pip-compile requirements.txt > requirements.lock(或用 uv lock)
+
 django>=6.0,<6.1
-django-simpleui
-djangorestframework
-djangorestframework-simplejwt
-django-cors-headers
-cx-Oracle
-psycopg2-binary
-celery[redis]>=5.3,<6
-django-celery-beat>=2.6,<3
-redis>=5.0,<6
-dj-database-url>=2.0
+django-simpleui>=2024.0
+djangorestframework>=3.15,<4.0
+djangorestframework-simplejwt>=5.3,<6.0
+django-cors-headers>=4.4,<5.0
+cx-Oracle>=8.3,<9.0
+psycopg2-binary>=2.9,<3.0
+celery[redis]>=5.3,<6.0
+django-celery-beat>=2.6,<3.0
+redis>=5.0,<6.0
+dj-database-url>=2.0,<3.0
 cryptography>=42,<45
-drf-spectacular>=0.27
-sentry-sdk>=2.0
+drf-spectacular>=0.27,<1.0
+sentry-sdk>=2.0,<3.0
+# v2.4: 补全 Dockerfile CMD 依赖的 gunicorn(此前缺失致镜像启动失败)
+gunicorn>=22.0,<24.0

@@ -1,0 +1,58 @@
+# v2.4: Docker 构建忽略文件,避免 COPY . . 把以下内容打进镜像
+# 参考 https://docs.docker.com/build/concepts/context/
+
+# 版本控制
+.git
+.gitignore
+.github
+
+# Python 虚拟环境与缓存
+.venv
+venv
+env
+__pyycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# 前端构建产物(单独构建,不打入后端镜像)
+frontend/node_modules
+frontend/dist
+
+# IDE 与编辑器
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# 环境变量与密钥(生产应通过环境变量注入,不打进镜像)
+.env
+.env.local
+.env.*.local
+
+# 数据库文件
+db.sqlite3
+db.sqlite3-journal
+
+# 日志与临时文件
+*.log
+logs/
+tmp/
+*.tmp
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# Docker 自身(避免循环引用)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# 文档(可选,不打入镜像可减小体积)
+docs/
+*.md

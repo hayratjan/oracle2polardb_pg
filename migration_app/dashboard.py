@@ -7,6 +7,8 @@ from .batch_config import (
     MIGRATION_PROGRESS_SAVE_ROWS,
 )
 from .oracle_row_adapter import adapt_oracle_rows
+# v2.4: 统一从 pg_identifiers 导入安全函数(SQLite 双引号转义规则与 PG 一致,可复用)
+from .pg_identifiers import quote_identifier, safe_oracle_identifier
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
 import logging
@@ -1289,24 +1291,26 @@ def migrate_view_to_sqlite(task_id):
                 
                 if not columns:
                     raise ValueError(f"{object_name} 未找到列定义")
-                
+
+                # v2.4: object_name 经 quote_identifier 转义,防 SQLite 注入
+                _quoted_obj = quote_identifier(object_name)
                 column_defs = []
                 for column in columns:
                     column_name, data_type, data_length, data_precision, data_scale, nullable = column
                     sqlite_type = convert_oracle_to_sqlite_type(data_type, data_length, data_precision, data_scale)
                     not_null = "" if nullable == 'Y' else " NOT NULL"
-                    column_defs.append(f'"{column_name}" {sqlite_type}{not_null}')
-                
-                create_table_sql = f'CREATE TABLE IF NOT EXISTS "{object_name}" (' + ",".join(column_defs) + ")"
-                
+                    column_defs.append(f"{quote_identifier(column_name)} {sqlite_type}{not_null}")
+
+                create_table_sql = f'CREATE TABLE IF NOT EXISTS {_quoted_obj} (' + ",".join(column_defs) + ")"
+
                 sqlite_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (object_name,))
                 table_exists = sqlite_cursor.fetchone() is not None
-                
+
                 if table_exists:
                     if task.conflict_strategy == 'error':
                         raise ValueError(f'SQLite表 "{object_name}" 已存在')
                     elif task.conflict_strategy == 'replace':
-                        sqlite_cursor.execute(f'DROP TABLE IF EXISTS "{object_name}"')
+                        sqlite_cursor.execute(f'DROP TABLE IF EXISTS {_quoted_obj}')
                         sqlite_conn.commit()
                         table_exists = False
                         obj_log.append("已删除已存在的表")
@@ -1315,25 +1319,27 @@ def migrate_view_to_sqlite(task_id):
                         success.append(object_name)
                         continue
                     elif task.conflict_strategy == 'truncate':
-                        sqlite_cursor.execute(f'DELETE FROM "{object_name}"')
+                        sqlite_cursor.execute(f'DELETE FROM {_quoted_obj}')
                         sqlite_conn.commit()
                         obj_log.append("已清空目标表")
                     elif task.conflict_strategy == 'append':
                         obj_log.append("将追加数据到现有表")
-                
+
                 if not table_exists or task.conflict_strategy in ['replace', 'error']:
                     sqlite_cursor.execute(create_table_sql)
                     sqlite_conn.commit()
                     obj_log.append("已创建SQLite表结构")
-                
-                oracle_query = f"SELECT * FROM {task.source_schema}.{object_name}"
+
+                # v2.4: Oracle 端 schema/object 强校验,防注入
+                _src_qualified = f"{safe_oracle_identifier(task.source_schema)}.{safe_oracle_identifier(object_name)}"
+                oracle_query = f"SELECT * FROM {_src_qualified}"
                 oracle_cursor.arraysize = 5000
                 oracle_cursor.execute(oracle_query)
                 column_names = [col[0] for col in oracle_cursor.description]
                 column_oracle_types_sqlite = [col[1] for col in columns]
                 placeholders = ", ".join(["?"] * len(column_names))
-                quoted_columns = ", ".join([f'"{col}"' for col in column_names])
-                insert_sql = f'INSERT INTO "{object_name}" ({quoted_columns}) VALUES ({placeholders})'
+                quoted_columns = ", ".join([quote_identifier(col) for col in column_names])
+                insert_sql = f'INSERT INTO {_quoted_obj} ({quoted_columns}) VALUES ({placeholders})'
                 
                 batch_total = 0
                 conflict_insert_sql = None
