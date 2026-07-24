@@ -1,7 +1,9 @@
 # v2.4: 锁定核心依赖版本范围,避免构建不可复现
 # 生成 lock: pip-compile requirements.txt > requirements.lock(或用 uv lock)
 
-django>=6.0,<6.1
+# v2.4.1: 修复 Docker 构建——Django 6.0 在 PyPI 不存在(最新 LTS 为 4.2.x)
+# 本地开发环境实测 4.2.30,此处锁定 4.2 LTS,与开发/测试环境一致
+django>=4.2,<5.0
 django-simpleui>=2024.0
 djangorestframework>=3.15,<4.0
 djangorestframework-simplejwt>=5.3,<6.0

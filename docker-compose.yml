@@ -28,11 +28,15 @@ services:
              --access-logfile -"
     ports:
       - "8000:8000"
+    # v2.4.1: 通过 env_file 注入 DJANGO_SECRET_KEY/ALLOWED_HOSTS/MIGRATION_FERNET_KEY 等生产必填变量
+    # 此前仅 environment 设了 DJANGO_ENV/CELERY_*,缺少 SECRET_KEY 等 → collectstatic 启动即崩溃
+    env_file: .env
     environment:
       # v2.4: 强制生产模式,此前 DJANGO_DEBUG=true 但未设 DJANGO_ENV=prod
       # 导致 IS_DEV=True → ALLOWED_HOSTS=['*'] + Cookie Secure 不生效
       DJANGO_ENV: prod
       DJANGO_DEBUG: "false"
+      # environment 优先级高于 env_file,此处显式覆盖 Celery 连接(指向 compose 内部 redis 服务)
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-changeme_redis}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-changeme_redis}@redis:6379/0
     # v2.4: 生产不挂载源码卷(避免暴露 .env/.git);开发需调试可改为 volumes: - .:/app
@@ -53,6 +57,7 @@ services:
   celery-worker:
     build: .
     command: celery -A oracle2polardb_pg worker -l info
+    env_file: .env
     environment:
       DJANGO_ENV: prod
       DJANGO_DEBUG: "false"
@@ -66,6 +71,7 @@ services:
   celery-beat:
     build: .
     command: celery -A oracle2polardb_pg beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    env_file: .env
     environment:
       DJANGO_ENV: prod
       DJANGO_DEBUG: "false"
