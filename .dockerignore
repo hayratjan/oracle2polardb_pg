@@ -10,7 +10,7 @@
 .venv
 venv
 env
-__pyycache__
+__pycache__
 *.pyc
 *.pyo
 *.pyd

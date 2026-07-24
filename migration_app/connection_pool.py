@@ -10,7 +10,7 @@ import atexit
 import logging
 from typing import Optional
 
-import cx_Oracle
+import oracledb
 import psycopg2
 from psycopg2 import pool as pg_pool
 from django.shortcuts import get_object_or_404
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # 全局连接池字典与线程锁
 # ============================================================================
-_oracle_pools = {}  # {connection_id: cx_Oracle.SessionPool}
+_oracle_pools = {}  # {connection_id: oracledb.ConnectionPool}
 _pg_pools = {}      # {connection_id: psycopg2.pool.ThreadedConnectionPool}
 
 _oracle_pool_lock = threading.Lock()
@@ -46,7 +46,7 @@ def get_oracle_pooled_connection(connection_id, *, call_timeout_ms: int = 30000)
         call_timeout_ms: 单条 SQL 执行超时（毫秒），默认 30 秒
 
     Returns:
-        cx_Oracle.Connection: 池中的连接对象
+        oracledb.Connection: 池中的连接对象
 
     Raises:
         Exception: 连接池创建或获取连接失败时抛出异常
@@ -58,7 +58,7 @@ def get_oracle_pooled_connection(connection_id, *, call_timeout_ms: int = 30000)
             conn_obj = get_object_or_404(OracleConnection, pk=connection_id)
 
             # 构建 DSN
-            dsn = cx_Oracle.makedsn(
+            dsn = oracledb.makedsn(
                 conn_obj.host,
                 conn_obj.port,
                 service_name=conn_obj.service_name
@@ -67,17 +67,16 @@ def get_oracle_pooled_connection(connection_id, *, call_timeout_ms: int = 30000)
             # 获取明文密码
             pwd = require_plain_connection_password(conn_obj.password)
 
-            # 创建 SessionPool
+            # 创建连接池(oracledb 使用 create_pool,替代 cx_Oracle.SessionPool)
             try:
-                session_pool = cx_Oracle.SessionPool(
+                session_pool = oracledb.create_pool(
                     user=conn_obj.username,
                     password=pwd,
                     dsn=dsn,
                     min=POOL_MIN_CONNECTIONS,
                     max=POOL_MAX_CONNECTIONS,
                     increment=POOL_INCREMENT,
-                    threaded=True,
-                    getmode=cx_Oracle.SPOOL_ATTRVAL_WAIT,
+                    getmode=oracledb.SPOOL_ATTRVAL_WAIT,
                     timeout=POOL_TIMEOUT
                 )
                 _oracle_pools[connection_id] = session_pool

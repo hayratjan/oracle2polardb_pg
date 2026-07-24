@@ -1,5 +1,5 @@
 """
-将 cx_Oracle 查询结果中的 LOB 等特殊类型转为 PostgreSQL/psycopg2 可写入的 Python 值。
+将 oracledb 查询结果中的 LOB 等特殊类型转为 PostgreSQL/psycopg2 可写入的 Python 值。
 """
 from __future__ import annotations
 
@@ -16,15 +16,15 @@ _BINARY_ORACLE_TYPES = frozenset({
 })
 
 
-def _is_cx_oracle_lob(value: Any) -> bool:
-    """判断是否为 cx_Oracle LOB 对象（CLOB/BLOB/NCLOB）。"""
+def _is_oracledb_lob(value: Any) -> bool:
+    """判断是否为 oracledb LOB 对象（CLOB/BLOB/NCLOB）。"""
     if value is None:
         return False
     t = type(value)
-    if t.__name__ == 'LOB' and (t.__module__ or '').startswith('cx_Oracle'):
+    if t.__name__ == 'LOB' and (t.__module__ or '').startswith('oracledb'):
         return True
     mod = getattr(t, '__module__', '') or ''
-    return mod.startswith('cx_Oracle') and hasattr(value, 'read') and callable(value.read)
+    return mod.startswith('oracledb') and hasattr(value, 'read') and callable(value.read)
 
 
 def _lob_is_binary(value: Any, oracle_type: Optional[str]) -> bool:
@@ -32,10 +32,10 @@ def _lob_is_binary(value: Any, oracle_type: Optional[str]) -> bool:
     if oracle_type and oracle_type.upper() in _BINARY_ORACLE_TYPES:
         return True
     try:
-        import cx_Oracle
+        import oracledb
         lob_type = getattr(value, 'type', None)
         if lob_type is not None:
-            if hasattr(cx_Oracle, 'DB_TYPE_BLOB') and lob_type == cx_Oracle.DB_TYPE_BLOB:
+            if hasattr(oracledb, 'DB_TYPE_BLOB') and lob_type == oracledb.DB_TYPE_BLOB:
                 return True
             name = getattr(lob_type, 'name', str(lob_type))
             if 'BLOB' in str(name).upper():
@@ -52,7 +52,7 @@ def adapt_oracle_value_for_postgres(value: Any, oracle_type: Optional[str] = Non
     if value is None:
         return None
 
-    if _is_cx_oracle_lob(value):
+    if _is_oracledb_lob(value):
         try:
             content = value.read()
         except Exception as e:
@@ -75,7 +75,7 @@ def adapt_oracle_value_for_postgres(value: Any, oracle_type: Optional[str] = Non
         return value
 
     mod = type(value).__module__ or ''
-    if mod.startswith('cx_Oracle'):
+    if mod.startswith('oracledb'):
         try:
             if hasattr(value, 'read') and callable(value.read):
                 return adapt_oracle_value_for_postgres(value, oracle_type)

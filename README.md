@@ -356,10 +356,10 @@ flowchart TB
 
 ### ⏱ 连接超时控制
 
-**问题：** Oracle 主机不可达时 `cx_Oracle.connect()` 阻塞数十秒，HTTP 请求永不返回。
+**问题：** Oracle 主机不可达时 `oracledb.connect()` 阻塞数十秒，HTTP 请求永不返回。
 
 **修复：**
-- `get_oracle_connection` 新增 `call_timeout_ms`（默认 30 秒），通过 `cx_Oracle.callTimeout` 限制单条 SQL 执行超时
+- `get_oracle_connection` 新增 `call_timeout_ms`（默认 30 秒），通过 `oracledb.callTimeout` 限制单条 SQL 执行超时
 - `discover_oracle_instance` 用 `ThreadPoolExecutor` 包裹，整体 90 秒超时
 - Discovery 查询从逐 Schema 循环（10N 次往返）改为 `GROUP BY` 批量聚合（仅 7 次）
 - API 异常分类处理：超时返回 504，ORA 错误码翻译为中文提示
@@ -622,11 +622,11 @@ flowchart TB
   <tr>
     <td><strong>执行层</strong></td>
     <td>Celery Worker / 线程池 · 分批读写 · 类型映射 · 约束回放</td>
-    <td>Celery · cx_Oracle · psycopg2</td>
+    <td>Celery · oracledb · psycopg2</td>
   </tr>
   <tr>
     <td><strong>数据层</strong></td>
-    <td>Oracle (cx_Oracle) ──► PolarDB (psycopg2) / SQLite</td>
+    <td>Oracle (oracledb) ──► PolarDB (psycopg2) / SQLite</td>
     <td>连接池 · 凭据加密</td>
   </tr>
 </table>
@@ -681,12 +681,12 @@ flowchart TB
     </tr>
     <tr>
       <td><strong>数据库驱动</strong></td>
-      <td>cx_Oracle（Oracle）· psycopg2（PostgreSQL/PolarDB）</td>
+      <td>oracledb（Oracle）· psycopg2（PostgreSQL/PolarDB）</td>
       <td>✅</td>
     </tr>
     <tr>
       <td><strong>Oracle 客户端</strong></td>
-      <td>Oracle Instant Client 19c+（cx_Oracle 依赖）</td>
+      <td>Oracle Instant Client 19c+（oracledb Thick 模式依赖，Thin 模式无需）</td>
       <td>✅</td>
     </tr>
     <tr>
@@ -918,7 +918,7 @@ flowchart TB
       <td valign="top">
         <ul>
           <li>Python 3.12 · Django 5.2 · DRF</li>
-          <li>cx_Oracle · psycopg2 · Celery</li>
+          <li>oracledb · psycopg2 · Celery</li>
           <li>JWT · Fernet 凭据加密</li>
         </ul>
       </td>
@@ -990,7 +990,7 @@ docker compose down
 
 ### Q1：Discovery 接口「没有返回响应」/ 一直转圈
 
-**原因：** Oracle 主机不可达或网络不通，`cx_Oracle.connect()` 阻塞。
+**原因：** Oracle 主机不可达或网络不通，`oracledb.connect()` 阻塞。
 
 **解决：**
 - 检查 Oracle 连接配置（host/port/service_name）

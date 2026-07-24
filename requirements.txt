@@ -8,7 +8,9 @@ django-simpleui>=2024.0
 djangorestframework>=3.15,<4.0
 djangorestframework-simplejwt>=5.3,<6.0
 django-cors-headers>=4.4,<5.0
-cx-Oracle>=8.3,<9.0
+# v2.4.2: cx_Oracle 8.3.0 无 Python 3.12 wheel,Docker 构建从源码编译失败
+# 改用官方继任者 oracledb(Python 驱动,有 cp312 wheel,API 兼容)
+oracledb>=2.0,<3.0
 psycopg2-binary>=2.9,<3.0
 celery[redis]>=5.3,<6.0
 django-celery-beat>=2.6,<3.0

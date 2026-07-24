@@ -1,0 +1,48 @@
+/* 自定义样式 */
+.navbar-brand {
+    font-weight: bold;
+}
+
+.card {
+    margin-bottom: 1rem;
+}
+
+.breadcrumb {
+    background-color: transparent;
+    padding: 0.75rem 0;
+}
+
+/* 表单样式 */
+.form-label {
+    font-weight: 500;
+}
+
+.form-select:disabled {
+    background-color: #e9ecef;
+}
+
+/* 按钮样式 */
+.btn-lg {
+    padding: 0.75rem 1.5rem;
+}
+
+/* 卡片样式 */
+.card-header {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid rgba(0,0,0,.125);
+}
+
+/* 导航栏样式 */
+.navbar {
+    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+}
+
+/* 加载状态样式 */
+.spinner-border-sm {
+    margin-right: 0.5rem;
+}
+
+/* 错误提示样式 */
+.invalid-feedback {
+    font-size: 0.875rem;
+} 

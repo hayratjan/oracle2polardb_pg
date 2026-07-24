@@ -2,6 +2,7 @@
 
 > v2.4 提供 Docker 镜像构建与 docker-compose 一键部署,支持 GHCR 自动构建。
 > 镜像基于 `python:3.12-slim`,gunicorn 生产启动,非 root 用户运行,内置健康检查。
+> v2.4.2: Oracle 驱动从 `cx_Oracle` 迁移至官方继任者 `oracledb`(修复 Python 3.12 下 Docker 构建失败)。
 
 ## 一、镜像获取
 
@@ -104,6 +105,22 @@ RUN DJANGO_ENV=dev python manage.py collectstatic --noinput
 - 构建完成后创建 `appuser`(UID 1000),`chown /app`,以 `appuser` 运行 gunicorn
 - 内置 `HEALTHCHECK`,30 秒间隔探测 `/healthz`
 
+### 3.3 Oracle 驱动:oracledb(替代 cx_Oracle)
+
+**背景**:`cx_Oracle 8.3.0` 是 Oracle 官方驱动的最终版本,已停止维护,且无 Python 3.12 wheel。在 `python:3.12-slim` 基础镜像上 `pip install cx-Oracle` 会回退到源码编译,因缺少 Oracle Client SDK 而失败。
+
+**修复**(v2.4.2):`requirements.txt` 改用官方继任者 `oracledb>=2.0,<3.0`,该包提供 cp312 预编译 wheel,安装无需编译,且 API 与 `cx_Oracle` 高度兼容。
+
+**Thin / Thick 模式**:
+- **Thin 模式**(默认):纯 Python 实现,无需安装 Oracle Instant Client,开箱即用。适合大多数场景。
+- **Thick 模式**:需设置 `ORACLE_CLIENT_LIB` 环境变量指向 Instant Client 路径,`settings.py` 自动调用 `oracledb.init_oracle_client()` 切换。连接 Oracle 11g 等旧版本时可能需要此模式。
+
+Docker 部署时,如需 Thick 模式,在 `docker-compose.yml` 的 `environment` 中添加:
+```yaml
+ORACLE_CLIENT_LIB: /opt/oracle/instantclient_23_3
+```
+并在 Dockerfile 中安装 Instant Client(或挂载宿主机目录)。默认 Thin 模式无需额外配置。
+
 ## 四、CI 自动构建(GitHub Actions)
 
 ### 4.1 docker-build.yml
@@ -182,6 +199,25 @@ v2.4 新增「对比预览」与「立即增量同步」功能,用于近实时�
 **原因**:`requirements.txt` 中 `django>=6.0,<6.1` 在 PyPI 不存在(最新 LTS 为 4.2.x),pip 找不到匹配版本。
 
 **解决**:已修复(v2.4.1),`requirements.txt` 改为 `django>=4.2,<5.0`,与本地开发环境一致。
+
+### Q2.1: GitHub Actions docker build 报 `error: Getting requirements to build wheel did not run successfully` (cx_Oracle 编译失败)
+
+**原因**:`cx-Oracle 8.3.0` 是最终版本(Oracle 官方已停止维护,继任者为 `oracledb`),**没有 Python 3.12 的预编译 wheel**。Dockerfile 基础镜像为 `python:3.12-slim`,pip 回退到从源码编译 `cx_Oracle`,但构建环境缺少 Oracle Client SDK 头文件,编译失败。
+
+**解决**:已修复(v2.4.2),将 `cx-Oracle>=8.3,<9.0` 替换为官方继任者 `oracledb>=2.0,<3.0`。`oracledb` 由 Oracle 官方维护,提供 Python 3.12 wheel(纯安装无需编译),API 与 `cx_Oracle` 高度兼容。代码层面的主要变更:
+
+| cx_Oracle (旧) | oracledb (新) | 说明 |
+|:-----|:-----|:-----|
+| `import cx_Oracle` | `import oracledb` | 模块名变更 |
+| `cx_Oracle.makedsn()` | `oracledb.makedsn()` | API 不变 |
+| `cx_Oracle.connect()` | `oracledb.connect()` | API 不变 |
+| `cx_Oracle.DatabaseError` | `oracledb.DatabaseError` | 异常类不变 |
+| `cx_Oracle.init_oracle_client()` | `oracledb.init_oracle_client()` | Thick 模式初始化 |
+| `cx_Oracle.SessionPool()` | `oracledb.create_pool()` | 工厂函数名变更 |
+| `cx_Oracle.SPOOL_ATTRVAL_WAIT` | `oracledb.SPOOL_ATTRVAL_WAIT` | 常量保留(向后兼容) |
+| `threaded=True` 参数 | 移除(oracledb 池默认线程安全) | 不再需要 |
+
+> **注意**:`oracledb` 默认以 **Thin 模式** 运行(纯 Python,无需 Oracle Instant Client)。如需 Thick 模式功能(如连接旧版 Oracle 11g),设置 `ORACLE_CLIENT_LIB` 环境变量指向 Instant Client 路径,`settings.py` 会自动调用 `oracledb.init_oracle_client()` 切换。
 
 ### Q3: GitHub Actions docker build 报 `denied: permission_denided`
 
