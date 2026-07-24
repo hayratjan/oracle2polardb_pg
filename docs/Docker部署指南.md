@@ -177,21 +177,37 @@ v2.4 新增「对比预览」与「立即增量同步」功能,用于近实时�
 
 **解决**:已修复(构建期用 `DJANGO_ENV=dev`)。若仍报错,确认 Dockerfile 第 27 行为 `RUN DJANGO_ENV=dev python manage.py collectstatic --noinput`。
 
-### Q2: GitHub Actions docker build 报 `denied: permission_denided`
+### Q2: GitHub Actions docker build 报 `pip install did not complete successfully: exit code: 1`
+
+**原因**:`requirements.txt` 中 `django>=6.0,<6.1` 在 PyPI 不存在(最新 LTS 为 4.2.x),pip 找不到匹配版本。
+
+**解决**:已修复(v2.4.1),`requirements.txt` 改为 `django>=4.2,<5.0`,与本地开发环境一致。
+
+### Q3: GitHub Actions docker build 报 `denied: permission_denided`
 
 **原因**:Workflow 无写入 Packages 权限。
 
 **解决**:仓库 Settings → Actions → General → Workflow permissions → 勾选 **Read and write permissions**。
 
-### Q3: 容器启动后健康检查失败
+### Q4: docker compose up 后 web 容器启动即崩溃(RuntimeError)
+
+**原因**:`docker-compose.yml` 中 web/worker/beat 服务仅设了 `DJANGO_ENV=prod` 但未注入 `DJANGO_SECRET_KEY`/`ALLOWED_HOSTS`/`MIGRATION_FERNET_KEY`,生产模式强制检查导致崩溃。
+
+**解决**:已修复(v2.4.1),三个服务均添加 `env_file: .env`,从 `.env` 文件注入所有生产必填变量。确保 `.env` 中已填写:
+- `DJANGO_SECRET_KEY`(随机长字符串)
+- `ALLOWED_HOSTS`(逗号分隔域名)
+- `MIGRATION_FERNET_KEY`(Fernet 密钥)
+- `REDIS_PASSWORD`(Redis 密码)
+
+### Q5: 容器启动后健康检查失败
 
 **排查**:
 ```bash
 docker compose logs web | tail -50
-docker compose exec web python -c "import django; django.setup()" 
+docker compose exec web python -c "import django; django.setup()"
 ```
 常见原因:`DJANGO_SECRET_KEY`/`ALLOWED_HOSTS`/`MIGRATION_FERNET_KEY` 未设(生产模式强制检查)。
 
-### Q4: celery-worker 连不上 Redis
+### Q6: celery-worker 连不上 Redis
 
-**确认**:`.env` 中 `CELERY_BROKER_URL` 的密码与 `REDIS_PASSWORD` 一致,且地址为 `redis:6379`(compose 服务名)。
+**确认**:`.env` 中 `REDIS_PASSWORD` 与 docker-compose.yml 中 `${REDIS_PASSWORD:-changeme_redis}` 一致,且 `CELERY_BROKER_URL` 地址为 `redis:6379`(compose 服务名)。
