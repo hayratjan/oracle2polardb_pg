@@ -346,6 +346,126 @@ class MigrationTaskViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'status': 'error', 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    # ========================================================================
+    # v2.4: 数据库对比与立即增量同步
+    # ========================================================================
+
+    @action(detail=True, methods=['get'], url_path='compare-preview')
+    def compare_preview(self, request, pk=None):
+        """对比预览:只读对比源/目标差异,不执行同步。
+
+        返回源/目标行数、待插入(源有目标无)、待删除(目标有源无)、共存行数。
+        UPDATE 检测需逐行哈希,仅在同步时做;此处返回 sampled_updates=None。
+        """
+        task = self.get_object()
+        if not task.postgres_connection_id:
+            return Response(
+                {'status': 'error', 'message': '任务未配置 PostgreSQL 连接'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if task.task_type not in ('table', 'view_to_table', 'all_tables', 'table_batch'):
+            return Response(
+                {'status': 'error', 'message': '对比预览仅支持表类型任务(table/view_to_table/all_tables/table_batch)'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from .views import get_oracle_connection, get_postgres_connection
+        from .incremental_sync import preview_table_diff
+        from .migration_errors import format_db_error
+
+        oracle_conn = pg_conn = oracle_cursor = pg_cursor = None
+        try:
+            oracle_conn = get_oracle_connection(task.oracle_connection_id, call_timeout_ms=60000)
+            oracle_cursor = oracle_conn.cursor()
+            pg_conn = get_postgres_connection(task.postgres_connection_id, task.postgres_database)
+            pg_cursor = pg_conn.cursor()
+            diff = preview_table_diff(task, oracle_cursor, pg_conn, pg_cursor)
+            return Response({'status': 'ok', 'diff': diff})
+        except Exception as e:
+            return Response(
+                {'status': 'error', 'message': format_db_error(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        finally:
+            for obj in (oracle_cursor, oracle_conn, pg_cursor, pg_conn):
+                if obj:
+                    try:
+                        obj.close()
+                    except Exception:
+                        pass
+
+    @action(detail=True, methods=['post'], url_path='sync-now')
+    def sync_now(self, request, pk=None):
+        """立即增量同步:对 pk_mirror 任务同步执行主键对齐,返回同步日志。
+
+        适用中小表(50万行内)的近实时同步;大表请配置 Celery Beat 定时增量。
+        同步执行,gunicorn timeout=120s 内需完成,否则超时。
+        """
+        task = self.get_object()
+        if task.incremental_mode != 'pk_mirror':
+            return Response(
+                {'status': 'error', 'message': '立即同步仅支持增量模式=pk_mirror 的任务'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not task.postgres_connection_id:
+            return Response(
+                {'status': 'error', 'message': '任务未配置 PostgreSQL 连接'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # v2.4: 并发保护——任务正在执行中(running)时拒绝立即同步,避免与迁移进程并发主键对齐冲突
+        if task.status == 'running':
+            return Response(
+                {'status': 'error', 'message': '任务正在执行中,请等待迁移完成后再立即同步,避免并发主键对齐冲突'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        from .views import get_oracle_connection, get_postgres_connection
+        from .incremental_sync import run_table_pk_mirror_flow
+        from .migration_errors import format_db_error
+
+        log: list = []
+        oracle_conn = pg_conn = oracle_cursor = pg_cursor = None
+        try:
+            oracle_conn = get_oracle_connection(task.oracle_connection_id, call_timeout_ms=60000)
+            oracle_cursor = oracle_conn.cursor()
+            pg_conn = get_postgres_connection(task.postgres_connection_id, task.postgres_database)
+            pg_cursor = pg_conn.cursor()
+
+            import time
+            t0 = time.time()
+            run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log)
+            duration = round(time.time() - t0, 2)
+
+            # 写任务日志(追加,不覆盖)
+            task.refresh_from_db()
+            task.log = (task.log or '') + '\n' + '\n'.join(log)
+            task.save(update_fields=['log'])
+
+            return Response({
+                'status': 'ok',
+                'duration_seconds': duration,
+                'log_tail': log[-20:] if log else [],
+            })
+        except Exception as e:
+            # 失败也写日志
+            try:
+                task.refresh_from_db()
+                task.log = (task.log or '') + f'\n[立即同步失败] {format_db_error(e)}'
+                task.save(update_fields=['log'])
+            except Exception:
+                pass
+            return Response(
+                {'status': 'error', 'message': format_db_error(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        finally:
+            for obj in (oracle_cursor, oracle_conn, pg_cursor, pg_conn):
+                if obj:
+                    try:
+                        obj.close()
+                    except Exception:
+                        pass
+
 
 class SchemasAPIView(APIView):
     def get(self, request):

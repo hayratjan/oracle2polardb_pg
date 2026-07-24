@@ -355,6 +355,40 @@
                   删除任务
                 </button>
               </div>
+
+              <!-- v2.4: 数据库对比与立即增量同步按钮 -->
+              <div v-if="canCompare || canSyncNow" class="action-buttons mt-2">
+                <button v-if="canCompare" @click="comparePreview" :disabled="diffLoading"
+                        class="btn btn-sm btn-outline-primary flex-grow-1">
+                  <i class="bi bi-arrow-left-right me-2" style="font-size: 18px;"></i>
+                  {{ diffLoading ? '对比中...' : '对比预览' }}
+                </button>
+                <button v-if="canSyncNow" @click="syncNow" :disabled="syncing || syncDisabledByRunning"
+                        :title="syncDisabledByRunning ? '任务执行中,暂不可立即同步' : ''"
+                        class="btn btn-sm btn-outline-success flex-grow-1">
+                  <i class="bi bi-lightning-charge me-2" style="font-size: 18px;"></i>
+                  {{ syncing ? '同步中...' : (syncDisabledByRunning ? '执行中不可同步' : '立即增量同步') }}
+                </button>
+              </div>
+
+              <!-- v2.4: 对比结果展示 -->
+              <div v-if="diffResult" class="diff-result-card mt-3 p-3" style="background: var(--bs-tertiary-bg, #f8f9fa); border: 1px solid var(--bs-border-color, #dee2e6); border-radius: 4px;">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <strong><i class="bi bi-clipboard-data me-1"></i>对比结果</strong>
+                  <button type="button" class="btn-close btn-sm" @click="diffResult = null"></button>
+                </div>
+                <table class="table table-sm mb-2">
+                  <tbody>
+                    <tr><td class="text-muted" style="width:140px;">源表</td><td>{{ diffResult.source_schema }}.{{ diffResult.table_name }} ({{ diffResult.source_count }} 行)</td></tr>
+                    <tr><td class="text-muted">目标表</td><td>{{ diffResult.target_schema }}.{{ diffResult.pg_table }} ({{ diffResult.target_count }} 行)</td></tr>
+                    <tr v-if="diffResult.target_exists"><td class="text-muted">主键列</td><td>{{ diffResult.pk_columns.join(', ') || '(无)' }}</td></tr>
+                    <tr v-if="diffResult.to_insert !== null"><td class="text-success">待插入(源有目标无)</td><td>{{ diffResult.to_insert }} 行</td></tr>
+                    <tr v-if="diffResult.to_delete !== null"><td class="text-danger">待删除(目标有源无)</td><td>{{ diffResult.to_delete }} 行</td></tr>
+                    <tr v-if="diffResult.common !== null"><td class="text-muted">两端共存</td><td>{{ diffResult.common }} 行</td></tr>
+                  </tbody>
+                </table>
+                <div v-if="diffResult.note" class="small text-muted"><i class="bi bi-info-circle me-1"></i>{{ diffResult.note }}</div>
+              </div>
           </section>
 
           <section v-if="migrationReport && isTerminalStatus(task.status)" class="task-detail-section mb-4">
@@ -453,7 +487,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { migrationTaskApi } from '@/api'
-import type { MigrationTask } from '@/api'
+import type { MigrationTask, TableDiffResult } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 
 const route = useRoute()
@@ -461,6 +495,25 @@ const router = useRouter()
 const loading = ref(false)
 const task = ref<MigrationTask | null>(null)
 let statusInterval: ReturnType<typeof setInterval> | null = null
+
+// ===== v2.4: 数据库对比与立即增量同步 =====
+const diffResult = ref<TableDiffResult | null>(null)
+const diffLoading = ref(false)
+const syncing = ref(false)
+/** 对比预览按钮显示条件:表类型任务且有 PG 连接 */
+const canCompare = computed(() => {
+  if (!task.value) return false
+  return !!task.value.postgres_connection
+    && ['table', 'view_to_table', 'all_tables', 'table_batch'].includes(task.value.task_type)
+})
+/** 立即同步按钮显示条件:增量模式为 pk_mirror(任务执行中时按钮禁用而非隐藏) */
+const canSyncNow = computed(() => {
+  return !!task.value && task.value.incremental_mode === 'pk_mirror'
+})
+/** 任务正在执行中,立即同步需禁用以避免并发主键对齐冲突 */
+const syncDisabledByRunning = computed(() => {
+  return !!task.value && task.value.status === 'running'
+})
 /** 执行中任务自动刷新间隔（毫秒） */
 const POLL_INTERVAL_MS = 3000
 
@@ -977,6 +1030,40 @@ const cancelTask = async () => {
     await loadTask()
   } catch (error) {
     console.error('Failed to cancel task:', error)
+  }
+}
+
+// ===== v2.4: 数据库对比与立即增量同步 =====
+const comparePreview = async () => {
+  diffLoading.value = true
+  diffResult.value = null
+  try {
+    const res = await migrationTaskApi.comparePreview(Number(route.params.id))
+    diffResult.value = res.data.diff
+  } catch (error: any) {
+    const msg = error?.response?.data?.message || error?.message || '对比失败'
+    alert('对比预览失败: ' + msg)
+    console.error('comparePreview failed:', error)
+  } finally {
+    diffLoading.value = false
+  }
+}
+
+const syncNow = async () => {
+  if (!confirm('确定立即执行主键对齐增量同步？\n将对比源/目标主键差异,自动补插缺失行、删除多余行、检测更新行。\n适用中小表(50万行内),大表请用定时增量。')) return
+  syncing.value = true
+  try {
+    const res = await migrationTaskApi.syncNow(Number(route.params.id))
+    const dur = res.data.duration_seconds
+    const logTail = res.data.log_tail || []
+    alert(`增量同步完成,耗时 ${dur} 秒\n${logTail.slice(-5).join('\n')}`)
+    await loadTask()
+  } catch (error: any) {
+    const msg = error?.response?.data?.message || error?.message || '同步失败'
+    alert('立即同步失败: ' + msg)
+    console.error('syncNow failed:', error)
+  } finally {
+    syncing.value = false
   }
 }
 

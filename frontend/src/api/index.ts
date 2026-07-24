@@ -175,6 +175,29 @@ export const migrationTaskApi = {
     apiClient.get(`/api/tasks/${id}/report/`, {
       params: { refresh: params?.refresh ? 1 : undefined, format: params?.format },
     }),
+  /** v2.4: 对比预览(只读,返回源/目标差异统计,不执行同步) */
+  comparePreview: (id: number) =>
+    apiClient.get<{ status: string; diff: TableDiffResult }>(`/api/tasks/${id}/compare-preview/`),
+  /** v2.4: 立即增量同步(对 pk_mirror 任务同步执行主键对齐) */
+  syncNow: (id: number) =>
+    apiClient.post<{ status: string; duration_seconds: number; log_tail: string[] }>(`/api/tasks/${id}/sync-now/`),
+}
+
+/** v2.4: 对比预览差异统计 */
+export interface TableDiffResult {
+  source_schema: string
+  table_name: string
+  target_schema: string
+  pg_table: string
+  target_exists: boolean
+  source_count: number
+  target_count: number
+  to_insert: number | null
+  to_delete: number | null
+  common: number | null
+  sampled_updates: number | null
+  pk_columns: string[]
+  note: string
 }
 
 /** 主键对齐对比快照 */

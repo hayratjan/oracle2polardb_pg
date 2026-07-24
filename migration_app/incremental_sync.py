@@ -62,6 +62,120 @@ def fetch_oracle_pk_columns(oracle_cursor, owner: str, table_name: str) -> List[
     return [_safe_oracle_ident(c) for c in rows]
 
 
+def preview_table_diff(task, oracle_cursor, pg_conn, pg_cursor, source_table_name=None) -> dict:
+    """v2.4: 只读对比源/目标差异,不执行任何写操作。
+
+    用于「对比预览」API,让用户在同步前了解差异规模(待插入/待删除/共存行数)。
+    UPDATE 检测需逐行哈希对比(开销大),此处不执行,仅在同步时做;
+    返回 sampled_updates=None,由调用方提示用户。
+
+    Returns:
+        dict: 差异统计,含 source_count/target_count/to_insert/to_delete/common/pk_columns 等
+    """
+    from .pg_identifiers import apply_identifier_case
+
+    source_schema = task.source_schema
+    target_schema = task.target_schema
+    table_name = (source_table_name or task.source_object or "").strip()
+    if not table_name:
+        raise ValueError("对比预览需要有效的源表名")
+
+    id_case = getattr(task, 'identifier_case', 'lower') or 'lower'
+    pg_table = apply_identifier_case(table_name, id_case)
+
+    # 检查目标表是否存在
+    pg_cursor.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s",
+        (target_schema, pg_table),
+    )
+    target_exists = pg_cursor.fetchone() is not None
+
+    # 源行数
+    oracle_cursor.execute(
+        f"SELECT COUNT(*) FROM {_safe_oracle_ident(source_schema)}.{_safe_oracle_ident(table_name)}"
+    )
+    n_ora = int(oracle_cursor.fetchone()[0])
+
+    if not target_exists:
+        return {
+            'source_schema': source_schema, 'table_name': table_name,
+            'target_schema': target_schema, 'pg_table': pg_table,
+            'target_exists': False,
+            'source_count': n_ora, 'target_count': 0,
+            'to_insert': n_ora, 'to_delete': 0, 'common': 0,
+            'sampled_updates': None, 'pk_columns': [],
+            'note': '目标表不存在,需先执行全量迁移(首次同步将自动建表导数)',
+        }
+
+    pg_ident_table = f'{_quote_pg_ident(target_schema)}.{_quote_pg_ident(pg_table)}'
+    pg_cursor.execute(f"SELECT COUNT(*) FROM {pg_ident_table}")
+    n_pg = int(pg_cursor.fetchone()[0])
+
+    pk_cols = fetch_oracle_pk_columns(oracle_cursor, source_schema, table_name)
+    if not pk_cols:
+        return {
+            'source_schema': source_schema, 'table_name': table_name,
+            'target_schema': target_schema, 'pg_table': pg_table,
+            'target_exists': True,
+            'source_count': n_ora, 'target_count': n_pg,
+            'to_insert': None, 'to_delete': None, 'common': None,
+            'sampled_updates': None, 'pk_columns': [],
+            'note': '源表无主键,无法主键对齐;仅返回行数差,建议改用水位列增量',
+        }
+
+    # 行数超限保护(与 run_table_pk_mirror_flow 一致)
+    max_rows = int(getattr(task, "sync_max_pkey_rows", None) or 500_000)
+    if n_ora > max_rows or n_pg > max_rows:
+        return {
+            'source_schema': source_schema, 'table_name': table_name,
+            'target_schema': target_schema, 'pg_table': pg_table,
+            'target_exists': True,
+            'source_count': n_ora, 'target_count': n_pg,
+            'to_insert': None, 'to_delete': None, 'common': None,
+            'sampled_updates': None, 'pk_columns': pk_cols,
+            'note': f'行数超过单次上限 {max_rows},请调大 sync_max_pkey_rows 或改用水位列增量',
+        }
+
+    # 拉取两端主键做差集
+    ora_sel = ", ".join(pk_cols)
+    oracle_cursor.execute(
+        f"SELECT {ora_sel} FROM {_safe_oracle_ident(source_schema)}.{_safe_oracle_ident(table_name)}"
+    )
+    oracle_pk_by_norm: dict[Tuple[Any, ...], Tuple[Any, ...]] = {}
+    while True:
+        batch = oracle_cursor.fetchmany(20000)
+        if not batch:
+            break
+        for row in batch:
+            oracle_pk_by_norm[_pk_tuple(row)] = tuple(row)
+
+    pk_cols_lower = [c.lower() for c in pk_cols]
+    pg_sel = ", ".join(_quote_pg_ident(c) for c in pk_cols_lower)
+    pg_cursor.execute(f"SELECT {pg_sel} FROM {pg_ident_table}")
+    pg_pk_by_norm: dict[Tuple[Any, ...], Tuple[Any, ...]] = {}
+    while True:
+        batch = pg_cursor.fetchmany(20000)
+        if not batch:
+            break
+        for row in batch:
+            pg_pk_by_norm[_pk_tuple(row)] = tuple(row)
+
+    ora_keys = set(oracle_pk_by_norm)
+    pg_keys = set(pg_pk_by_norm)
+
+    return {
+        'source_schema': source_schema, 'table_name': table_name,
+        'target_schema': target_schema, 'pg_table': pg_table,
+        'target_exists': True,
+        'source_count': n_ora, 'target_count': n_pg,
+        'to_insert': len(ora_keys - pg_keys),
+        'to_delete': len(pg_keys - ora_keys),
+        'common': len(ora_keys & pg_keys),
+        'sampled_updates': None, 'pk_columns': pk_cols,
+        'note': 'UPDATE 检测需逐行哈希对比(开销大),将在同步时执行;此处仅统计主键差集',
+    }
+
+
 def run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log, source_table_name=None) -> None:
     """
     主键对齐同步入口：目标表不存在时先走全量建表+导数；已存在则只做主键差集增删。

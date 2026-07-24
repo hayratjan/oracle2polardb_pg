@@ -19,8 +19,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# v2.4: collectstatic 失败应显式报错,不应 || true 静默
-RUN python manage.py collectstatic --noinput
+# v2.4: collectstatic 构建期用 dev 模式
+# 原因:DJANGO_ENV=prod 下 settings.py 强制要求 SECRET_KEY/ALLOWED_HOSTS/MIGRATION_FERNET_KEY,
+# 构建期无这些环境变量会导致 collectstatic raise RuntimeError,docker build 失败。
+# dev 模式不触发这些检查,collectstatic 只需静态文件目录即可成功。
+# RUN 的环境变量仅在该层生效,不影响最终镜像 ENV(DJANGO_ENV=prod)
+RUN DJANGO_ENV=dev python manage.py collectstatic --noinput
 
 EXPOSE 8000
 
