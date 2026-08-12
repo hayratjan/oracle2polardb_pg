@@ -22,7 +22,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
-import cx_Oracle
+import oracledb
 import os
 import logging
 from datetime import timedelta
@@ -34,13 +34,14 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Initialize Oracle client（生产/开发通过 ORACLE_CLIENT_LIB 指定；CI 可留空跳过）
-# v2.4: 不再硬编码开发者本地路径,默认空字符串;需要时通过环境变量显式提供
+# v2.5: cx_Oracle → oracledb 迁移。oracledb 默认 thin 模式(纯 Python,无需 Instant Client)。
+# 仅当显式设置 ORACLE_CLIENT_LIB 时才切换到 thick 模式(需要 Instant Client)。
 _ORACLE_CLIENT_LIB = os.environ.get('ORACLE_CLIENT_LIB', '')
 if _ORACLE_CLIENT_LIB:
     try:
-        cx_Oracle.init_oracle_client(lib_dir=_ORACLE_CLIENT_LIB)
+        oracledb.init_oracle_client(lib_dir=_ORACLE_CLIENT_LIB)
     except Exception:
-        pass  # 无本地 Instant Client 时仍可运行不依赖 Oracle 的 API/单测
+        pass  # 无本地 Instant Client 时仍可运行(thin 模式)不依赖 Oracle 的 API/单测
 
 
 # ============================================================================

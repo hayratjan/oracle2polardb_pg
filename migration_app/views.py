@@ -45,7 +45,7 @@ from .pg_identifiers import (
 )
 # v2.4: 保留旧名作为别名,避免大量调用点改动
 _safe_oracle_identifier = safe_oracle_identifier
-import cx_Oracle
+import oracledb
 import psycopg2
 import logging
 import json
@@ -151,20 +151,24 @@ def _get_oracle_connection_direct(connection_id, *, call_timeout_ms: int = 30000
     Args:
         connection_id: OracleConnection 主键
         call_timeout_ms: 单条 SQL 执行超时（毫秒），默认 30 秒。
-            cx_Oracle 7.1+ 的 callTimeout，超时后查询自动中断并抛
+            oracledb 的 call_timeout，超时后查询自动中断并抛
             DPI-1067 或 ORA-01013。设为 0 表示不限制。
     """
     conn_obj = get_object_or_404(OracleConnection, pk=connection_id)
-    dsn = cx_Oracle.makedsn(conn_obj.host, conn_obj.port, service_name=conn_obj.service_name)
+    dsn = oracledb.makedsn(conn_obj.host, conn_obj.port, service_name=conn_obj.service_name)
     pwd = _connection_plain_password(conn_obj.password)
-    connection = cx_Oracle.connect(
+    connection = oracledb.connect(
         user=conn_obj.username,
         password=pwd,
         dsn=dsn
     )
     # 设置单条 SQL 执行超时，避免查询卡死导致 HTTP 请求永不返回
-    if call_timeout_ms and hasattr(connection, 'callTimeout'):
-        connection.callTimeout = call_timeout_ms
+    # v2.5: oracledb 使用 call_timeout(下划线),兼容 cx_Oracle 的 callTimeout
+    if call_timeout_ms:
+        if hasattr(connection, 'call_timeout'):
+            connection.call_timeout = call_timeout_ms
+        elif hasattr(connection, 'callTimeout'):
+            connection.callTimeout = call_timeout_ms
     return connection
 
 
@@ -177,7 +181,7 @@ def get_oracle_connection(connection_id, *, call_timeout_ms: int = 30000, use_po
         use_pool: 是否使用连接池，默认 True（可通过 settings.MIGRATION_USE_CONNECTION_POOL 控制）
 
     Returns:
-        cx_Oracle.Connection: 连接对象（从池获取或新建，使用池时返回代理对象）
+        oracledb.Connection: 连接对象（从池获取或新建，使用池时返回代理对象）
 
     注意：
         - 使用连接池时，返回代理对象，调用 connection.close() 会自动归还到池
@@ -2382,16 +2386,16 @@ def _test_oracle_connect_with_params(host, port, service_name, username, passwor
     except (TypeError, ValueError):
         return False, '端口格式无效'
     try:
-        dsn = cx_Oracle.makedsn(host, port, service_name=service_name)
-        # cx_Oracle.connect() 不支持 connect_timeout 参数，需通过 DSN 或 Oracle 客户端配置超时
-        connection = cx_Oracle.connect(
+        dsn = oracledb.makedsn(host, port, service_name=service_name)
+        # oracledb.connect() 不支持 connect_timeout 参数，需通过 DSN 或 Oracle 客户端配置超时
+        connection = oracledb.connect(
             user=username,
             password=password or '',
             dsn=dsn
         )
         connection.close()
         return True, None
-    except cx_Oracle.DatabaseError as e:
+    except oracledb.DatabaseError as e:
         error_obj, = e.args
         if error_obj.code == 12170 or 'timeout' in str(e).lower():
             return False, '无法连接到数据库，连接超时'

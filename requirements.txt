@@ -8,7 +8,10 @@ django-simpleui>=2024.0
 djangorestframework>=3.15,<4.0
 djangorestframework-simplejwt>=5.3,<6.0
 django-cors-headers>=4.4,<5.0
-cx-Oracle>=8.3,<9.0
+# v2.5: cx_Oracle 已被 Oracle 官方废弃,迁移到继任者 oracledb
+# oracledb 默认 thin 模式为纯 Python,无需 Oracle Instant Client 即可运行
+# (CI/桌面客户端因此不再需要安装 Instant Client)
+oracledb>=1.4,<3.0
 psycopg2-binary>=2.9,<3.0
 celery[redis]>=5.3,<6.0
 django-celery-beat>=2.6,<3.0

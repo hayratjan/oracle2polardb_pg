@@ -1310,7 +1310,7 @@ class OracleDiscoveryAPIView(APIView):
 
     @staticmethod
     def _format_oracle_error(e: Exception) -> str:
-        """把 cx_Oracle 异常转为用户可读的提示。"""
+        """把 oracledb 异常转为用户可读的提示。"""
         msg = str(e)
         if 'ORA-12154' in msg:
             return f'ORA-12154: 无法解析连接标识符。请检查 service_name 配置。({msg})'
