@@ -1,0 +1,215 @@
+/**
+ * 桌面应用(Tauri)专属样式
+ * 仅在 Tauri WebView 中生效,通过 body.desktop-app 标记挂载。
+ */
+
+body.desktop-app {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Source Han Sans CN',
+    'Noto Sans CJK SC', Roboto, Oxygen, Ubuntu, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+
+body.desktop-app input,
+body.desktop-app textarea,
+body.desktop-app [contenteditable='true'] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+body.desktop-app .selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+body.desktop-app ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+body.desktop-app ::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 8px;
+}
+
+body.desktop-app ::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background 0.15s ease;
+}
+
+body.desktop-app ::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+body.desktop-app ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+body.desktop-app * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+body.desktop-app [data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+body.desktop-app [data-tauri-drag-region] button,
+body.desktop-app [data-tauri-drag-region] a,
+body.desktop-app [data-tauri-drag-region] input,
+body.desktop-app [data-tauri-drag-region] select,
+body.desktop-app [data-tauri-drag-region] textarea,
+body.desktop-app [data-tauri-drag-region] .no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+body.desktop-app .app-header {
+  -webkit-app-region: drag;
+  app-region: drag;
+  padding-right: 96px;
+}
+
+body.desktop-app .app-header button,
+body.desktop-app .app-header .theme-switcher,
+body.desktop-app .app-header .breadcrumb-nav {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+body.desktop-app.os-mac .app-header {
+  padding-left: 80px;
+}
+
+.desktop-boot-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: var(--gradient, linear-gradient(135deg, #2563eb 0%, #1e40af 100%));
+  color: #fff;
+  transition: opacity 0.4s ease;
+}
+
+.desktop-boot-splash.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.desktop-boot-splash .boot-logo {
+  width: 84px;
+  height: 84px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+.desktop-boot-splash .boot-title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.desktop-boot-splash .boot-subtitle {
+  font-size: 13px;
+  opacity: 0.78;
+  margin-top: -12px;
+}
+
+.desktop-boot-splash .boot-progress {
+  width: 220px;
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+  position: relative;
+}
+
+.desktop-boot-splash .boot-progress::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -40%;
+  width: 40%;
+  height: 100%;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.85);
+  animation: desktop-boot-slider 1.4s ease-in-out infinite;
+}
+
+@keyframes desktop-boot-slider {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+
+.desktop-boot-splash .boot-status {
+  font-size: 12px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+body.desktop-app.window-inactive .app-header,
+body.desktop-app.window-inactive .app-sidebar {
+  filter: saturate(0.7) brightness(0.92);
+  transition: filter 0.2s ease;
+}
+
+body.desktop-app .table tbody td,
+body.desktop-app .table thead th {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+body.desktop-app {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body.desktop-app .form-control:focus,
+body.desktop-app .form-select:focus,
+body.desktop-app .btn:focus-visible {
+  outline: 2px solid var(--focus-ring, rgba(37, 99, 235, 0.4));
+  outline-offset: 1px;
+}
+
+body.desktop-app * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.desktop-window-too-small {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: var(--background);
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: center;
+  padding: 24px;
+}
+
+body.desktop-app.window-too-small .desktop-window-too-small {
+  display: flex;
+}

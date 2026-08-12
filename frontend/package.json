@@ -1,14 +1,21 @@
 {
   "name": "oracle2polardb-pg-frontend",
-  "version": "2.0.0",
+  "version": "2.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:tauri": "TAURI_ENV=1 vite",
     "build": "vue-tsc && vite build",
+    "build:tauri": "TAURI_ENV=1 vue-tsc && TAURI_ENV=1 vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@popperjs/core": "^2.11.8",
+    "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-shell": "^2.0.1",
+    "@tauri-apps/plugin-process": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.1",
+    "@tauri-apps/plugin-fs": "^2.0.1",
     "axios": "^1.7.9",
     "bootstrap": "^5.3.3",
     "bootstrap-icons": "^1.13.1",

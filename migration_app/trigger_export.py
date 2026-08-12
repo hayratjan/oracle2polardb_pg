@@ -7,11 +7,78 @@ Oracle 触发器导出与 PL/pgSQL 改写模板生成。
 """
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional, Tuple
 
 from .task_logging import (
     build_log_line,
 )
+
+
+def _parse_trigger_type(trigger_type):
+    """解析 Oracle 触发类型,返回 (timing, level)。
+    timing: BEFORE / AFTER / INSTEAD OF
+    level: ROW / STATEMENT
+    """
+    tt = (trigger_type or '').upper()
+    if 'INSTEAD OF' in tt:
+        timing = 'INSTEAD OF'
+    elif 'BEFORE' in tt:
+        timing = 'BEFORE'
+    else:
+        timing = 'AFTER'
+    level = 'STATEMENT' if 'STATEMENT' in tt else 'ROW'
+    return timing, level
+
+
+def _parse_trigger_event(triggering_event):
+    """解析触发事件,返回 (events_list, update_of_cols)。
+    例: 'INSERT OR UPDATE OF col1, col2 OR DELETE' → (['INSERT', 'UPDATE', 'DELETE'], 'col1, col2')
+    """
+    ev = (triggering_event or '').upper().strip()
+    update_of_cols = ''
+    # 提取 UPDATE OF 列列表
+    m = re.search(r'UPDATE\s+OF\s+([^()]+?)(?:\s+OR\s+|$)', ev)
+    if m:
+        update_of_cols = m.group(1).strip()
+    events = []
+    for e in ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']:
+        if e in ev:
+            events.append(e)
+    if not events:
+        events = ['INSERT']
+    return events, update_of_cols
+
+
+def _convert_when_clause(when_clause):
+    """转换 Oracle WHEN 子句到 PL/pgSQL。
+    :NEW.col → NEW.col, :OLD.col → OLD.col
+    """
+    result = when_clause
+    result = re.sub(r':NEW\.', 'NEW.', result, flags=re.IGNORECASE)
+    result = re.sub(r':OLD\.', 'OLD.', result, flags=re.IGNORECASE)
+    return result
+
+
+def _extract_when_from_source(source_body):
+    """从触发器源码中提取 WHEN 子句内容。"""
+    if not source_body:
+        return None
+    m = re.search(r'WHEN\s*\(([^)]+)\)', source_body, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _extract_referencing_cols(source_body):
+    """从源码中提取 :NEW 和 :OLD 引用的列名。
+    返回 (new_cols, old_cols) 去重列表。
+    """
+    if not source_body:
+        return [], []
+    new_cols = set(re.findall(r':NEW\.(\w+)', source_body, re.IGNORECASE))
+    old_cols = set(re.findall(r':OLD\.(\w+)', source_body, re.IGNORECASE))
+    return sorted(new_cols), sorted(old_cols)
 
 
 def build_plpgsql_trigger_template(
@@ -21,63 +88,119 @@ def build_plpgsql_trigger_template(
     trigger_type: str,
     triggering_event: str,
     schema: str = 'public',
-) -> str:
-    """
-    根据 Oracle 触发器元数据生成 PL/pgSQL 改写骨架（供人工填充业务逻辑）。
-    """
+    status: str = 'ENABLED',
+    when_clause=None,
+    source_body=None,
+):
+    """根据 Oracle 触发器元数据生成 PL/pgSQL 改写骨架。"""
     func_name = f"trg_{trigger_name.lower()}_fn"
-    # Oracle TRIGGER_TYPE 如 BEFORE EACH ROW / AFTER STATEMENT
-    timing = 'BEFORE'
-    level = 'ROW'
-    upper_type = (trigger_type or '').upper()
-    if 'AFTER' in upper_type:
-        timing = 'AFTER'
-    if 'INSTEAD OF' in upper_type:
-        timing = 'INSTEAD OF'
-    if 'STATEMENT' in upper_type:
-        level = 'STATEMENT'
+    timing, level = _parse_trigger_type(trigger_type)
+    events, update_of_cols = _parse_trigger_event(triggering_event)
+    event_sql = ' OR '.join(events)
 
-    events = (triggering_event or 'INSERT OR UPDATE OR DELETE').upper()
-    # 规范为 PG 事件列表
-    event_parts = []
-    for ev in ('INSERT', 'UPDATE', 'DELETE'):
-        if ev in events:
-            event_parts.append(ev)
-    event_sql = ' OR '.join(event_parts) if event_parts else 'INSERT OR UPDATE OR DELETE'
+    event_clause_parts = []
+    for ev in events:
+        if ev == 'UPDATE' and update_of_cols:
+            event_clause_parts.append(f'UPDATE OF {update_of_cols}')
+        else:
+            event_clause_parts.append(ev)
+    event_clause = ' OR '.join(event_clause_parts)
 
-    return f"""-- ===== PolarDB-PG 触发器改写模板（需人工完成） =====
--- 源触发器: {schema}.{trigger_name}
--- 绑定表: {table_name}
--- 建议步骤:
---   1. 将下方函数体替换为从 Oracle 源码改写的 PL/pgSQL 逻辑
---   2. 行级触发器请在函数末尾 RETURN NEW 或 RETURN OLD
---   3. 在目标库执行本脚本
+    pg_when = ''
+    if when_clause:
+        pg_when = _convert_when_clause(when_clause)
+    elif source_body:
+        extracted = _extract_when_from_source(source_body)
+        if extracted:
+            pg_when = _convert_when_clause(extracted)
 
-CREATE OR REPLACE FUNCTION {schema}.{func_name}()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    -- TODO: 在此粘贴改写后的业务逻辑
-    -- 行级示例: NEW.column_name := 值;
-    IF TG_OP = 'INSERT' THEN
-        RETURN NEW;
-    ELSIF TG_OP = 'UPDATE' THEN
-        RETURN NEW;
-    ELSIF TG_OP = 'DELETE' THEN
-        RETURN OLD;
-    END IF;
-    RETURN NULL;
-END;
-$$;
+    new_cols, old_cols = [], []
+    if source_body:
+        new_cols, old_cols = _extract_referencing_cols(source_body)
 
-DROP TRIGGER IF EXISTS {trigger_name.lower()} ON {schema}.{table_name.lower()};
-CREATE TRIGGER {trigger_name.lower()}
-    {timing} {event_sql}
-    ON {schema}.{table_name.lower()}
-    FOR EACH {level}
-    EXECUTE FUNCTION {schema}.{func_name}();
-"""
+    is_disabled = status and status.upper() == 'DISABLED'
+
+    body_lines = [
+        'BEGIN',
+        '    -- TODO: 在此粘贴从 Oracle 改写的业务逻辑',
+    ]
+    if new_cols:
+        body_lines.append(f'    -- :NEW 引用的列: {", ".join(new_cols)}')
+    if old_cols:
+        body_lines.append(f'    -- :OLD 引用的列: {", ".join(old_cols)}')
+
+    if level == 'ROW':
+        body_lines.extend([
+            '    -- 行级触发器:NEW/OLD 可用,必须 RETURN',
+            '    IF TG_OP = \'INSERT\' THEN',
+            '        -- NEW.col := 值;',
+            '        RETURN NEW;',
+            '    ELSIF TG_OP = \'UPDATE\' THEN',
+            '        -- NEW.col := 值;',
+            '        RETURN NEW;',
+            '    ELSIF TG_OP = \'DELETE\' THEN',
+            '        RETURN OLD;',
+            '    END IF;',
+            '    RETURN NULL;',
+        ])
+    else:
+        body_lines.extend([
+            '    -- 语句级触发器:NEW/OLD 不可用,无需 RETURN',
+            '    IF TG_OP = \'INSERT\' THEN',
+            '        NULL;',
+            '    ELSIF TG_OP = \'UPDATE\' THEN',
+            '        NULL;',
+            '    ELSIF TG_OP = \'DELETE\' THEN',
+            '        NULL;',
+            '    END IF;',
+        ])
+    body_lines.append('END;')
+
+    func_body = '\n'.join(body_lines)
+    when_clause_sql = f'\n    WHEN ({pg_when})' if pg_when else ''
+
+    ddl_lines = [
+        f'-- ===== PolarDB-PG 触发器改写模板(需人工完成) =====',
+        f'-- 源触发器: {schema}.{trigger_name}',
+        f'-- 绑定表/视图: {table_name}',
+        f'-- 触发时机: {timing} | 级别: {level} | 事件: {event_sql}',
+    ]
+    if update_of_cols:
+        ddl_lines.append(f'-- UPDATE OF 列: {update_of_cols}')
+    if pg_when:
+        ddl_lines.append(f'-- WHEN 条件: {pg_when}')
+    if is_disabled:
+        ddl_lines.append(f'-- 源状态: DISABLED(已禁用,目标库也将禁用)')
+    ddl_lines.extend([
+        f'-- 建议步骤:',
+        f'--   1. 将下方函数体替换为从 Oracle 源码改写的 PL/pgSQL 逻辑',
+        f'--   2. Oracle 的 :NEW.col / :OLD.col → PG 的 NEW.col / OLD.col',
+        f'--   3. 行级触发器请在函数末尾 RETURN NEW 或 RETURN OLD',
+        f'--   4. 在目标库执行本脚本',
+        '',
+        f'CREATE OR REPLACE FUNCTION {schema}.{func_name}()',
+        f'RETURNS TRIGGER',
+        f'LANGUAGE plpgsql',
+        f'AS $$',
+        func_body,
+        f'$$;',
+        '',
+        f'DROP TRIGGER IF EXISTS {trigger_name.lower()} ON {schema}.{table_name.lower()};',
+        f'CREATE TRIGGER {trigger_name.lower()}',
+        f'    {timing} {event_clause}',
+        f'    ON {schema}.{table_name.lower()}',
+        f'    FOR EACH {level}{when_clause_sql}',
+        f'    EXECUTE FUNCTION {schema}.{func_name}();',
+    ])
+
+    if is_disabled:
+        ddl_lines.extend([
+            '',
+            f'-- 源触发器为 DISABLED 状态,目标库也禁用:',
+            f'ALTER TABLE {schema}.{table_name.lower()} DISABLE TRIGGER {trigger_name.lower()};',
+        ])
+
+    return '\n'.join(ddl_lines)
 
 
 def export_one_trigger(
@@ -134,6 +257,8 @@ def export_one_trigger(
         trigger_type=meta['type'],
         triggering_event=meta['event'],
         schema=source_schema.lower(),
+        status=meta['status'],
+        source_body=body,
     )
 
     # 构建结构化多行日志（每行带 [LEVEL] 前缀）

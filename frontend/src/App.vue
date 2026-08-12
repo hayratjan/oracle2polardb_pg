@@ -7,6 +7,23 @@
       'sidebar-mobile-open': mobileSidebarOpen && !isLoginPage,
     }"
   >
+    <!-- 桌面端启动遮罩 -->
+    <div v-if="desktop.bootVisible" class="desktop-boot-splash" :class="{ hidden: !desktop.bootVisible }">
+      <div class="boot-logo"><i class="bi bi-database-fill-gear"></i></div>
+      <div class="boot-title">Oracle2PolarDB 迁移工具</div>
+      <div class="boot-subtitle">v{{ appVersion }}</div>
+      <div class="boot-progress"></div>
+      <div class="boot-status">{{ desktop.bootMessage }}</div>
+    </div>
+
+    <!-- 窗口过小提示 -->
+    <div class="desktop-window-too-small">
+      <div>
+        <i class="bi bi-arrows-angle-expand" style="font-size: 32px; display: block; margin-bottom: 12px;"></i>
+        请放大窗口以正常使用
+      </div>
+    </div>
+
     <!-- 登录页：全屏展示 -->
     <template v-if="isLoginPage">
       <router-view />
@@ -54,11 +71,14 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import AppSidebar from '@/components/AppSidebar.vue'
 import AppHeader from '@/components/AppHeader.vue'
+import { useDesktop } from '@/desktop/useDesktop'
 
 const route = useRoute()
 const isLoginPage = computed(() => route.path === '/login' || route.path === '/login/')
 
 const sidebarCollapsed = ref(false)
+const desktop = useDesktop()
+const appVersion = '2.5.0'
 const mobileSidebarOpen = ref(false)
 
 /** 从 localStorage 恢复侧边栏折叠状态 */

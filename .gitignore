@@ -21,6 +21,14 @@ frontend/tsconfig.tsbuildinfo
 frontend/tsconfig.node.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+.pnpm-store/
+
+# Tauri 构建产物
+src-tauri/target/
+src-tauri/resources/backend/
+
+# Trae 临时文件
+.trae-html-share-packages/
 
 # Python 虚拟环境与锁文件缓存
 .venv/

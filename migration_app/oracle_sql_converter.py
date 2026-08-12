@@ -45,21 +45,200 @@ def _replace_dual(text: str) -> str:
     return text
 
 
-def _replace_decode_simple(text: str) -> str:
-    """
-    将简单 DECODE(a,b,c,d) 转为 CASE WHEN a=b THEN c ELSE d END。
-    复杂多分支 DECODE 仅做标记，不强行转换。
-    """
-    pattern = re.compile(
-        r'\bDECODE\s*\(\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^,]+)\s*,\s*([^)]+)\s*\)',
-        re.IGNORECASE,
-    )
+def _replace_decode_once(text: str) -> str:
+    """单次扫描:转换最内层 DECODE(参数中不含 DECODE 的)。
 
-    def _repl(m: re.Match) -> str:
-        expr, val1, result1, else_val = m.group(1), m.group(2), m.group(3), m.group(4)
-        return f'CASE WHEN {expr.strip()} = {val1.strip()} THEN {result1.strip()} ELSE {else_val.strip()} END'
+    用括号平衡扫描法,从右向左找 DECODE(,处理第一个参数中不含嵌套 DECODE 的实例。
+    """
+    pattern = re.compile(r'\bDECODE\s*\(', re.IGNORECASE)
+    # 从右向左扫描,优先匹配最内层
+    matches = list(pattern.finditer(text))
+    for m in reversed(matches):
+        start = m.start()
+        # 扫描参数
+        depth = 0
+        j = m.end() - 1
+        args_start = j + 1
+        args = []
+        cur_start = args_start
+        in_str = False
+        str_char = ''
+        while j < len(text):
+            ch = text[j]
+            if in_str:
+                if ch == str_char:
+                    in_str = False
+            elif ch in ("'", '"'):
+                in_str = True
+                str_char = ch
+            elif ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    args.append(text[cur_start:j])
+                    break
+            elif ch == ',' and depth == 1 and not in_str:
+                args.append(text[cur_start:j])
+                cur_start = j + 1
+            j += 1
 
-    return pattern.sub(_repl, text)
+        if depth != 0 or len(args) < 3:
+            continue
+
+        # 检查参数中是否含嵌套 DECODE(若有则跳过,留给下一轮)
+        args_str = text[m.end():j]
+        if 'DECODE' in args_str.upper():
+            continue
+
+        args = [a.strip() for a in args]
+        expr = args[0]
+        # 构建 CASE WHEN
+        case_parts = [f'CASE {expr}']
+        i = 1
+        while i + 1 < len(args):
+            case_parts.append(f'WHEN {args[i]} THEN {args[i + 1]}')
+            i += 2
+        # 最后一个参数是 default(如果有)
+        if i < len(args):
+            case_parts.append(f'ELSE {args[i]}')
+        case_parts.append('END')
+        replacement = ' '.join(case_parts)
+
+        text = text[:start] + replacement + text[j + 1:]
+        return text  # 每次只转换一个,返回
+    return text
+
+
+def _replace_decode(text: str) -> str:
+    """将 DECODE 完整转换为 CASE WHEN。
+
+    支持任意参数数量:DECODE(expr, s1, r1, s2, r2, ..., [default])
+    用括号平衡扫描法处理嵌套括号与逗号。
+    对嵌套 DECODE 采用「从内到外」多次扫描。
+    """
+    for _ in range(10):
+        if 'DECODE' not in text.upper():
+            break
+        new_text = _replace_decode_once(text)
+        if new_text == text:
+            break
+        text = new_text
+    return text
+
+
+def _replace_listagg(text: str) -> str:
+    """LISTAGG(expr, delimiter) WITHIN GROUP (ORDER BY ...) → STRING_AGG(expr::text, delimiter ORDER BY ...)。"""
+    result = []
+    i = 0
+    pattern = re.compile(r'\bLISTAGG\s*\(', re.IGNORECASE)
+    while i < len(text):
+        m = pattern.search(text, i)
+        if not m:
+            result.append(text[i:])
+            break
+        result.append(text[i:m.start()])
+        depth = 0
+        j = m.end() - 1
+        args_start = j + 1
+        args = []
+        cur_start = args_start
+        in_str = False
+        str_char = ''
+        while j < len(text):
+            ch = text[j]
+            if in_str:
+                if ch == str_char:
+                    in_str = False
+            elif ch in ("'", '"'):
+                in_str = True
+                str_char = ch
+            elif ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    args.append(text[cur_start:j])
+                    break
+            elif ch == ',' and depth == 1 and not in_str:
+                args.append(text[cur_start:j])
+                cur_start = j + 1
+            j += 1
+
+        if depth != 0 or len(args) < 1 or len(args) > 2:
+            result.append(text[m.start():j + 1] if j < len(text) else text[m.start():])
+            i = j + 1
+            continue
+
+        rest = text[j + 1:]
+        wg_match = re.match(
+            r'\s*WITHIN\s+GROUP\s*\(\s*ORDER\s+BY\s+([^)]+)\s*\)',
+            rest,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not wg_match:
+            result.append(text[m.start():j + 1])
+            i = j + 1
+            continue
+
+        order_by = wg_match.group(1).strip()
+        args = [a.strip() for a in args]
+        if len(args) == 2:
+            expr, delim = args
+            replacement = f'STRING_AGG({expr}::text, {delim} ORDER BY {order_by})'
+        else:
+            expr = args[0]
+            replacement = f"STRING_AGG({expr}::text, '' ORDER BY {order_by})"
+        result.append(replacement)
+        i = j + 1 + wg_match.end()
+    return ''.join(result)
+
+
+def _replace_nvl2(text: str) -> str:
+    """NVL2(expr, if_not_null, if_null) → CASE WHEN expr IS NOT NULL THEN if_not_null ELSE if_null END。"""
+    pattern = re.compile(r'\bNVL2\s*\(', re.IGNORECASE)
+    result = []
+    i = 0
+    while i < len(text):
+        m = pattern.search(text, i)
+        if not m:
+            result.append(text[i:])
+            break
+        result.append(text[i:m.start()])
+        depth = 0
+        j = m.end() - 1
+        args = []
+        cur_start = j + 1
+        in_str = False
+        str_char = ''
+        while j < len(text):
+            ch = text[j]
+            if in_str:
+                if ch == str_char:
+                    in_str = False
+            elif ch in ("'", '"'):
+                in_str = True
+                str_char = ch
+            elif ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    args.append(text[cur_start:j])
+                    break
+            elif ch == ',' and depth == 1 and not in_str:
+                args.append(text[cur_start:j])
+                cur_start = j + 1
+            j += 1
+        if depth != 0 or len(args) != 3:
+            result.append(text[m.start():j + 1] if j < len(text) else text[m.start():])
+            i = j + 1
+            continue
+        args = [a.strip() for a in args]
+        replacement = f'CASE WHEN {args[0]} IS NOT NULL THEN {args[1]} ELSE {args[2]} END'
+        result.append(replacement)
+        i = j + 1
+    return ''.join(result)
 
 
 def detect_manual_review_items(sql_text: str) -> List[str]:
@@ -97,7 +276,9 @@ def convert_oracle_to_pg_sql(
     text = _replace_sysdate(text)
     text = _replace_nvl(text)
     text = _replace_dual(text)
-    text = _replace_decode_simple(text)
+    text = _replace_listagg(text)
+    text = _replace_nvl2(text)
+    text = _replace_decode(text)
 
     manual_items = detect_manual_review_items(text)
     return text, manual_items
@@ -193,7 +374,9 @@ def convert_oracle_to_pg_routine(oracle_routine_text: str) -> Tuple[str, List[st
     text = _replace_sysdate(text)
     text = _replace_nvl(text)
     text = _replace_dual(text)
-    text = _replace_decode_simple(text)
+    text = _replace_listagg(text)
+    text = _replace_nvl2(text)
+    text = _replace_decode(text)
     text = _replace_to_date(text)
     text = _replace_to_char(text)
     text = _replace_to_number(text)

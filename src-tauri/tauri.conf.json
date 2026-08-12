@@ -1,0 +1,94 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Oracle2PolarDB 迁移工具",
+  "version": "2.5.0",
+  "identifier": "com.hayrat.oracle2polardb",
+  "build": {
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommandCwd": "../frontend",
+    "beforeDevCommandCwd": "../frontend"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Oracle2PolarDB 迁移工具",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 680,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "focus": true,
+        "theme": "Light",
+        "backgroundColor": "#f1f5f9",
+        "titleBarStyle": "Visible",
+        "hidden": false,
+        "maximized": false,
+        "additionalBrowserArgs": "--disable-features=AutomationUseAutomation"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: blob: https:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; connect-src 'self' http://localhost:8000 http://127.0.0.1:8000 ws://localhost:8000 https:; worker-src 'self' blob:"
+    },
+    "withGlobalTauri": false
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": ["resources/backend/**/*"],
+    "externalBin": [],
+    "copyright": "© 2026 hayratjan",
+    "category": "DeveloperTool",
+    "shortDescription": "Oracle 到 PolarDB-PG 迁移工具",
+    "longDescription": "将 Oracle 11g+ 数据库的对象(表/视图/物化视图/触发器/序列/例程)与数据迁移到 PolarDB-PG(PostgreSQL 15 兼容)的桌面客户端工具。",
+    "publisher": "hayratjan",
+    "homepage": "https://github.com/hayratjan/oracle2polardb_pg",
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "10.15",
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "entitlements": null
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "wix": {
+        "language": ["zh-CN", "en-US"]
+      },
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": true
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libasound2"],
+        "section": "devel"
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      },
+      "rpm": {
+        "depends": ["webkit2gtk3", "gtk3", "libnotify", "nss", "libXScrnSaver", "alsa-plugins"]
+      }
+    }
+  },
+  "plugins": {}
+}

@@ -1571,12 +1571,11 @@ def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None
     }
 
     if oracle_type == 'NUMBER':
-        # 根据精度和小数位处理NUMBER类型
         if data_precision is not None:
             if data_scale is not None and data_scale > 0:
                 return f"NUMERIC({data_precision}, {data_scale})"
             else:
-                # 如果精度小于等于10且没有小数位，使用INTEGER或BIGINT
+                # scale=0 或 scale=None:整数类型
                 if data_precision <= 4:
                     return "SMALLINT"
                 elif data_precision <= 9:
@@ -1586,8 +1585,14 @@ def convert_oracle_to_pg_type(oracle_type, data_length=None, data_precision=None
                 else:
                     return f"NUMERIC({data_precision})"
         else:
-            # 未指定精度的NUMBER，使用NUMERIC
             return "NUMERIC"
+    elif oracle_type == 'FLOAT':
+        # Oracle FLOAT(p) 是精度可变浮点(二进制精度,1-126 位)
+        # p <= 24 → REAL(4 字节,约 7 位有效数字)
+        # p > 24 → DOUBLE PRECISION(8 字节,约 15 位有效数字)
+        if data_precision is not None and data_precision > 24:
+            return "DOUBLE PRECISION"
+        return "REAL"
     elif oracle_type == 'VARCHAR2' or oracle_type == 'NVARCHAR2':
         # 处理字符串类型，添加长度限制
         if data_length is not None and data_length > 0:
