@@ -14,6 +14,7 @@ import traceback
 from typing import Callable, List, Optional, Tuple
 
 import psycopg2
+from psycopg2 import sql as pg_sql
 
 from django.utils import timezone
 
@@ -204,12 +205,18 @@ def materialize_one_view(
             return True, None
         if conflict_strategy == 'replace':
             make_warn_log(log, f'冲突策略 replace，删除表 {display_name}')
-            pg_cursor.execute(f"DROP TABLE IF EXISTS {qualified_table}")
+            pg_cursor.execute(
+                pg_sql.SQL('DROP TABLE IF EXISTS {}').format(
+                    pg_sql.Identifier(target_schema, target_table))
+            )
             pg_conn.commit()
             table_exists = False
         elif conflict_strategy == 'truncate':
             make_warn_log(log, f'冲突策略 truncate，清空表 {display_name}')
-            pg_cursor.execute(f"TRUNCATE TABLE {qualified_table}")
+            pg_cursor.execute(
+                pg_sql.SQL('TRUNCATE TABLE {}').format(
+                    pg_sql.Identifier(target_schema, target_table))
+            )
             pg_conn.commit()
         elif conflict_strategy == 'append':
             make_info_log(log, f'冲突策略 append，向表 {display_name} 追加数据')

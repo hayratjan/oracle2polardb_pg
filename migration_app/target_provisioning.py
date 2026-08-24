@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 import psycopg2
+from psycopg2 import sql as pg_sql
 from django.shortcuts import get_object_or_404
 
 from .models import PostgresConnection

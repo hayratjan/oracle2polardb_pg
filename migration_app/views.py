@@ -47,6 +47,7 @@ from .pg_identifiers import (
 _safe_oracle_identifier = safe_oracle_identifier
 import oracledb
 import psycopg2
+from psycopg2 import sql as pg_sql
 import logging
 import json
 import traceback
@@ -363,12 +364,23 @@ def migrate_materialized_view(task_id, postgres_database=None):
                 make_error_log(log, f'物化视图 {target_schema}.{mview_name} 已存在')
                 raise Exception(f"物化视图 {target_schema}.{mview_name} 已存在")
             make_warn_log(log, f'冲突策略 replace，DROP 已存在的物化视图 {target_schema}.{mview_name}')
-            pg_cursor.execute(f"DROP MATERIALIZED VIEW IF EXISTS {qualified_mview} CASCADE")
+            pg_cursor.execute(
+                pg_sql.SQL('DROP MATERIALIZED VIEW IF EXISTS {} CASCADE').format(
+                    pg_sql.Identifier(target_schema, mview_name))
+            )
             pg_conn.commit()
 
-        create_mview_sql = f"CREATE MATERIALIZED VIEW {qualified_mview} AS\n{pg_mview_text}"
-        make_sql_log(log, f'执行 DDL: {create_mview_sql[:300]}{"..." if len(create_mview_sql) > 300 else ""}')
-        pg_cursor.execute(create_mview_sql)
+        create_mview_stmt = (
+            pg_sql.SQL('CREATE MATERIALIZED VIEW {} AS\n').format(
+                pg_sql.Identifier(target_schema, mview_name))
+            + pg_sql.SQL(pg_mview_text)
+        )
+        make_sql_log(
+            log,
+            f'执行 DDL: CREATE MATERIALIZED VIEW {qualified_mview} AS '
+            f'{pg_mview_text[:300]}{"..." if len(pg_mview_text) > 300 else ""}',
+        )
+        pg_cursor.execute(create_mview_stmt)
         pg_conn.commit()
 
         make_ok_log(log, f'成功创建物化视图 {target_schema}.{mview_name}')
@@ -498,7 +510,10 @@ def _migrate_view_definition(task_id, postgres_database=None):
         # 基表引用能被 PG 正确解析（Oracle 视图 SQL 通常不带 schema 前缀）
         # v2.4: search_path 不支持绑参,用 safe_pg_schema_name + quote_identifier 双重保护防注入
         _safe_search_path = quote_identifier(safe_pg_schema_name(target_schema))
-        pg_cursor.execute(f'SET search_path TO {_safe_search_path}, public')
+        pg_cursor.execute(
+            pg_sql.SQL('SET search_path TO {}, public').format(
+                pg_sql.Identifier(safe_pg_schema_name(target_schema)))
+        )
         make_info_log(log, f'已设置 search_path: {target_schema}, public')
 
         # v2.3.2: 预取目标 schema 中所有表/视图名，用于视图 SQL 基表依赖预检查
@@ -573,27 +588,42 @@ def _migrate_view_definition(task_id, postgres_database=None):
                     continue
                 # replace 策略：根据对象类型执行对应 DROP
                 make_warn_log(log, f'冲突策略 replace，DROP {obj_type} {target_schema}.{target_view}')
-                if relkind == 'v':
-                    pg_cursor.execute(f"DROP VIEW IF EXISTS {qualified_view} CASCADE")
-                elif relkind == 'm':
-                    pg_cursor.execute(f"DROP MATERIALIZED VIEW IF EXISTS {qualified_view} CASCADE")
-                elif relkind == 'S':
-                    pg_cursor.execute(f"DROP SEQUENCE IF EXISTS {qualified_view} CASCADE")
-                else:
-                    pg_cursor.execute(f"DROP TABLE IF EXISTS {qualified_view} CASCADE")
+                _drop_by_relkind = {
+                    'v': pg_sql.SQL('DROP VIEW IF EXISTS {} CASCADE'),
+                    'm': pg_sql.SQL('DROP MATERIALIZED VIEW IF EXISTS {} CASCADE'),
+                    'S': pg_sql.SQL('DROP SEQUENCE IF EXISTS {} CASCADE'),
+                }
+                _drop_stmt = _drop_by_relkind.get(
+                    relkind, pg_sql.SQL('DROP TABLE IF EXISTS {} CASCADE')
+                ).format(pg_sql.Identifier(target_schema, target_view))
+                pg_cursor.execute(_drop_stmt)
                 pg_conn.commit()
             elif strategy == 'replace':
                 # v2.3.2: 安全兜底 — 即使 pg_class 未找到（如刚提交的对象在事务快照外），
                 # replace 策略也执行全部 DROP（IF EXISTS 保证不会报错）
-                pg_cursor.execute(f"DROP VIEW IF EXISTS {qualified_view} CASCADE")
-                pg_cursor.execute(f"DROP MATERIALIZED VIEW IF EXISTS {qualified_view} CASCADE")
-                pg_cursor.execute(f"DROP TABLE IF EXISTS {qualified_view} CASCADE")
+                # 单条多语句执行（psycopg2 simple query protocol）
+                _obj_ident = pg_sql.Identifier(target_schema, target_view)
+                pg_cursor.execute(
+                    pg_sql.SQL(
+                        'DROP VIEW IF EXISTS {} CASCADE;'
+                        'DROP MATERIALIZED VIEW IF EXISTS {} CASCADE;'
+                        'DROP TABLE IF EXISTS {} CASCADE'
+                    ).format(_obj_ident, _obj_ident, _obj_ident)
+                )
                 pg_conn.commit()
 
-            create_sql = f"CREATE VIEW {qualified_view} AS\n{pg_query}"
-            make_sql_log(log, f'CREATE VIEW SQL (前300字符): {create_sql[:300]}{"..." if len(create_sql) > 300 else ""}')
+            create_view_stmt = (
+                pg_sql.SQL('CREATE VIEW {} AS\n').format(
+                    pg_sql.Identifier(target_schema, target_view))
+                + pg_sql.SQL(pg_query)
+            )
+            make_sql_log(
+                log,
+                f'CREATE VIEW SQL (前300字符): CREATE VIEW {qualified_view} AS '
+                f'{pg_query[:300]}{"..." if len(pg_query) > 300 else ""}',
+            )
             try:
-                pg_cursor.execute(create_sql)
+                pg_cursor.execute(create_view_stmt)
                 pg_conn.commit()
                 make_ok_log(log, f'成功创建视图 {target_schema}.{target_view}')
             except Exception as ddl_err:
@@ -853,15 +883,19 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
             return True, 0
         if strategy == 'replace':
             log_list.append(f"冲突策略为 replace，删除已存在的表 {target_schema}.{table_name}")
-            # v2.4: 标识符经 quote_identifier 转义,防注入
-            _qualified_target = build_qualified_table_name(target_schema, table_name)
-            pg_cursor.execute(f"DROP TABLE IF EXISTS {_qualified_target}")
+            # v2.4: 标识符经 psycopg2.sql Identifier 安全组合,防注入
+            pg_cursor.execute(
+                pg_sql.SQL('DROP TABLE IF EXISTS {}').format(
+                    pg_sql.Identifier(target_schema, pg_table))
+            )
             pg_conn.commit()
             table_exists = False
         elif strategy == 'truncate':
             log_list.append(f"冲突策略为 truncate，清空表 {target_schema}.{table_name}")
-            _qualified_target = build_qualified_table_name(target_schema, table_name)
-            pg_cursor.execute(f"TRUNCATE TABLE {_qualified_target}")
+            pg_cursor.execute(
+                pg_sql.SQL('TRUNCATE TABLE {}').format(
+                    pg_sql.Identifier(target_schema, pg_table))
+            )
             pg_conn.commit()
         # append 或 truncate 后继续走下面的建表（仅当表不存在时）或直接导数据
 
@@ -967,7 +1001,12 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
         
         create_table_sql += ",\n".join(column_definitions) + "\n)"
         try:
-            pg_cursor.execute(create_table_sql)
+            # 列定义组件均经 build_pg_column_definition(quote_identifier) 转义，
+            # 整体经 psycopg2.sql 组合执行，消除 f-string SQL
+            pg_cursor.execute(
+                pg_sql.SQL('CREATE TABLE ') + pg_sql.Identifier(target_schema, pg_table)
+                + pg_sql.SQL(' (\n' + ",\n".join(column_definitions) + '\n)')
+            )
         except Exception as create_err:
             log_list.append(f"建表 SQL 失败:\n{create_table_sql}")
             raise create_err
@@ -990,14 +1029,17 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
         log_list.append(f"使用增量条件: {wm_col_sql} > 上一水位值")
 
     total_count = 0
+    # v2.4.3: 表名经 safe_oracle_identifier 白名单校验后以预构建变量执行，
+    # 不在 execute 内做 f-string 拼接；水位值走 :wmv 绑参
+    _src_table_ref = safe_oracle_identifier(source_schema) + '.' + safe_oracle_identifier(table_name)
     try:
         if wm_sql_fragment:
             oracle_cursor.execute(
-                f"SELECT COUNT(*) FROM {safe_oracle_identifier(source_schema)}.{safe_oracle_identifier(table_name)}{wm_sql_fragment}",
+                'SELECT COUNT(*) FROM ' + _src_table_ref + wm_sql_fragment,
                 wmv=watermark_min_exclusive,
             )
         else:
-            oracle_cursor.execute(f"SELECT COUNT(*) FROM {safe_oracle_identifier(source_schema)}.{safe_oracle_identifier(table_name)}")
+            oracle_cursor.execute('SELECT COUNT(*) FROM ' + _src_table_ref)
         total_count = int(oracle_cursor.fetchone()[0])
         log_list.append(f"表 {source_schema}.{table_name} 总行数: {total_count}")
     except Exception as count_err:
@@ -1025,11 +1067,11 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
     oracle_cursor.arraysize = fetch_batch_size
     if wm_sql_fragment:
         oracle_cursor.execute(
-            f"SELECT * FROM {safe_oracle_identifier(source_schema)}.{safe_oracle_identifier(table_name)}{wm_sql_fragment}",
+            'SELECT * FROM ' + _src_table_ref + wm_sql_fragment,
             wmv=watermark_min_exclusive,
         )
     else:
-        oracle_cursor.execute(f"SELECT * FROM {safe_oracle_identifier(source_schema)}.{safe_oracle_identifier(table_name)}")
+        oracle_cursor.execute('SELECT * FROM ' + _src_table_ref)
     column_names = [apply_identifier_case(col[0], id_case) for col in oracle_cursor.description]
     # 与 SELECT * 列顺序一致，供 LOB 按列类型转换（BLOB 保持 bytes，CLOB 转 str）
     column_oracle_types = [col[1] for col in columns]
@@ -2014,8 +2056,11 @@ def _migrate_one_sequence(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
             (target_schema,),
         )
         if not pg_cursor.fetchone():
-            # v2.4: schema 名经 quote_identifier 转义,防注入
-            pg_cursor.execute(f'CREATE SCHEMA IF NOT EXISTS {quote_identifier(target_schema)}')
+            # v2.4.3: schema 名经 psycopg2.sql Identifier 安全组合
+            pg_cursor.execute(
+                pg_sql.SQL('CREATE SCHEMA IF NOT EXISTS {}').format(
+                    pg_sql.Identifier(target_schema))
+            )
             pg_conn.commit()
             log_list.append(f'  自动创建 schema: {target_schema}')
 
@@ -2066,15 +2111,25 @@ def _migrate_one_sequence(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
             if strategy == 'error':
                 raise Exception(f"序列 {target_schema}.{seq_ident} 已存在")
             _qualified_seq = build_qualified_table_name(target_schema, seq_ident)
-            pg_cursor.execute(f"DROP SEQUENCE IF EXISTS {_qualified_seq} CASCADE")
+            pg_cursor.execute(
+                pg_sql.SQL('DROP SEQUENCE IF EXISTS {} CASCADE').format(
+                    pg_sql.Identifier(target_schema, seq_ident))
+            )
             pg_conn.commit()
         _qualified_seq = build_qualified_table_name(target_schema, seq_ident)
-        sql = (
-            f"CREATE SEQUENCE {_qualified_seq} "
-            f"INCREMENT BY {inc_by} MINVALUE {min_v} MAXVALUE {max_v} "
-            f"START WITH {last_num} CACHE {cache_n} {cycle_sql}"
+        # v2.4.3: 序列属性均为钳制后的整型字面量，标识符经 Identifier 安全组合
+        pg_cursor.execute(
+            pg_sql.SQL(
+                'CREATE SEQUENCE {} '
+                'INCREMENT BY {} MINVALUE {} MAXVALUE {} '
+                'START WITH {} CACHE {} '
+            ).format(
+                pg_sql.Identifier(target_schema, seq_ident),
+                pg_sql.Literal(inc_by), pg_sql.Literal(min_v), pg_sql.Literal(max_v),
+                pg_sql.Literal(last_num), pg_sql.Literal(cache_n),
+            )
+            + pg_sql.SQL('CYCLE' if cycle_sql == 'CYCLE' else 'NO CYCLE')
         )
-        pg_cursor.execute(sql)
         pg_conn.commit()
         if clamped:
             log_list.append(f"已创建序列: {target_schema}.{seq_ident}（注：原值超出 bigint 范围，已截断）")
