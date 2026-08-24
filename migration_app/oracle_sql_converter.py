@@ -279,6 +279,7 @@ def convert_oracle_to_pg_sql(
     text = _replace_listagg(text)
     text = _replace_nvl2(text)
     text = _replace_decode(text)
+    text = _replace_rownum(text)
 
     manual_items = detect_manual_review_items(text)
     return text, manual_items
@@ -341,9 +342,32 @@ def _replace_to_number(text: str) -> str:
 
 
 def _replace_rownum(text: str) -> str:
-    """ROWNUM → ROW_NUMBER() OVER() 占位（仅简单场景，复杂需人工）。"""
-    # 仅在 SELECT 列表中替换 ROWNUM 为 ROW_NUMBER() OVER()
-    return re.sub(r'\bROWNUM\b', 'ROW_NUMBER() OVER()', text, flags=re.IGNORECASE)
+    """ROWNUM 转换（分场景）：
+
+    1. WHERE 谓词 ROWNUM <= N / ROWNUM < N / ROWNUM = 1：
+       谓词替换为 TRUE，并在查询末尾追加 FETCH FIRST k ROWS ONLY。
+       与 Oracle「过滤后取前 N 行」语义等价；不能替换为
+       ROW_NUMBER() OVER() <= N（窗口函数不能出现在 WHERE，语法错误）。
+    2. SELECT 列表中的 ROWNUM → ROW_NUMBER() OVER()（行序与 Oracle 不保证一致，
+       复杂场景需人工复核）。
+    3. ROWNUM >= N 等其它谓词语义复杂，保留原文并依赖人工审查清单。
+    """
+    pred_pattern = re.compile(r'\bROWNUM\b\s*(<=|<|=)\s*(\d+)', re.IGNORECASE)
+    limits: List[int] = []
+
+    def _pred_repl(m: re.Match) -> str:
+        op, n = m.group(1), int(m.group(2))
+        if op == '<':
+            limits.append(max(n - 1, 0))
+        else:  # '<=' 或 '='（Oracle 中 ROWNUM = N 仅 N=1 有结果）
+            limits.append(n if op == '<=' else 1)
+        return 'TRUE'
+
+    new_text = pred_pattern.sub(_pred_repl, text)
+    if limits:
+        stripped = new_text.rstrip().rstrip(';').rstrip()
+        return f'{stripped}\nFETCH FIRST {max(limits)} ROWS ONLY'
+    return re.sub(r'\bROWNUM\b', 'ROW_NUMBER() OVER()', new_text, flags=re.IGNORECASE)
 
 
 def _replace_execute_immediate(text: str) -> str:

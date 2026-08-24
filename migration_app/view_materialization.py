@@ -387,7 +387,8 @@ def run_view_materialization_task(
     task.status = 'running'
     task.started_at = timezone.now()
     task.progress = 0
-    task.view_progress = {}
+    # v2.4.2: 不再清空 view_progress —— 整库编排把 phase/completed_objects 等
+    # 断点续传状态也存在 view_progress 中，清空会导致中断后 resume 语义损坏。
     task.save()
 
     log: List[str] = []

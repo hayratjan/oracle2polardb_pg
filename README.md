@@ -1,4 +1,8 @@
 <!-- 文档版本：v2.2 · 企业级迁移平台 -->
+
+<img src="./hello.svg" width="880" height="100">
+</br>
+<div align="center">
 <h1 align="center">Oracle 至 PolarDB PostgreSQL</h1>
 <h3 align="center">企业级数据库迁移与同步平台</h3>
 

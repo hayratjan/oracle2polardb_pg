@@ -254,6 +254,9 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
         task.started_at = timezone.now()
     log = [] if not resume_mode else [ln for ln in (task.log or '').split('\n') if ln]
     failed_objects: list[dict[str, str]] = list(vp.get('failed_objects') or [])
+    # v2.4.2: 仅导出、未在目标库创建的对象（触发器模板/未执行的例程），
+    # 终态需降级为 partial 并列出清单，避免用户误以为已可用
+    manual_objects: list[str] = list(vp.get('manual_objects') or [])
 
     # 确定 Schema 映射
     schema_mappings = orch['schema_mappings']
@@ -495,6 +498,8 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                             _, _, export_log = export_one_trigger(oracle_cur, src_schema, tname)
                             completed_objects.add(obj_id)
                             trg_ok += 1
+                            # 触发器仅导出 PL/pgSQL 模板，未在目标库创建
+                            manual_objects.append(obj_id)
                             log.append(export_log)
                         except Exception as e:
                             trg_fail += 1
@@ -520,6 +525,18 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                             task.save(update_fields=['source_schema', 'target_schema', 'source_object'])
                             views.migrate_routine(task.id, pgdb)
                             task.refresh_from_db()
+                            # 检测例程是否真正在目标库创建（安全校验不过时仅导出源码）
+                            pg_cur.execute(
+                                """
+                                SELECT 1 FROM pg_proc p
+                                JOIN pg_namespace n ON n.oid = p.pronamespace
+                                WHERE n.nspname = %s AND p.proname = %s
+                                """,
+                                (tgt_schema, apply_identifier_case(rname, id_case)),
+                            )
+                            if pg_cur.fetchone() is None:
+                                manual_objects.append(obj_id)
+                                make_warn_log(log, f'    例程 {rname} 含不兼容语法，仅导出源码未自动创建')
                             completed_objects.add(obj_id)
                             rtn_ok += 1
                             make_ok_log(log, f'    例程 {rname} 完成')
@@ -546,6 +563,7 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
                     'schemas': [m['source_schema'] for m in schema_mappings],
                     'completed_objects': sorted(completed_objects),
                     'failed_objects': failed_objects,
+                    'manual_objects': sorted(set(manual_objects)),
                 }
                 task.log = '\n'.join(log)
                 task.save(update_fields=['progress', 'view_progress', 'log', 'status', 'postgres_database'])
@@ -555,6 +573,13 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
         if failed_objects:
             task.status = 'partial'
             make_warn_log(log, f'部分对象失败 ({len(failed_objects)} 个)，详见 failed_objects')
+        elif manual_objects:
+            task.status = 'partial'
+            make_warn_log(
+                log,
+                f'迁移完成，但 {len(manual_objects)} 个对象仅导出未自动创建'
+                f'（触发器模板/不兼容例程），需人工改写后执行，详见 manual_objects',
+            )
         else:
             task.status = 'completed'
             make_ok_log(log, f'整库迁移全部完成，共迁移 {len(completed_objects)} 个对象')
@@ -566,6 +591,7 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
             'phases': PHASES,
             'completed_objects': sorted(completed_objects),
             'failed_objects': failed_objects,
+            'manual_objects': sorted(set(manual_objects)),
         }
         task.log = '\n'.join(log)
         task.completed_at = timezone.now()

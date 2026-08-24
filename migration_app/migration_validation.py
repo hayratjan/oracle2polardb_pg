@@ -185,10 +185,12 @@ def validate_aggregates(
             )
             p_sum, p_cnt, p_min, p_max = pg_cursor.fetchone()
 
-            # 对比（浮点数容差 0.01）
+            # 对比（v2.4.3: 相对容差 —— 固定 0.01 绝对容差对 SUM 千万级数值
+            # 过严（浮点累积误差假阳性），对小数值又过粗）
             def _eq(a, b):
                 if isinstance(a, float) or isinstance(b, float):
-                    return abs(float(a or 0) - float(b or 0)) < 0.01
+                    fa, fb = float(a or 0), float(b or 0)
+                    return abs(fa - fb) <= max(1e-9, 1e-9 * max(abs(fa), abs(fb)))
                 return a == b
 
             if _eq(o_sum, p_sum) and _eq(o_cnt, p_cnt) and _eq(o_min, p_min) and _eq(o_max, p_max):
@@ -210,6 +212,78 @@ def validate_aggregates(
         logger.warning('聚合校验异常: %s', e)
         log_list.append(f"[ERROR] 聚合校验异常跳过 · {source_object}: {e}")
         return None  # None 表示校验异常,不应视为"通过"
+
+
+# ============================================================================
+# 按列类型分派的哈希归一表达式（行哈希校验 / 增量同步 UPDATE 检测共用）
+# ============================================================================
+
+# 数值掩码：整数位 22 + 小数 18，覆盖 Oracle NUMBER 38 位精度
+_NUM_MASK = 'FM' + '9' * 21 + '0.' + '9' * 18
+
+_DATE_TYPES = {'DATE'}
+_TS_TYPES_PREFIX = ('TIMESTAMP', 'INTERVAL')  # INTERVAL 实际走 excluded
+_STR_TYPES_PREFIX = ('VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR', 'CLOB', 'NCLOB', 'LONG')
+_NUM_TYPES = {'NUMBER', 'FLOAT', 'BINARY_FLOAT', 'BINARY_DOUBLE',
+              'PLS_INTEGER', 'BINARY_INTEGER'}
+_BINARY_TYPES = {'BLOB', 'RAW', 'LONG RAW', 'BFILE'}
+
+
+def build_typed_hash_exprs(
+    col_meta: List[Tuple[str, str]],
+) -> Tuple[str, str, List[str]]:
+    """按 Oracle DATA_TYPE 为每列生成两端语义一致的归一化 to_char 表达式。
+
+    v2.4.3: 修复此前所有列统一套日期格式串的问题 —— 对 NUMBER 列 Oracle 报
+    ORA-01481、PG 模板无效，导致哈希校验系统性异常、增量同步 UPDATE 检测失效。
+
+    规则：
+      - DATE        → 两端 to_char(col, 'YYYY-MM-DD HH24:MI:SS')
+      - TIMESTAMP*  → Oracle '...FF6' / PG '...US'（微秒）
+      - NUMBER/FLOAT 等 → 两端 to_char(col, 数值掩码)，FM 去填充
+      - 字符类      → 原值（NULL 归一为 ''）
+      - BLOB/RAW/未知类型 → 排除出哈希（返回 excluded 列表，调用方记日志）
+
+    Args:
+        col_meta: [(列名, Oracle DATA_TYPE), ...]
+    Returns:
+        (oracle_expr, pg_expr, excluded_cols) —— expr 为 " || '|' || " 连接的整行表达式
+    """
+    ora_parts: List[str] = []
+    pg_parts: List[str] = []
+    excluded: List[str] = []
+
+    for col, dtype in col_meta:
+        d = (dtype or '').strip().upper()
+        base = d.split('(')[0].strip()  # 'TIMESTAMP(6) WITH TIME ZONE' → 'TIMESTAMP'
+        quoted_ora = f'"{safe_oracle_identifier(col)}"'
+        quoted_pg = quote_identifier(col)
+
+        if d in _BINARY_TYPES or base in _BINARY_TYPES or base.startswith('INTERVAL'):
+            excluded.append(col)
+            continue
+        if d in _DATE_TYPES:
+            fmt = "'YYYY-MM-DD HH24:MI:SS'"
+            ora_parts.append(f'NVL(to_char({quoted_ora}, {fmt}), \'\')')
+            pg_parts.append(f"COALESCE(to_char({quoted_pg}, {fmt}), '')")
+        elif base.startswith('TIMESTAMP'):
+            ora_parts.append(
+                f"NVL(to_char({quoted_ora}, 'YYYY-MM-DD HH24:MI:SS.FF6'), '')")
+            # PG 无 FF6，用 US（微秒）等价
+            pg_parts.append(
+                f"COALESCE(to_char({quoted_pg}, 'YYYY-MM-DD HH24:MI:SS.US'), '')")
+        elif d in _NUM_TYPES or base in _NUM_TYPES:
+            ora_parts.append(f"NVL(to_char({quoted_ora}, '{_NUM_MASK}'), '')")
+            pg_parts.append(f"COALESCE(to_char({quoted_pg}, '{_NUM_MASK}'), '')")
+        elif any(base.startswith(p) for p in _STR_TYPES_PREFIX):
+            ora_parts.append(f"NVL({quoted_ora}, '')")
+            pg_parts.append(f"COALESCE({quoted_pg}, '')")
+        else:
+            excluded.append(col)
+
+    sep_ora = " || '|' || "
+    sep_pg = " || '|' || "
+    return sep_ora.join(ora_parts), sep_pg.join(pg_parts), excluded
 
 
 # ============================================================================
@@ -245,37 +319,48 @@ def validate_row_hashes(
         (是否一致, 校验行数, 差异行数)
     """
     try:
-        # 自动获取列列表
+        # 自动获取列列表（含 Oracle DATA_TYPE，用于按类型分派哈希归一表达式）
         if not columns:
             oracle_cursor.execute(
                 """
-                SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS
+                SELECT COLUMN_NAME, DATA_TYPE FROM ALL_TAB_COLUMNS
                 WHERE OWNER = :schema AND TABLE_NAME = :table_name
                 ORDER BY COLUMN_ID
                 """,
                 {'schema': source_schema.upper(), 'table_name': source_object.upper()},
             )
-            columns = [r[0] for r in oracle_cursor.fetchall()]
+            col_meta = [(r[0], r[1]) for r in oracle_cursor.fetchall()]
+            columns = [c for c, _ in col_meta]
+        else:
+            oracle_cursor.execute(
+                """
+                SELECT COLUMN_NAME, DATA_TYPE FROM ALL_TAB_COLUMNS
+                WHERE OWNER = :schema AND TABLE_NAME = :table_name
+                ORDER BY COLUMN_ID
+                """,
+                {'schema': source_schema.upper(), 'table_name': source_object.upper()},
+            )
+            type_map = {r[0]: r[1] for r in oracle_cursor.fetchall()}
+            col_meta = [(c, type_map.get(c, '')) for c in columns]
 
         if not columns or primary_key not in columns:
             columns = columns or []
             if primary_key not in columns:
                 columns.insert(0, primary_key)
+                col_meta.insert(0, (primary_key, type_map.get(primary_key, '')))
 
-        # v2.4: 修复哈希格式不一致问题
-        # 原实现: Oracle 用 TO_CHAR(col) → '22-JUL-26',PG 用 col::text → '2026-07-22'
-        # 相同数据哈希必不等,导致校验系统性假阳性
-        # 修复: 两端统一使用 to_char(col, 'YYYY-MM-DD HH24:MI:SS') 格式化
-        # 数值类型两端 to_char 输出一致,日期/时间戳两端格式串兼容
-        _ORA_FMT = "'YYYY-MM-DD HH24:MI:SS'"
-        _PG_FMT = "'YYYY-MM-DD HH24:MI:SS'"
-        # v2.4: 列名经安全函数包装,Oracle 用大写形式,PG 用双引号转义
-        ora_cols = " || '|' || ".join(
-            f"NVL(to_char(\"{safe_oracle_identifier(c)}\", {_ORA_FMT}), '')" for c in columns
-        )
-        pg_cols = " || '|' || ".join(
-            f"COALESCE(to_char({quote_identifier(c)}, {_PG_FMT}), '')" for c in columns
-        )
+        # v2.4.3: 按列类型分派归一表达式，修复数值列 to_char(日期格式) 报错问题
+        from .pg_identifiers import apply_identifier_case
+        pg_col_meta = [(apply_identifier_case(c, 'lower'), t) for c, t in col_meta]
+        ora_cols_expr, pg_cols_expr, excluded_cols = build_typed_hash_exprs(col_meta)
+        if excluded_cols:
+            log_list.append(
+                f"[INFO] 哈希校验排除 {len(excluded_cols)} 个不可归一列 · "
+                f"{source_object}: {', '.join(excluded_cols)}"
+            )
+        if not ora_cols_expr:
+            log_list.append(f"[INFO] 哈希校验跳过 · {source_object}: 所有列均不可归一")
+            return None, 0, 0
 
         tgt_tbl = pg_table_name or target_table
         qualified = build_qualified_table_name(target_schema, tgt_tbl)
@@ -290,12 +375,14 @@ def validate_row_hashes(
 
         for batch_idx in range(max_batches):
             # Oracle 端：按主键排序，取本批
-            oracle_cursor.execute(
-                f'SELECT "{_ora_pk}", MD5({ora_cols}) '
-                f'FROM {_src_qualified} '
-                f'ORDER BY "{_ora_pk}" '
-                f'OFFSET {offset} ROWS FETCH NEXT {batch_size} ROWS ONLY'
+            # 列名/表达式组件均已通过 safe_oracle_identifier / build_typed_hash_exprs 白名单校验
+            ora_hash_sql = (
+                'SELECT "' + _ora_pk + '", MD5(' + ora_cols_expr + ') '
+                'FROM ' + _src_qualified + ' '
+                'ORDER BY "' + _ora_pk + '" '
+                'OFFSET ' + str(offset) + ' ROWS FETCH NEXT ' + str(batch_size) + ' ROWS ONLY'
             )
+            oracle_cursor.execute(ora_hash_sql)
             ora_rows = oracle_cursor.fetchall()
             if not ora_rows:
                 break
@@ -306,12 +393,15 @@ def validate_row_hashes(
             # PG 端：按主键排序，取相同主键范围
             min_pk = ora_keys[0]
             max_pk = ora_keys[-1]
-            pg_cursor.execute(
-                f'SELECT {_pg_pk}::text, MD5({pg_cols}) '
-                f'FROM {qualified} '
-                f'WHERE {_pg_pk}::text >= %s AND {_pg_pk}::text <= %s '
-                f'ORDER BY {_pg_pk}::text'
+            # 表达式组件已通过 quote_identifier / build_typed_hash_exprs 白名单校验；
+            # 主键范围用 %s 绑参
+            pg_hash_sql = (
+                'SELECT ' + _pg_pk + '::text, MD5(' + pg_cols_expr + ') '
+                'FROM ' + qualified + ' '
+                'WHERE ' + _pg_pk + '::text >= %s AND ' + _pg_pk + '::text <= %s '
+                'ORDER BY ' + _pg_pk + '::text'
             )
+            pg_cursor.execute(pg_hash_sql, (min_pk, max_pk))
             pg_rows = pg_cursor.fetchall()
             pg_map = {str(r[0]): r[1] for r in pg_rows}
 
@@ -392,14 +482,17 @@ def validate_sample_rows(
         _ora_pk = safe_oracle_identifier(primary_key)
         _pg_pk = quote_identifier(primary_key)
 
-        # Oracle 端随机抽取主键
+        # Oracle 端随机抽取主键（保留原始类型，供 PG 端原生绑定，
+        # 避免 ::text 比较因两端文本格式差异造成假"目标端不存在"）
         oracle_cursor.execute(
             f'SELECT "{_ora_pk}" FROM ('
             f'  SELECT "{_ora_pk}" FROM {_src_qualified} '
             f'  ORDER BY DBMS_RANDOM.VALUE'
             f') WHERE ROWNUM <= {int(sample_count)}'
         )
-        sampled_pks = [str(r[0]) for r in oracle_cursor.fetchall()]
+        pk_raw_rows = oracle_cursor.fetchall()
+        sampled_pks = [str(r[0]) for r in pk_raw_rows]
+        raw_by_pk_str = {str(r[0]): r[0] for r in pk_raw_rows}
 
         if not sampled_pks:
             log_list.append(f"[INFO] 抽样校验跳过 · {source_object}: 表为空或无主键")
@@ -422,11 +515,11 @@ def validate_sample_rows(
             )
             ora_row = oracle_cursor.fetchone()
 
-            # PG 端
+            # PG 端：主键原生绑定（datetime/numeric 直接适配，不走 ::text）
             pg_cursor.execute(
                 f'SELECT {pg_col_list} FROM {qualified} '
-                f'WHERE {_pg_pk}::text = %s',
-                (pk,),
+                f'WHERE {_pg_pk} = %s',
+                (raw_by_pk_str.get(pk, pk),),
             )
             pg_row = pg_cursor.fetchone()
 
@@ -439,9 +532,10 @@ def validate_sample_rows(
                 for i, col in enumerate(columns):
                     ora_val = ora_row[i]
                     pg_val = pg_row[i]
-                    # 数值容差
+                    # v2.4.3: 相对容差（原固定 0.01 对大数过严/小数过粗）
                     if isinstance(ora_val, (int, float)) or isinstance(pg_val, (int, float)):
-                        if abs(float(ora_val or 0) - float(pg_val or 0)) > 0.01:
+                        fa, fb = float(ora_val or 0), float(pg_val or 0)
+                        if abs(fa - fb) > max(1e-9, 1e-9 * max(abs(fa), abs(fb))):
                             mismatch_count += 1
                             if mismatch_count <= 5:
                                 log_list.append(f"  [WARN] 主键 {pk} 列 {col}: Oracle={ora_val} PG={pg_val}")

@@ -8,7 +8,12 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
+from .migration_errors import MigrationDataError
+
 logger = logging.getLogger(__name__)
+
+# LOB 读取/解码失败策略：strict=抛错中止（默认，防静默数据丢失）；warn=旧旧行为（置 NULL/替换字符）
+LOB_ERROR_POLICY = 'strict'
 
 # Oracle 二进制类列：LOB 读入后保持 bytes
 _BINARY_ORACLE_TYPES = frozenset({
@@ -52,6 +57,10 @@ def _lob_is_binary(value: Any, oracle_type: Optional[str]) -> bool:
 def adapt_oracle_value_for_postgres(value: Any, oracle_type: Optional[str] = None) -> Any:
     """
     单单元格：LOB 读入内存；BLOB 保持 bytes，CLOB/NCLOB 转为 str。
+
+    v2.4.3: LOB 读取失败不再静默置 NULL —— 该行为会写入内容为 NULL 的行，
+    行数校验照样通过，数据损坏完全不可见。现在默认抛 MigrationDataError
+    中止迁移；确需容错的场景可将 LOB_ERROR_POLICY 置为 'warn' 恢复旧行为。
     """
     if value is None:
         return None
@@ -60,8 +69,10 @@ def adapt_oracle_value_for_postgres(value: Any, oracle_type: Optional[str] = Non
         try:
             content = value.read()
         except Exception as e:
-            logger.warning('读取 Oracle LOB 失败，将置为 NULL: %s', e)
-            return None
+            if LOB_ERROR_POLICY == 'warn':
+                logger.warning('读取 Oracle LOB 失败，已置为 NULL（warn 策略）: %s', e)
+                return None
+            raise MigrationDataError(f'读取 Oracle LOB 失败（列类型 {oracle_type}）: {e}') from e
         if content is None:
             return None
         if _lob_is_binary(value, oracle_type):
@@ -70,9 +81,18 @@ def adapt_oracle_value_for_postgres(value: Any, oracle_type: Optional[str] = Non
             if isinstance(content, str):
                 return content.encode('latin-1')
             return bytes(content)
-        # 文本类 LOB
+        # 文本类 LOB：解码失败同样按策略处理（不再 errors='replace' 静默替换字符）
         if isinstance(content, bytes):
-            return content.decode('utf-8', errors='replace')
+            try:
+                return content.decode('utf-8')
+            except UnicodeDecodeError as e:
+                if LOB_ERROR_POLICY == 'warn':
+                    logger.warning('CLOB UTF-8 解码失败，已替换损坏字符（warn 策略）: %s', e)
+                    return content.decode('utf-8', errors='replace')
+                raise MigrationDataError(
+                    f'CLOB UTF-8 解码失败（列类型 {oracle_type}），'
+                    f'请检查源库字符集配置: {e}'
+                ) from e
         return str(content)
 
     if isinstance(value, (datetime, date, Decimal, int, float, str, bytes, bool)):

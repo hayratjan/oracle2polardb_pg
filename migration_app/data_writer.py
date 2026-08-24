@@ -24,7 +24,9 @@ def _format_copy_value(value) -> str:
     if isinstance(value, bool):
         return 't' if value else 'f'
     if isinstance(value, bytes):
-        return '\\x' + value.hex()
+        # COPY 文本格式的 \x 转义只消费紧跟的两位十六进制字符，
+        # 必须逐字节写 \xNN，不能 '\x' + hex(整个值)
+        return ''.join(f'\\x{b:02x}' for b in value)
     s = str(value)
     # COPY 文本格式转义
     s = s.replace('\\', '\\\\')

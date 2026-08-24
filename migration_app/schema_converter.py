@@ -86,7 +86,12 @@ def _convert_oracle_default_to_pg(
         return f"nextval('{pg_schema}.{pg_seq}'::regclass)"
 
     upper = text.upper()
-    if upper in ('SYSDATE', 'CURRENT_DATE', 'CURRENT_TIMESTAMP'):
+    if upper == 'SYSDATE':
+        return 'CURRENT_TIMESTAMP'
+    if upper == 'CURRENT_DATE':
+        # Oracle CURRENT_DATE 含会话时区的日期时间；语义上取日期部分更接近 PG CURRENT_DATE
+        return 'CURRENT_DATE'
+    if upper == 'CURRENT_TIMESTAMP':
         return 'CURRENT_TIMESTAMP'
     if upper.startswith('TO_DATE(') or upper.startswith('TO_TIMESTAMP('):
         log_list.append(f"列 {column_name} 默认值含 TO_DATE/TO_TIMESTAMP，需人工复核: {text}")
@@ -394,6 +399,76 @@ def apply_table_indexes(
             log_list.append(f"创建索引 {idx['name']} 失败（可人工补建）: {e}")
 
 
+def align_sequences_with_data(
+    pg_cursor,
+    pg_conn,
+    target_schema: str,
+    table_name: str,
+    log_list: List[str],
+    *,
+    id_case: str = 'lower',
+) -> None:
+    """数据导入后将 IDENTITY 列与 nextval 默认列的序列推进到 MAX(列值)。
+
+    否则目标序列/IDENTITY 停留在初始值 1，业务切换后新插入会主键冲突。
+    """
+    pg_table = apply_identifier_case(table_name, id_case)
+    qualified = build_qualified_table_name(target_schema, pg_table)
+    seq_columns: List[Tuple[str, str]] = []
+    try:
+        # IDENTITY 列 → 通过 pg_get_serial_sequence 取隐式序列
+        pg_cursor.execute(
+            """
+            SELECT a.attname, pg_get_serial_sequence(%s, a.attname)
+            FROM pg_attribute a
+            WHERE a.attrelid = %s::regclass
+              AND a.attnum > 0 AND NOT a.attisdropped
+              AND a.attidentity IN ('a', 'd')
+            """,
+            (qualified, qualified),
+        )
+        seq_columns.extend(r for r in pg_cursor.fetchall() if r[1])
+        # nextval(...) 默认列 → 从默认表达式提取 'schema.seq' 字面量
+        pg_cursor.execute(
+            """
+            SELECT a.attname, (SELECT (regexp_matches(
+                pg_get_expr(d.adbin, d.adrelid),
+                'nextval\\(''([^'']+)''::regclass\\)'))[1])
+            FROM pg_attribute a
+            JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+            WHERE a.attrelid = %s::regclass
+              AND a.attnum > 0 AND NOT a.attisdropped
+              AND a.attidentity NOT IN ('a', 'd')
+              AND pg_get_expr(d.adbin, d.adrelid) LIKE 'nextval(%'
+            """,
+            (qualified,),
+        )
+        seq_columns.extend(r for r in pg_cursor.fetchall() if r[1])
+    except Exception as e:
+        log_list.append(f"[WARN] 序列对齐: 查询表 {table_name} 序列列失败(跳过): {e}")
+        return
+
+    from psycopg2 import sql as pg_sql
+    for col, seq_name in seq_columns:
+        try:
+            # 全部标识符/字面量经 psycopg2.sql 安全组合（Composed），非字符串拼接
+            stmt: pg_sql.Composed = (
+                pg_sql.SQL('SELECT setval(')
+                + pg_sql.Literal(seq_name)
+                + pg_sql.SQL('::regclass, GREATEST((SELECT MAX(')
+                + pg_sql.Identifier(col)
+                + pg_sql.SQL(') FROM ')
+                + pg_sql.Identifier(target_schema, pg_table)
+                + pg_sql.SQL('), 1))')
+            )
+            pg_cursor.execute(stmt)
+            pg_conn.commit()
+            log_list.append(f'已对齐序列 {seq_name} 至 {table_name}.{col} 最大值')
+        except Exception as e:
+            pg_conn.rollback()
+            log_list.append(f'[WARN] 序列对齐失败 {table_name}.{col} ({seq_name}): {e}')
+
+
 def apply_post_table_schema(
     oracle_cursor,
     pg_cursor,
@@ -407,7 +482,7 @@ def apply_post_table_schema(
     skip_constraints: bool = False,
 ) -> None:
     """
-    建表并导数后执行的 Schema 扩展：默认值 → 约束 → 索引 → 注释。
+    建表并导数后执行的 Schema 扩展：默认值 → 约束 → 索引 → 注释 → 序列对齐。
     """
     log_list.append(f"【Schema 扩展】开始处理表 {table_name} 的默认值/约束/索引/注释")
     apply_column_defaults(
@@ -426,6 +501,10 @@ def apply_post_table_schema(
     apply_table_comments(
         oracle_cursor, pg_cursor, pg_conn,
         source_schema, target_schema, table_name, log_list, id_case=id_case,
+    )
+    # v2.4.2: 数据导入后将 IDENTITY/nextval 序列推进到 MAX(列值)，避免切换后主键冲突
+    align_sequences_with_data(
+        pg_cursor, pg_conn, target_schema, table_name, log_list, id_case=id_case,
     )
 
 

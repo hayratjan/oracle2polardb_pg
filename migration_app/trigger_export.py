@@ -158,6 +158,14 @@ def build_plpgsql_trigger_template(
 
     func_body = '\n'.join(body_lines)
     when_clause_sql = f'\n    WHEN ({pg_when})' if pg_when else ''
+    # PG 语句级触发器禁止引用 NEW/OLD —— 引用时必须改行级或去掉 WHEN
+    stmt_when_invalid = (
+        level == 'STATEMENT'
+        and pg_when
+        and re.search(r'\b(NEW|OLD)\.', pg_when, re.IGNORECASE)
+    )
+    if stmt_when_invalid:
+        when_clause_sql = ''
 
     ddl_lines = [
         f'-- ===== PolarDB-PG 触发器改写模板(需人工完成) =====',
@@ -171,6 +179,12 @@ def build_plpgsql_trigger_template(
         ddl_lines.append(f'-- WHEN 条件: {pg_when}')
     if is_disabled:
         ddl_lines.append(f'-- 源状态: DISABLED(已禁用,目标库也将禁用)')
+    if stmt_when_invalid:
+        ddl_lines.append(
+            f'-- 注意: 源 WHEN 条件引用了 NEW/OLD,但 PG 语句级触发器不允许引用它们;'
+            f'已从 DDL 中移除 WHEN,请改为行级触发器或将条件移入函数体')
+    if pg_when and stmt_when_invalid:
+        ddl_lines.append(f'-- 原 WHEN 条件(需人工改写): {pg_when}')
     ddl_lines.extend([
         f'-- 建议步骤:',
         f'--   1. 将下方函数体替换为从 Oracle 源码改写的 PL/pgSQL 逻辑',

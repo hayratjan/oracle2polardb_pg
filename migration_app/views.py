@@ -160,7 +160,11 @@ def _get_oracle_connection_direct(connection_id, *, call_timeout_ms: int = 30000
     connection = oracledb.connect(
         user=conn_obj.username,
         password=pwd,
-        dsn=dsn
+        dsn=dsn,
+        # v2.4.3: 显式 UTF-8，thick 模式下覆盖客户端 NLS 默认值，
+        # 保证 CLOB read() 返回正确解码的 str（thin 模式自动处理，参数被忽略）
+        encoding='UTF-8',
+        nencoding='UTF-8',
     )
     # 设置单条 SQL 执行超时，避免查询卡死导致 HTTP 请求永不返回
     # v2.5: oracledb 使用 call_timeout(下划线),兼容 cx_Oracle 的 callTimeout
@@ -1087,15 +1091,19 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
                     )
                 else:
                     log_list.append(f"【分批】表 {table_name} 已迁移 {total_rows} 行")
-                if total_tables and total_tables > 0:
+                if total_tables and total_tables > 1:
                     # 「所有表」任务：保留 current/current_table/total/failed_count，并合并当前表明细；同时更新总进度
-                    task.view_progress = {
+                    # v2.4.2: 与现有 view_progress 合并而非整体覆盖 —— 整库编排的
+                    # 断点续传状态(phase/completed_objects)也存在同一字段中
+                    merged_vp = task.view_progress if isinstance(task.view_progress, dict) else {}
+                    merged_vp.update({
                         'current_table': table_name,
                         'current': table_index,
                         'total': total_tables,
                         'failed_count': failed_count,
                         table_name: {'progress': progress_pct, 'total_rows': total_count, 'migrated_rows': total_rows},
-                    }
+                    })
+                    task.view_progress = merged_vp
                     # 总进度 = (已完成表数 + 当前表内进度) / 总表数 * 100
                     overall_pct = (table_index + progress_pct / 100.0) / total_tables * 100.0
                     task.progress = min(100.0, overall_pct)
@@ -1103,9 +1111,9 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
                         task, log_list, extra_update_fields={'view_progress', 'progress'}
                     )
                 else:
-                    task.view_progress = {
-                        table_name: {'progress': progress_pct, 'total_rows': total_count, 'migrated_rows': total_rows}
-                    }
+                    merged_vp = task.view_progress if isinstance(task.view_progress, dict) else {}
+                    merged_vp[table_name] = {'progress': progress_pct, 'total_rows': total_count, 'migrated_rows': total_rows}
+                    task.view_progress = merged_vp
                     _persist_running_task_log(task, log_list, extra_update_fields={'view_progress'})
                 last_saved_pct = int(progress_pct)
                 last_saved_rows = total_rows
@@ -1142,6 +1150,42 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
         watermark_where=wm_where,
         watermark_params=wm_params,
     )
+
+    # v2.4.3: 综合校验（聚合 + 抽样/哈希）。此前 validate_full 等高级校验
+    # 已实现但从未被调用，主流程只做行数比对，内容差异无法发现。
+    try:
+        from .batch_config import get_enable_advanced_validation, get_validation_hash_max_rows
+        from .migration_validation import validate_full
+        if get_enable_advanced_validation():
+            pk_col = None
+            oracle_cursor.execute(
+                """
+                SELECT cc.COLUMN_NAME FROM ALL_CONS_COLUMNS cc
+                JOIN ALL_CONSTRAINTS c
+                  ON cc.OWNER = c.OWNER AND cc.CONSTRAINT_NAME = c.CONSTRAINT_NAME
+                WHERE c.CONSTRAINT_TYPE = 'P' AND c.OWNER = :o AND c.TABLE_NAME = :t
+                  AND cc.POSITION = 1
+                """,
+                {'o': source_schema.upper(), 't': table_name.upper()},
+            )
+            pk_row = oracle_cursor.fetchone()
+            if pk_row:
+                pk_col = pk_row[0]
+            validate_full(
+                oracle_cursor, pg_cursor,
+                source_schema, table_name,
+                target_schema, table_name,
+                log_list,
+                primary_key=pk_col,
+                pg_table_name=pg_table,
+                enable_hash=pk_col is not None and 0 < total_count <= get_validation_hash_max_rows(),
+                enable_sample=pk_col is not None,
+                max_rows_for_hash=get_validation_hash_max_rows(),
+                strict=False,
+            )
+    except Exception as adv_val_err:
+        logger.warning(f"综合校验异常跳过（不影响迁移）: {adv_val_err}")
+        log_list.append(f"【校验】综合校验异常跳过: {adv_val_err}")
 
     # Schema 扩展：默认值、约束、索引（导数完成后执行）
     try:

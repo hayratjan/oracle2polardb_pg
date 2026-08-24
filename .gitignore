@@ -36,3 +36,6 @@ src-tauri/resources/backend/
 
 # IDE
 .idea/
+
+# Mimosa 安全扫描产物
+.mimosa/

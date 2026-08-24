@@ -34,7 +34,17 @@ def get_progress_save_rows() -> int:
 
 
 def get_parallel_table_workers() -> int:
-    return int(_runtime().get('parallel_table_workers', _DEFAULT_PARALLEL_TABLE_WORKERS))
+    workers = int(_runtime().get('parallel_table_workers', _DEFAULT_PARALLEL_TABLE_WORKERS))
+    # v2.4.3: 与连接池上限联动 —— 每张并行表占 1 个 Oracle + 1 个 PG 池连接，
+    # 超过池上限会耗尽池/长时间等待。上限放宽到池 max + 2（主流程自身占用）。
+    try:
+        from .connection_pool import POOL_MAX_CONNECTIONS
+        cap = int(POOL_MAX_CONNECTIONS) + 2
+        if workers > cap:
+            workers = cap
+    except Exception:
+        pass
+    return workers
 
 
 def get_copy_row_threshold() -> int:
@@ -58,3 +68,13 @@ def __getattr__(name: str):
     if name == 'MIGRATION_COPY_ROW_THRESHOLD':
         return get_copy_row_threshold()
     raise AttributeError(name)
+
+
+def get_enable_advanced_validation() -> bool:
+    """v2.4.3: 迁移后综合校验（聚合+抽样/哈希）开关，默认开启。"""
+    return bool(_runtime().get('enable_advanced_validation', True))
+
+
+def get_validation_hash_max_rows() -> int:
+    """v2.4.3: 启用哈希校验的表行数上限（超过走抽样校验）。"""
+    return int(_runtime().get('validation_hash_max_rows', 100_000))

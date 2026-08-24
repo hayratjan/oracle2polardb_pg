@@ -392,6 +392,7 @@ def run_table_pk_mirror_flow(task, oracle_cursor, pg_conn, pg_cursor, log, sourc
         col_names_lower=col_names_lower,
         pk_cols=pk_cols,
         pk_cols_lower=pk_cols_lower,
+        col_meta=col_meta,
         common_keys=list(common_keys),
         oracle_pk_by_norm=oracle_pk_by_norm,
         task=task,
@@ -414,6 +415,7 @@ def _detect_and_apply_updates(
     col_names_lower: List[str],
     pk_cols: List[str],
     pk_cols_lower: List[str],
+    col_meta: List[Tuple[str, str]],
     common_keys: List[Tuple[Any, ...]],
     oracle_pk_by_norm: dict,
     task,
@@ -431,18 +433,22 @@ def _detect_and_apply_updates(
     if not common_keys:
         return 0
 
-    # v2.4: 修复哈希格式不一致问题
-    # 原实现: Oracle TO_CHAR(date) → '22-JUL-26',PG date::text → '2026-07-22'
-    # 相同数据哈希必不等,触发无意义 UPDATE
-    # 修复: 两端统一使用 to_char(col, 'YYYY-MM-DD HH24:MI:SS') 格式化
-    _ORA_FMT = "'YYYY-MM-DD HH24:MI:SS'"
-    _PG_FMT = "'YYYY-MM-DD HH24:MI:SS'"
-    ora_hash_expr = " || '|' || ".join(
-        f"NVL(to_char(\"{c}\", {_ORA_FMT}), '')" for c in all_cols
+    # v2.4.3: 按列类型分派归一表达式。原实现所有列统一套日期格式串，
+    # 对 NUMBER 列 Oracle 报 ORA-01481，UPDATE 检测整体失效（差异行静默不同步）。
+    from .migration_validation import build_typed_hash_exprs
+
+    ora_hash_expr, _, excluded_cols = build_typed_hash_exprs(col_meta)
+    _, pg_hash_expr, _ = build_typed_hash_exprs(
+        [(c.lower(), t) for c, t in col_meta]
     )
-    pg_hash_expr = " || '|' || ".join(
-        f'COALESCE(to_char("{c}", {_PG_FMT}), \'\')' for c in col_names_lower
-    )
+    if excluded_cols:
+        log.append(
+            f"【主键对齐】UPDATE 检测排除 {len(excluded_cols)} 个不可归一列: "
+            + ", ".join(excluded_cols)
+        )
+    if not ora_hash_expr:
+        log.append("【主键对齐】所有列均不可归一，UPDATE 检测跳过（本轮不检测变更行）。")
+        return 0
 
     batch_size = 500
     max_update_rows = 50000  # 单轮最多更新 5 万行，防止超大表长时间锁表
@@ -457,11 +463,24 @@ def _detect_and_apply_updates(
     )
     update_sql = f"UPDATE {pg_ident_table} SET {set_clause} WHERE {where_clause}"
 
+    scan_completed = True  # 是否完整扫完（未触上限/未取消）
+
     for i in range(0, len(common_keys), batch_size):
         if updated_count + skipped_update >= max_update_rows * 2:
             log.append(
                 f"【主键对齐】UPDATE 检测达到安全上限（{updated_count + skipped_update} 行），停止后续扫描。"
             )
+            # v2.4.3: 结构化标记"本轮未扫完"，避免用户误判已完全同步
+            if task:
+                try:
+                    vp = task.view_progress if isinstance(task.view_progress, dict) else {}
+                    vp['sync_pending_updates'] = True
+                    vp['sync_pending_table'] = table_name
+                    task.view_progress = vp
+                    task.save(update_fields=['view_progress'])
+                except Exception:
+                    pass
+            scan_completed = False
             break
 
         if task:
@@ -623,4 +642,15 @@ def _detect_and_apply_updates(
 
     if skipped_update:
         log.append(f"【主键对齐】UPDATE 检测有 {skipped_update} 行因异常跳过，请人工核查。")
+    if task and scan_completed:
+        # 完整扫完，清除上一轮遗留的未扫完标记
+        try:
+            vp = task.view_progress if isinstance(task.view_progress, dict) else {}
+            if vp.get('sync_pending_updates'):
+                vp.pop('sync_pending_updates', None)
+                vp.pop('sync_pending_table', None)
+                task.view_progress = vp
+                task.save(update_fields=['view_progress'])
+        except Exception:
+            pass
     return updated_count
