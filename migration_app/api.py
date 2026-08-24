@@ -1324,6 +1324,26 @@ class OracleDiscoveryAPIView(APIView):
             return f'Oracle Client 未安装或路径未配置。请安装 Oracle Instant Client 并设置 LD_LIBRARY_PATH。({msg})'
         if 'DPI-1067' in msg or 'ORA-01013' in msg:
             return f'查询超时被中断。Oracle 数据量过大或查询过慢。({msg})'
+        # v2.4.4: 网络层错误（oracledb thin 报 DPY-xxxx + 系统 errno）
+        if 'No route to host' in msg or 'Errno 65' in msg:
+            return (
+                '网络不可达（No route to host）：无法路由到 Oracle 服务器。'
+                '请检查：① 主机 IP 是否正确；② VPN/内网是否已连接；'
+                '③ 防火墙/安全组是否放行 1521 端口。'
+                f'({msg.splitlines()[0][:120]})'
+            )
+        if 'Connection refused' in msg or 'Errno 61' in msg or 'Errno 111' in msg:
+            return (
+                '连接被拒绝（Connection refused）：目标主机可达但 1521 端口无监听。'
+                '请检查：① Oracle 监听器（lsnrctl status）是否运行；② 端口号是否正确。'
+                f'({msg.splitlines()[0][:120]})'
+            )
+        if 'ORA-12170' in msg or 'timed out' in msg.lower() or 'timeout' in msg.lower():
+            return (
+                '连接超时：Oracle 服务器未在时限内响应。'
+                '请检查网络连通性（ping/telnet 1521）与监听状态。'
+                f'({msg.splitlines()[0][:120]})'
+            )
         return msg
 
 
