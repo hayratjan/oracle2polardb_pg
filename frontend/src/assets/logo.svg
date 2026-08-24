@@ -1,85 +1,171 @@
 <svg width="400" height="400" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- 数据库主体渐变：蓝 → 紫（PolarDB 生态色） -->
+    <!-- 数据库主体渐变：蓝 → 紫 -->
     <linearGradient id="dbGradient" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#42a5f5" />
       <stop offset="1" stop-color="#7e57c2" />
+      <!-- 渐变内色彩缓慢流动 -->
+      <animate attributeName="x1" values="0;1;0" dur="8s" repeatCount="indefinite" />
+      <animate attributeName="y1" values="0;1;0" dur="8s" repeatCount="indefinite" />
     </linearGradient>
-    <!-- 环绕箭头渐变：青 → 品红（userSpaceOnUse 保证四段弧取色一致） -->
-    <linearGradient id="ringGradient" gradientUnits="userSpaceOnUse" x1="48" y1="48" x2="352" y2="352">
+    <!-- 环绕渐变：青 → 品红（整体缓慢旋转，色彩绕环流动） -->
+    <linearGradient id="ringGradient" gradientUnits="userSpaceOnUse" x1="10" y1="10" x2="390" y2="390">
       <stop offset="0" stop-color="#26c6da" />
+      <stop offset="0.5" stop-color="#7c4dff" />
       <stop offset="1" stop-color="#ec407a" />
+      <animateTransform attributeName="gradientTransform" type="rotate"
+                        from="0 200 200" to="360 200 200" dur="12s" repeatCount="indefinite" />
     </linearGradient>
-    <!-- 箭头：marker 自动沿路径切线定向，四个方向全部正确 -->
+    <!-- 箭头：marker 自动沿路径切线定向 -->
     <marker id="arrowHead" viewBox="0 0 10 10" refX="7" refY="5"
             markerWidth="4.2" markerHeight="4.2" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 L3 5 Z" fill="#ec407a" />
     </marker>
+    <!-- 顶面高光扫过用的斜向渐变 -->
+    <linearGradient id="sweepGradient" x1="0" y1="0" x2="1" y2="0"
+                    gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0" />
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.55" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+      <animate attributeName="x1" values="-140;260" dur="3.5s" repeatCount="indefinite" />
+      <animate attributeName="x2" values="-40;360" dur="3.5s" repeatCount="indefinite" />
+    </linearGradient>
   </defs>
 
-  <!-- ═══ 环绕迁移箭头：四段弧绕 (200,200) 旋转对称，逆时针循环 ═══
-       弧 = 半径 152 圆上 25°→65°（数学角）的弧段，四段各跨 40°、间隔 50° -->
+  <!-- ═══ 外层虚线轨道：缓慢反向旋转，增强「环绕」层次感 ═══ -->
+  <circle cx="200" cy="200" r="176" fill="none" stroke="#90a4ae"
+          stroke-width="1.5" stroke-dasharray="3 9" opacity="0.35">
+    <animateTransform attributeName="transform" type="rotate"
+                      from="360 200 200" to="0 200 200" dur="40s" repeatCount="indefinite" />
+  </circle>
+
+  <!-- ═══ 环绕迁移箭头：四段弧各跨 85°、间隙 5°，近似完整圆环（顺时针） ═══ -->
   <g fill="none" stroke="url(#ringGradient)" stroke-width="9" stroke-linecap="round">
-    <path id="arc0" d="M 337.8 264.2 A 152 152 0 0 0 264.2 337.8" marker-end="url(#arrowHead)" />
-    <path id="arc1" d="M 135.8 337.8 A 152 152 0 0 0 62.2 264.2" marker-end="url(#arrowHead)" />
-    <path id="arc2" d="M 62.2 135.8 A 152 152 0 0 0 135.8 62.2" marker-end="url(#arrowHead)" />
-    <path id="arc3" d="M 264.2 62.2 A 152 152 0 0 0 337.8 135.8" marker-end="url(#arrowHead)" />
+    <path id="arc0" d="M 389.3 216.6 A 190 190 0 0 1 216.6 389.3" marker-end="url(#arrowHead)">
+      <animate attributeName="opacity" values="1;0.75;1" dur="3s" repeatCount="indefinite" />
+    </path>
+    <path id="arc1" d="M 183.4 389.3 A 190 190 0 0 1 10.7 216.6" marker-end="url(#arrowHead)">
+      <animate attributeName="opacity" values="1;0.75;1" dur="3s" begin="0.75s" repeatCount="indefinite" />
+    </path>
+    <path id="arc2" d="M 10.7 183.4 A 190 190 0 0 1 183.4 10.7" marker-end="url(#arrowHead)">
+      <animate attributeName="opacity" values="1;0.75;1" dur="3s" begin="1.5s" repeatCount="indefinite" />
+    </path>
+    <path id="arc3" d="M 216.6 10.7 A 190 190 0 0 1 389.3 183.4" marker-end="url(#arrowHead)">
+      <animate attributeName="opacity" values="1;0.75;1" dur="3s" begin="2.25s" repeatCount="indefinite" />
+    </path>
   </g>
 
-  <!-- ═══ 中心数据库图标（三层圆柱） ═══ -->
-  <g transform="translate(200, 200)" stroke="#1e3a5f" stroke-width="2.5">
-    <!-- 第三层（底） -->
-    <path d="M -62 26 v 42 c 0 11 27.8 20 62 20 s 62 -9 62 -20 v -42"
-          fill="url(#dbGradient)" opacity="0.72" />
-    <!-- 第二层 -->
-    <path d="M -62 -14 v 40 c 0 11 27.8 20 62 20 s 62 -9 62 -20 v -40"
-          fill="url(#dbGradient)" opacity="0.9" />
-    <!-- 第一层（顶）主体 + 顶面 -->
-    <path d="M -62 -54 v 40 c 0 11 27.8 20 62 20 s 62 -9 62 -20 v -40"
-          fill="url(#dbGradient)" />
-    <ellipse cx="0" cy="-54" rx="62" ry="20" fill="#64b5f6" />
-    <!-- 分层线（白色，提高三层结构的辨识度） -->
-    <ellipse cx="0" cy="-14" rx="62" ry="20" fill="none" stroke="#ffffff" stroke-width="2.5" opacity="0.55" />
-    <ellipse cx="0" cy="26" rx="62" ry="20" fill="none" stroke="#ffffff" stroke-width="2.5" opacity="0.55" />
-    <!-- 高光 -->
-    <ellipse cx="-18" cy="-58" rx="22" ry="7" fill="#ffffff" opacity="0.35" stroke="none" />
+  <!-- ═══ 箭头能量脉冲：亮色短划沿各弧顺时针流动（pathLength 归一化为 100） ═══
+       dashoffset 100→0 使脉冲沿路径正方向（顺时针）行进，与箭头/粒子方向一致；
+       四段相位接力（0/0.75/1.5/2.25s），视觉上像一道光沿整圈循环 -->
+  <g fill="none" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round" opacity="0.85">
+    <path d="M 389.3 216.6 A 190 190 0 0 1 216.6 389.3" pathLength="100"
+          stroke-dasharray="14 86" stroke-dashoffset="100">
+      <animate attributeName="stroke-dashoffset" values="100;0" dur="3s" repeatCount="indefinite" />
+    </path>
+    <path d="M 183.4 389.3 A 190 190 0 0 1 10.7 216.6" pathLength="100"
+          stroke-dasharray="14 86" stroke-dashoffset="100">
+      <animate attributeName="stroke-dashoffset" values="100;0" dur="3s" begin="0.75s" repeatCount="indefinite" />
+    </path>
+    <path d="M 10.7 183.4 A 190 190 0 0 1 183.4 10.7" pathLength="100"
+          stroke-dasharray="14 86" stroke-dashoffset="100">
+      <animate attributeName="stroke-dashoffset" values="100;0" dur="3s" begin="1.5s" repeatCount="indefinite" />
+    </path>
+    <path d="M 216.6 10.7 A 190 190 0 0 1 389.3 183.4" pathLength="100"
+          stroke-dasharray="14 86" stroke-dashoffset="100">
+      <animate attributeName="stroke-dashoffset" values="100;0" dur="3s" begin="2.25s" repeatCount="indefinite" />
+    </path>
   </g>
 
-  <!-- ═══ 数据元素点缀（限制在圆柱体内） ═══ -->
-  <g fill="#ffffff" stroke="none">
-    <circle cx="182" cy="162" r="3.2" opacity="0.85" />
-    <circle cx="218" cy="162" r="3.2" opacity="0.6" />
-    <circle cx="200" cy="182" r="2.6" opacity="0.7" />
-    <circle cx="182" cy="202" r="2.6" opacity="0.6" />
-    <circle cx="218" cy="202" r="2.6" opacity="0.85" />
-    <circle cx="200" cy="222" r="2.6" opacity="0.6" />
-  </g>
-
-  <!-- ═══ 流动数据粒子（animateMotion 沿弧线，与箭头轨迹一致） ═══ -->
+  <!-- ═══ 中心数据库图标：三层圆柱，轻微浮动 ═══ -->
   <g>
-    <circle r="4.5" fill="#26c6da" opacity="0.9">
-      <animateMotion dur="3s" repeatCount="indefinite" begin="0s">
-        <mpath href="#arc0" />
-      </animateMotion>
-      <animate attributeName="opacity" values="0.9;0.3;0.9" dur="3s" repeatCount="indefinite" />
+    <animateTransform attributeName="transform" type="translate"
+                      values="0 0; 0 -5; 0 0" dur="4s" repeatCount="indefinite"
+                      calcMode="spline" keyTimes="0;0.5;1"
+                      keySplines="0.4 0 0.6 1; 0.4 0 0.6 1" />
+    <g transform="translate(200, 200) scale(1.18)" stroke="#1e3a5f" stroke-width="2.5">
+      <!-- 第三层（底） -->
+      <path d="M -62 26 v 42 c 0 11 27.8 20 62 20 s 62 -9 62 -20 v -42"
+            fill="url(#dbGradient)" opacity="0.72" />
+      <!-- 第二层 -->
+      <path d="M -62 -14 v 40 c 0 11 27.8 20 62 20 s 62 -9 62 -20 v -40"
+            fill="url(#dbGradient)" opacity="0.9" />
+      <!-- 第一层（顶）主体 + 顶面 -->
+      <path d="M -62 -54 v 40 c 0 11 27.8 20 62 20 s 62 -9 62 -20 v -40"
+            fill="url(#dbGradient)" />
+      <ellipse cx="0" cy="-54" rx="62" ry="20" fill="#64b5f6" />
+      <!-- 分层线 -->
+      <ellipse cx="0" cy="-14" rx="62" ry="20" fill="none" stroke="#ffffff" stroke-width="2.5" opacity="0.55" />
+      <ellipse cx="0" cy="26" rx="62" ry="20" fill="none" stroke="#ffffff" stroke-width="2.5" opacity="0.55" />
+      <!-- 顶面高光 + 周期性扫光 -->
+      <ellipse cx="-18" cy="-58" rx="22" ry="7" fill="#ffffff" opacity="0.35" stroke="none" />
+      <ellipse cx="0" cy="-54" rx="62" ry="20" fill="url(#sweepGradient)" stroke="none" />
+    </g>
+  </g>
+
+  <!-- ═══ 数据元素点缀：错峰闪烁（数据存取呼吸感） ═══ -->
+  <g fill="#ffffff" stroke="none">
+    <circle cx="182" cy="162" r="3.2" opacity="0.85">
+      <animate attributeName="opacity" values="0.85;0.3;0.85" dur="2s" repeatCount="indefinite" />
     </circle>
-    <circle r="4.5" fill="#ec407a" opacity="0.9">
-      <animateMotion dur="3s" repeatCount="indefinite" begin="0.75s">
-        <mpath href="#arc1" />
-      </animateMotion>
-      <animate attributeName="opacity" values="0.9;0.3;0.9" dur="3s" begin="0.75s" repeatCount="indefinite" />
+    <circle cx="218" cy="162" r="3.2" opacity="0.6">
+      <animate attributeName="opacity" values="0.6;0.95;0.6" dur="2.4s" begin="0.3s" repeatCount="indefinite" />
     </circle>
-    <circle r="4.5" fill="#26c6da" opacity="0.9">
-      <animateMotion dur="3s" repeatCount="indefinite" begin="1.5s">
-        <mpath href="#arc2" />
-      </animateMotion>
-      <animate attributeName="opacity" values="0.9;0.3;0.9" dur="3s" begin="1.5s" repeatCount="indefinite" />
+    <circle cx="200" cy="182" r="2.6" opacity="0.7">
+      <animate attributeName="opacity" values="0.7;0.25;0.7" dur="1.8s" begin="0.6s" repeatCount="indefinite" />
     </circle>
-    <circle r="4.5" fill="#ec407a" opacity="0.9">
-      <animateMotion dur="3s" repeatCount="indefinite" begin="2.25s">
-        <mpath href="#arc3" />
-      </animateMotion>
-      <animate attributeName="opacity" values="0.9;0.3;0.9" dur="3s" begin="2.25s" repeatCount="indefinite" />
+    <circle cx="182" cy="202" r="2.6" opacity="0.6">
+      <animate attributeName="opacity" values="0.6;0.9;0.6" dur="2.2s" begin="0.9s" repeatCount="indefinite" />
+    </circle>
+    <circle cx="218" cy="202" r="2.6" opacity="0.85">
+      <animate attributeName="opacity" values="0.85;0.35;0.85" dur="2.6s" begin="0.2s" repeatCount="indefinite" />
+    </circle>
+    <circle cx="200" cy="222" r="2.6" opacity="0.6">
+      <animate attributeName="opacity" values="0.6;0.95;0.6" dur="2s" begin="1.1s" repeatCount="indefinite" />
+    </circle>
+  </g>
+
+  <!-- ═══ 流动数据粒子：主粒子 + 拖尾，沿四段弧顺时针接力 ═══ -->
+  <g>
+    <!-- 每段弧：1 颗主粒子 + 2 颗拖尾粒子（相位错开形成彗尾） -->
+    <circle r="5" fill="#26c6da">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="0s"><mpath href="#arc0" /></animateMotion>
+    </circle>
+    <circle r="3.5" fill="#26c6da" opacity="0.5">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="0.12s"><mpath href="#arc0" /></animateMotion>
+    </circle>
+    <circle r="2.2" fill="#26c6da" opacity="0.25">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="0.24s"><mpath href="#arc0" /></animateMotion>
+    </circle>
+
+    <circle r="5" fill="#7c4dff">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="0.75s"><mpath href="#arc1" /></animateMotion>
+    </circle>
+    <circle r="3.5" fill="#7c4dff" opacity="0.5">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="0.87s"><mpath href="#arc1" /></animateMotion>
+    </circle>
+    <circle r="2.2" fill="#7c4dff" opacity="0.25">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="0.99s"><mpath href="#arc1" /></animateMotion>
+    </circle>
+
+    <circle r="5" fill="#ec407a">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="1.5s"><mpath href="#arc2" /></animateMotion>
+    </circle>
+    <circle r="3.5" fill="#ec407a" opacity="0.5">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="1.62s"><mpath href="#arc2" /></animateMotion>
+    </circle>
+    <circle r="2.2" fill="#ec407a" opacity="0.25">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="1.74s"><mpath href="#arc2" /></animateMotion>
+    </circle>
+
+    <circle r="5" fill="#26c6da">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="2.25s"><mpath href="#arc3" /></animateMotion>
+    </circle>
+    <circle r="3.5" fill="#26c6da" opacity="0.5">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="2.37s"><mpath href="#arc3" /></animateMotion>
+    </circle>
+    <circle r="2.2" fill="#26c6da" opacity="0.25">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="2.49s"><mpath href="#arc3" /></animateMotion>
     </circle>
   </g>
 </svg>
