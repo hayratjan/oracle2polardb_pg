@@ -162,10 +162,8 @@ def _get_oracle_connection_direct(connection_id, *, call_timeout_ms: int = 30000
         user=conn_obj.username,
         password=pwd,
         dsn=dsn,
-        # v2.4.3: 显式 UTF-8，thick 模式下覆盖客户端 NLS 默认值，
-        # 保证 CLOB read() 返回正确解码的 str（thin 模式自动处理，参数被忽略）
-        encoding='UTF-8',
-        nencoding='UTF-8',
+        # 说明：oracledb 已移除 cx_Oracle 的 encoding/nencoding 参数，
+        # thin 模式自动按数据库字符集（通常 AL32UTF8）正确解码，无需显式指定
     )
     # 设置单条 SQL 执行超时，避免查询卡死导致 HTTP 请求永不返回
     # v2.5: oracledb 使用 call_timeout(下划线),兼容 cx_Oracle 的 callTimeout

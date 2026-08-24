@@ -77,11 +77,9 @@ def get_oracle_pooled_connection(connection_id, *, call_timeout_ms: int = 30000)
                     min=POOL_MIN_CONNECTIONS,
                     max=POOL_MAX_CONNECTIONS,
                     increment=POOL_INCREMENT,
-                    getmode=oracledb.POOL_ATTRVAL_WAIT,
+                    # v2.5: oracledb 将 cx_Oracle 的 POOL_ATTRVAL_WAIT 更名为 SPOOL_ATTRVAL_WAIT
+                    getmode=oracledb.SPOOL_ATTRVAL_WAIT,
                     timeout=POOL_TIMEOUT,
-                    # v2.4.3: 显式 UTF-8，保证 CLOB read() 返回正确解码的 str
-                    encoding='UTF-8',
-                    nencoding='UTF-8',
                 )
                 _oracle_pools[connection_id] = session_pool
                 logger.info(
