@@ -1,0 +1,5 @@
+# pnpm 11+ 配置（pnpm 字段不再从 package.json 读取）
+# 允许 esbuild/vue-demi 运行安装脚本（vite 依赖 esbuild 二进制）
+allowBuilds:
+  esbuild: true
+  vue-demi: true

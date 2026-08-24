@@ -272,12 +272,16 @@ def materialize_one_view(
     last_saved_pct = -1
     last_saved_rows = 0
     widened_columns = set()
+    # v2.4.4: 取消检测节流（同 _migrate_single_table），避免每批次 refresh 刷元数据查询
+    last_cancel_check_rows = 0
 
     while True:
-        task.refresh_from_db()
-        if task.cancel_requested:
-            make_warn_log(log, f'用户取消，视图 {view_name} 已导入 {total_rows} 行')
-            return False, 'canceled'
+        if total_rows - last_cancel_check_rows >= 20000:
+            last_cancel_check_rows = total_rows
+            task.refresh_from_db()
+            if task.cancel_requested:
+                make_warn_log(log, f'用户取消，视图 {view_name} 已导入 {total_rows} 行')
+                return False, 'canceled'
 
         rows = oracle_cursor.fetchmany(fetch_batch)
         if not rows:

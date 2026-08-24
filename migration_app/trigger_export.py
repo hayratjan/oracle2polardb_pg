@@ -91,6 +91,7 @@ def build_plpgsql_trigger_template(
     status: str = 'ENABLED',
     when_clause=None,
     source_body=None,
+    base_object_type: str = 'TABLE',
 ):
     """根据 Oracle 触发器元数据生成 PL/pgSQL 改写骨架。"""
     func_name = f"trg_{trigger_name.lower()}_fn"
@@ -119,6 +120,16 @@ def build_plpgsql_trigger_template(
         new_cols, old_cols = _extract_referencing_cols(source_body)
 
     is_disabled = status and status.upper() == 'DISABLED'
+
+    # v2.4.4: 兼容性预检
+    # PG 的 INSTEAD OF 触发器仅允许建在视图上
+    instead_of_on_table = (
+        timing == 'INSTEAD OF' and str(base_object_type or 'TABLE').upper() != 'VIEW'
+    )
+    # Oracle 11g+ 组合触发器（单对象聚合多种时机/级别）PG 无对应，需拆分为多个触发器
+    is_compound = bool(
+        source_body and re.search(r'\bCOMPOUND\s+TRIGGER\b', source_body, re.IGNORECASE)
+    )
 
     body_lines = [
         'BEGIN',
@@ -179,6 +190,15 @@ def build_plpgsql_trigger_template(
         ddl_lines.append(f'-- WHEN 条件: {pg_when}')
     if is_disabled:
         ddl_lines.append(f'-- 源状态: DISABLED(已禁用,目标库也将禁用)')
+    if instead_of_on_table:
+        ddl_lines.append(
+            f'-- 注意: INSTEAD OF 触发器在 PG 中仅支持建在视图上,'
+            f'而本触发器基对象为 {base_object_type}(表);'
+            f'请改写为 BEFORE/AFTER 行级触发器,或将基对象改为视图')
+    if is_compound:
+        ddl_lines.append(
+            f'-- 注意: 检测到 Oracle 组合触发器(COMPOUND TRIGGER);'
+            f'PG 无对应结构,需按 BEFORE/AFTER 各拆分为独立触发器+函数')
     if stmt_when_invalid:
         ddl_lines.append(
             f'-- 注意: 源 WHEN 条件引用了 NEW/OLD,但 PG 语句级触发器不允许引用它们;'
@@ -249,6 +269,13 @@ def export_one_trigger(
         'status': meta_row[4],
         'description': meta_row[5],
     }
+    # v2.4.4: 基对象类型（TABLE/VIEW）供模板做 INSTEAD OF 校验
+    try:
+        from .full_database import fetch_trigger_base_object_type
+        meta['base_object_type'] = fetch_trigger_base_object_type(
+            oracle_cursor, source_schema, trigger_name)
+    except Exception:
+        meta['base_object_type'] = 'TABLE'
 
     oracle_cursor.execute(
         """
@@ -273,6 +300,7 @@ def export_one_trigger(
         schema=source_schema.lower(),
         status=meta['status'],
         source_body=body,
+        base_object_type=meta.get('base_object_type') or 'TABLE',
     )
 
     # 构建结构化多行日志（每行带 [LEVEL] 前缀）

@@ -385,6 +385,37 @@ def migrate_materialized_view(task_id, postgres_database=None):
 
         make_ok_log(log, f'成功创建物化视图 {target_schema}.{mview_name}')
 
+        # v2.4.4: 迁移物化视图上的索引（Oracle 常在 MV 上建索引支撑查询，
+        # 此前完全未迁移；复用表索引的元数据读取，DDL 经 psycopg2.sql 组合）
+        try:
+            from .schema_converter import fetch_table_indexes, fetch_unsupported_indexes
+            unsupported = fetch_unsupported_indexes(
+                oracle_cursor, task.source_schema, task.source_object)
+            for idx in unsupported:
+                make_warn_log(
+                    log,
+                    f'MV 索引 {idx["name"]} ({idx.get("type", "?")}) 未自动迁移（需人工补建）')
+            for idx in fetch_table_indexes(oracle_cursor, task.source_schema, task.source_object):
+                cols = idx.get('columns') or []
+                if not cols:
+                    continue
+                pg_cols = [pg_sql.Identifier(apply_identifier_case(c, id_case)) for c in cols]
+                pg_idx_name = apply_identifier_case(idx['name'], id_case)
+                unique_kw = pg_sql.SQL('UNIQUE ') if idx.get('unique') else pg_sql.SQL('')
+                pg_cursor.execute(
+                    unique_kw
+                    + pg_sql.SQL('INDEX {} ON {} (').format(
+                        pg_sql.Identifier(pg_idx_name),
+                        pg_sql.Identifier(target_schema, mview_name))
+                    + pg_sql.SQL(', ').join(pg_cols)
+                    + pg_sql.SQL(')')
+                )
+                pg_conn.commit()
+                make_ok_log(log, f'已创建 MV 索引 {idx["name"]}')
+        except Exception as idx_err:
+            pg_conn.rollback()
+            make_warn_log(log, f'MV 索引迁移失败（不影响物化视图本体）: {idx_err}')
+
         # 更新任务状态
         task.status = 'completed'
         task.progress = 100
@@ -1085,9 +1116,14 @@ def _migrate_single_table(oracle_cursor, pg_conn, pg_cursor, source_schema, targ
     progress_save_interval_rows = MIGRATION_PROGRESS_SAVE_ROWS
     batches_since_commit = 0
     user_cancelled = False
+    # v2.4.4: 取消检测节流——每批次 refresh_from_db 在百万行大表上产生大量
+    # 元数据查询，改为每 CANCEL_CHECK_INTERVAL_ROWS 行检查一次
+    last_cancel_check_rows = 0
+    CANCEL_CHECK_INTERVAL_ROWS = 20000
 
     while True:
-        if task:
+        if task and (total_rows - last_cancel_check_rows) >= CANCEL_CHECK_INTERVAL_ROWS:
+            last_cancel_check_rows = total_rows
             try:
                 task.refresh_from_db()
                 if task.cancel_requested:

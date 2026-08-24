@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "celery[redis]>=5.3,<6",
     "cryptography>=42,<45",
-    "cx-oracle>=8.3.0",
+    "oracledb>=1.4,<3.0",
     "django>=6.0,<6.1",
     "django-celery-beat>=2.6,<3",
     "django-cors-headers>=4.0",

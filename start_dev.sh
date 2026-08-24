@@ -161,7 +161,8 @@ if [[ "$RUN_INSTALL" == true ]]; then
     uv sync
   fi
   log "安装前端依赖..."
-  (cd "$ROOT_DIR/frontend" && pnpm install)
+  # CI=true: 无 TTY 时跳过 pnpm 清空 node_modules 的交互确认（ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY）
+  (cd "$ROOT_DIR/frontend" && CI=true pnpm install)
 fi
 
 # -----------------------------------------------------------------------------

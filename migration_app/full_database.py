@@ -179,11 +179,99 @@ def _discover_oracle_instance_impl(connection_id: int) -> dict[str, Any]:
     }
 
 
+def fetch_trigger_base_object_type(oracle_cursor, schema: str, trigger_name: str) -> str:
+    """读取触发器绑定对象的类型（TABLE/VIEW），供触发器模板做 INSTEAD OF 校验。
+
+    列名/表名为固定字面量，条件值经 :o/:n 绑定变量传入。
+    查询失败时保守返回 TABLE。
+    """
+    base_sql = (
+        'SELECT BASE_OBJECT_TYPE FROM ALL_TRIGGERS '
+        'WHERE OWNER = :o AND TRIGGER_NAME = :n'
+    )
+    try:
+        oracle_cursor.execute(base_sql, {'o': schema.upper(), 'n': trigger_name.upper()})
+        row = oracle_cursor.fetchone()
+        return str(row[0]).upper() if row and row[0] else 'TABLE'
+    except Exception as e:
+        logger.warning('读取触发器基对象类型失败: %s', e)
+        return 'TABLE'
+
+
 def _list_objects(oracle_cursor, schema: str, object_key: str) -> list[str]:
     """查询指定 Schema 下的对象名列表。"""
     query, _ = _OBJECT_QUERIES[object_key]
     oracle_cursor.execute(query, {'schema': schema})
     return [row[0] for row in oracle_cursor.fetchall()]
+
+
+def _topological_sort_by_dependencies(
+    oracle_cursor,
+    schema: str,
+    names: list[str],
+    object_types: tuple[str, ...],
+    referenced_types: tuple[str, ...],
+) -> list[str]:
+    """按 ALL_DEPENDENCIES 依赖关系拓扑排序（被依赖者在前）。
+
+    视图 B 依赖视图 A 时 A 排在前，避免整库迁移按字母序处理导致
+    CREATE VIEW 报「关系不存在」。环或无法解析的边按字母序追加
+    （与表 FK 排序 _topological_sort_tables_by_fk 同样的兜底策略）。
+    依赖过滤（REFERENCED_TYPE / 引用对象是否在集合内）在 Python 侧完成，
+    SQL 仅使用绑定变量。
+    """
+    if not names or len(names) == 1:
+        return names
+    name_set = {n.upper() for n in names}
+    orig_by_upper = {n.upper(): n for n in names}
+
+    edges: dict[str, list[str]] = {}
+    for obj_type in object_types:
+        try:
+            oracle_cursor.execute(
+                """
+                SELECT NAME, REFERENCED_NAME, REFERENCED_TYPE
+                FROM ALL_DEPENDENCIES
+                WHERE OWNER = :o AND TYPE = :t AND REFERENCED_OWNER = :o
+                """,
+                {'o': schema.upper(), 't': obj_type},
+            )
+            for name, ref_name, ref_type in oracle_cursor.fetchall():
+                if not name or not ref_name or not ref_type:
+                    continue
+                nu, ru = name.upper(), ref_name.upper()
+                if nu in name_set and ru in name_set and nu != ru:
+                    if str(ref_type).upper() in {t.upper() for t in referenced_types}:
+                        edges.setdefault(nu, []).append(ru)
+        except Exception as e:
+            logger.warning('读取 ALL_DEPENDENCIES 失败(退化为字母序): %s', e)
+            return names
+
+    from collections import defaultdict
+    from heapq import heappush, heappop
+
+    indegree = defaultdict(int)
+    children = defaultdict(list)
+    for nu, deps in edges.items():
+        for ru in deps:
+            children[ru].append(nu)
+            indegree[nu] += 1
+
+    heap = [n for n in name_set if indegree[n] == 0]
+    import heapq
+    heapq.heapify(heap)
+    ordered: list[str] = []
+    while heap:
+        n = heappop(heap)
+        ordered.append(n)
+        for ch in sorted(children[n]):
+            indegree[ch] -= 1
+            if indegree[ch] == 0:
+                heappush(heap, ch)
+
+    remaining = sorted(name_set - set(ordered))
+    ordered.extend(remaining)
+    return [orig_by_upper[u] for u in ordered]
 
 
 def _classify_seq_error(err_msg: str) -> str:
@@ -431,35 +519,75 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
 
                 elif phase == 'views':
                     view_list = _list_objects(oracle_cur, src_schema, 'views')
+                    # v2.4.4: 按 ALL_DEPENDENCIES 拓扑排序——视图 B 依赖视图 A 时 A 先建，
+                    # 消除字母序处理导致的「关系不存在」失败
+                    view_list = _topological_sort_by_dependencies(
+                        oracle_cur, src_schema, view_list,
+                        object_types=('VIEW',),
+                        referenced_types=('VIEW', 'TABLE', 'MATERIALIZED VIEW'),
+                    )
                     make_info_log(log, f'  视图数: {len(view_list)}')
                     vw_ok, vw_fail = 0, 0
+                    vw_failed_names: list[str] = []
+
+                    def _migrate_one_view(vname: str) -> bool:
+                        """迁移单个视图（必须在调用前持久化 task 源对象字段）。"""
+                        task.source_schema = src_schema
+                        task.target_schema = tgt_schema
+                        task.source_object = vname
+                        # 关键：必须先 save 再调用 migrate_view，因为后者会重新
+                        # 从数据库读取 task，内存中修改的 source_schema/source_object
+                        # 若不持久化就会丢失，导致「未指定要迁移的视图」错误
+                        task.save(update_fields=['source_schema', 'target_schema', 'source_object'])
+                        views.migrate_view(task.id, pgdb)
+                        task.refresh_from_db()
+                        task.status = 'running'
+                        return True
+
                     for vname in view_list:
                         obj_id = f'{src_schema}.{vname}'
                         if obj_id in completed_objects:
                             continue
                         try:
-                            # 关键：必须先 save 再调用 migrate_view，因为后者会重新
-                            # 从数据库读取 task，内存中修改的 source_schema/source_object
-                            # 若不持久化就会丢失，导致「未指定要迁移的视图」错误
-                            task.source_schema = src_schema
-                            task.target_schema = tgt_schema
-                            task.source_object = vname
-                            task.save(update_fields=['source_schema', 'target_schema', 'source_object'])
-                            views.migrate_view(task.id, pgdb)
-                            task.refresh_from_db()
+                            _migrate_one_view(vname)
                             completed_objects.add(obj_id)
                             vw_ok += 1
                             make_ok_log(log, f'    视图 {vname} 完成')
                         except Exception as e:
                             vw_fail += 1
+                            vw_failed_names.append(vname)
                             failed_objects.append({'object': obj_id, 'phase': phase, 'error': str(e)})
                             make_error_log(log, f'    视图 {vname} 失败: {e}')
-                        task.status = 'running'
+
+                    # v2.4.4: 第二轮重试——失败多因依赖视图尚未建成，
+                    # 一轮结束后依赖可能已就绪，重试一轮可救回大部分
+                    if vw_failed_names:
+                        make_info_log(log, f'  重试 {len(vw_failed_names)} 个失败视图（依赖就绪检查）…')
+                        for vname in list(vw_failed_names):
+                            obj_id = f'{src_schema}.{vname}'
+                            try:
+                                _migrate_one_view(vname)
+                                completed_objects.add(obj_id)
+                                vw_ok += 1
+                                vw_fail -= 1
+                                vw_failed_names.remove(vname)
+                                failed_objects[:] = [
+                                    f for f in failed_objects if f.get('object') != obj_id
+                                ]
+                                make_ok_log(log, f'    视图 {vname} 重试成功')
+                            except Exception as e:
+                                make_warn_log(log, f'    视图 {vname} 重试仍失败: {e}')
                     if vw_ok or vw_fail:
                         make_ok_log(log, f'  Schema {src_schema} 视图完成 ({vw_ok} 成功 / {vw_fail} 失败)')
 
                 elif phase == 'materialized_views':
                     mv_list = _list_objects(oracle_cur, src_schema, 'materialized_views')
+                    # v2.4.4: MV 依赖表/视图/其他 MV，同样拓扑排序
+                    mv_list = _topological_sort_by_dependencies(
+                        oracle_cur, src_schema, mv_list,
+                        object_types=('MATERIALIZED VIEW',),
+                        referenced_types=('VIEW', 'TABLE', 'MATERIALIZED VIEW'),
+                    )
                     make_info_log(log, f'  物化视图数: {len(mv_list)}')
                     mv_ok, mv_fail = 0, 0
                     for mv in mv_list:
@@ -510,6 +638,13 @@ def migrate_full_database(task_id: int, postgres_database: str | None = None) ->
 
                 elif phase == 'routines':
                     rtn_list = _list_objects(oracle_cur, src_schema, 'routines')
+                    # v2.4.4: 函数间调用依赖排序——被调用者先创建，
+                    # 避免 PG 端「函数不存在」导致创建失败
+                    rtn_list = _topological_sort_by_dependencies(
+                        oracle_cur, src_schema, rtn_list,
+                        object_types=('FUNCTION', 'PROCEDURE'),
+                        referenced_types=('FUNCTION', 'PROCEDURE', 'PACKAGE', 'TABLE', 'VIEW'),
+                    )
                     make_info_log(log, f'  例程数: {len(rtn_list)}')
                     rtn_ok, rtn_fail = 0, 0
                     for rname in rtn_list:

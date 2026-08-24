@@ -1,87 +1,85 @@
-<svg width="400" height="400" viewBox="110 100 180 200" xmlns="http://www.w3.org/2000/svg">
+<svg width="400" height="400" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="dbGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#2196f3;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#9c27b0;stop-opacity:1" />
+    <!-- 数据库主体渐变：蓝 → 紫（PolarDB 生态色） -->
+    <linearGradient id="dbGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#42a5f5" />
+      <stop offset="1" stop-color="#7e57c2" />
     </linearGradient>
-    
-    <linearGradient id="arrowGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#00bcd4;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#e91e63;stop-opacity:1" />
+    <!-- 环绕箭头渐变：青 → 品红（userSpaceOnUse 保证四段弧取色一致） -->
+    <linearGradient id="ringGradient" gradientUnits="userSpaceOnUse" x1="48" y1="48" x2="352" y2="352">
+      <stop offset="0" stop-color="#26c6da" />
+      <stop offset="1" stop-color="#ec407a" />
     </linearGradient>
+    <!-- 箭头：marker 自动沿路径切线定向，四个方向全部正确 -->
+    <marker id="arrowHead" viewBox="0 0 10 10" refX="7" refY="5"
+            markerWidth="4.2" markerHeight="4.2" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 L3 5 Z" fill="#ec407a" />
+    </marker>
   </defs>
 
-  <!-- 中心数据库图标 -->
-  <g transform="translate(200, 200)">
-    <!-- 数据库主体 - 三层结构 -->
-    <!-- 第一层 -->
-    <ellipse cx="0" cy="-50" rx="60" ry="20" fill="#64b5f6" />
-    <path d="M-60 -50 v40 c0 11 26.9 20 60 20 s60 -9 60 -20 v-40" fill="url(#dbGradient)" />
-    <ellipse cx="0" cy="-50" rx="60" ry="20" fill="#90caf9" opacity="0.5" />
-    
+  <!-- ═══ 环绕迁移箭头：四段弧绕 (200,200) 旋转对称，逆时针循环 ═══
+       弧 = 半径 152 圆上 25°→65°（数学角）的弧段，四段各跨 40°、间隔 50° -->
+  <g fill="none" stroke="url(#ringGradient)" stroke-width="9" stroke-linecap="round">
+    <path id="arc0" d="M 337.8 264.2 A 152 152 0 0 0 264.2 337.8" marker-end="url(#arrowHead)" />
+    <path id="arc1" d="M 135.8 337.8 A 152 152 0 0 0 62.2 264.2" marker-end="url(#arrowHead)" />
+    <path id="arc2" d="M 62.2 135.8 A 152 152 0 0 0 135.8 62.2" marker-end="url(#arrowHead)" />
+    <path id="arc3" d="M 264.2 62.2 A 152 152 0 0 0 337.8 135.8" marker-end="url(#arrowHead)" />
+  </g>
+
+  <!-- ═══ 中心数据库图标（三层圆柱） ═══ -->
+  <g transform="translate(200, 200)" stroke="#1e3a5f" stroke-width="2.5">
+    <!-- 第三层（底） -->
+    <path d="M -62 26 v 42 c 0 11 27.8 20 62 20 s 62 -9 62 -20 v -42"
+          fill="url(#dbGradient)" opacity="0.72" />
     <!-- 第二层 -->
-    <path d="M-60 -10 v40 c0 11 26.9 20 60 20 s60 -9 60 -20 v-40" fill="url(#dbGradient)" opacity="0.85" />
-    <ellipse cx="0" cy="-10" rx="60" ry="20" fill="none" stroke="#1565c0" stroke-width="2" opacity="0.3" />
-    
-    <!-- 第三层 -->
-    <path d="M-60 30 v40 c0 11 26.9 20 60 20 s60 -9 60 -20 v-40" fill="url(#dbGradient)" opacity="0.7" />
-    <ellipse cx="0" cy="30" rx="60" ry="20" fill="none" stroke="#1565c0" stroke-width="2" opacity="0.3" />
-    
-    <!-- 数据元素点缀 -->
-    <g fill="#ffffff" opacity="0.6">
-      <circle cx="-25" cy="-40" r="4" />
-      <circle cx="-25" cy="-15" r="4" />
-      <circle cx="-25" cy="10" r="4" />
-      <circle cx="25" cy="-40" r="4" />
-      <circle cx="25" cy="-15" r="4" />
-      <circle cx="25" cy="10" r="4" />
-      <circle cx="0" cy="-25" r="3" />
-      <circle cx="0" cy="0" r="3" />
-      <circle cx="0" cy="25" r="3" />
-    </g>
+    <path d="M -62 -14 v 40 c 0 11 27.8 20 62 20 s 62 -9 62 -20 v -40"
+          fill="url(#dbGradient)" opacity="0.9" />
+    <!-- 第一层（顶）主体 + 顶面 -->
+    <path d="M -62 -54 v 40 c 0 11 27.8 20 62 20 s 62 -9 62 -20 v -40"
+          fill="url(#dbGradient)" />
+    <ellipse cx="0" cy="-54" rx="62" ry="20" fill="#64b5f6" />
+    <!-- 分层线（白色，提高三层结构的辨识度） -->
+    <ellipse cx="0" cy="-14" rx="62" ry="20" fill="none" stroke="#ffffff" stroke-width="2.5" opacity="0.55" />
+    <ellipse cx="0" cy="26" rx="62" ry="20" fill="none" stroke="#ffffff" stroke-width="2.5" opacity="0.55" />
+    <!-- 高光 -->
+    <ellipse cx="-18" cy="-58" rx="22" ry="7" fill="#ffffff" opacity="0.35" stroke="none" />
   </g>
-  
-  <!-- 环绕箭头 - 表示循环迁移 -->
-  <g fill="none" stroke="url(#arrowGradient)" stroke-width="6" stroke-linecap="round">
-    <!-- 上方箭头 -->
-    <path d="M150 120 Q200 90 250 120" />
-    <polygon points="250,120 240,105 245,125" fill="url(#arrowGradient)" stroke="none" />
-    
-    <!-- 右侧箭头 -->
-    <path d="M280 150 Q310 200 280 250" />
-    <polygon points="280,250 295,240 275,245" fill="url(#arrowGradient)" stroke="none" />
-    
-    <!-- 下方箭头 -->
-    <path d="M250 280 Q200 310 150 280" />
-    <polygon points="150,280 160,295 155,275" fill="url(#arrowGradient)" stroke="none" />
-    
-    <!-- 左侧箭头 -->
-    <path d="M120 250 Q90 200 120 150" />
-    <polygon points="120,150 105,160 125,155" fill="url(#arrowGradient)" stroke="none" />
+
+  <!-- ═══ 数据元素点缀（限制在圆柱体内） ═══ -->
+  <g fill="#ffffff" stroke="none">
+    <circle cx="182" cy="162" r="3.2" opacity="0.85" />
+    <circle cx="218" cy="162" r="3.2" opacity="0.6" />
+    <circle cx="200" cy="182" r="2.6" opacity="0.7" />
+    <circle cx="182" cy="202" r="2.6" opacity="0.6" />
+    <circle cx="218" cy="202" r="2.6" opacity="0.85" />
+    <circle cx="200" cy="222" r="2.6" opacity="0.6" />
   </g>
-  
-  <!-- 流动数据粒子 -->
-  <circle cx="170" cy="110" r="5" fill="#00bcd4" opacity="0.8">
-    <animate attributeName="cx" values="170;230" dur="1.5s" repeatCount="indefinite"/>
-    <animate attributeName="cy" values="110;110" dur="1.5s" repeatCount="indefinite"/>
-    <animate attributeName="opacity" values="0.8;0.2;0.8" dur="1.5s" repeatCount="indefinite"/>
-  </circle>
-  
-  <circle cx="290" cy="170" r="5" fill="#e91e63" opacity="0.8">
-    <animate attributeName="cx" values="290;290" dur="1.5s" begin="0.4s" repeatCount="indefinite"/>
-    <animate attributeName="cy" values="170;230" dur="1.5s" begin="0.4s" repeatCount="indefinite"/>
-    <animate attributeName="opacity" values="0.8;0.2;0.8" dur="1.5s" begin="0.4s" repeatCount="indefinite"/>
-  </circle>
-  
-  <circle cx="230" cy="290" r="5" fill="#00bcd4" opacity="0.8">
-    <animate attributeName="cx" values="230;170" dur="1.5s" begin="0.8s" repeatCount="indefinite"/>
-    <animate attributeName="cy" values="290;290" dur="1.5s" begin="0.8s" repeatCount="indefinite"/>
-    <animate attributeName="opacity" values="0.8;0.2;0.8" dur="1.5s" begin="0.8s" repeatCount="indefinite"/>
-  </circle>
-  
-  <circle cx="110" cy="230" r="5" fill="#e91e63" opacity="0.8">
-    <animate attributeName="cx" values="110;110" dur="1.5s" begin="1.2s" repeatCount="indefinite"/>
-    <animate attributeName="cy" values="230;170" dur="1.5s" begin="1.2s" repeatCount="indefinite"/>
-    <animate attributeName="opacity" values="0.8;0.2;0.8" dur="1.5s" begin="1.2s" repeatCount="indefinite"/>
-  </circle>
+
+  <!-- ═══ 流动数据粒子（animateMotion 沿弧线，与箭头轨迹一致） ═══ -->
+  <g>
+    <circle r="4.5" fill="#26c6da" opacity="0.9">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="0s">
+        <mpath href="#arc0" />
+      </animateMotion>
+      <animate attributeName="opacity" values="0.9;0.3;0.9" dur="3s" repeatCount="indefinite" />
+    </circle>
+    <circle r="4.5" fill="#ec407a" opacity="0.9">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="0.75s">
+        <mpath href="#arc1" />
+      </animateMotion>
+      <animate attributeName="opacity" values="0.9;0.3;0.9" dur="3s" begin="0.75s" repeatCount="indefinite" />
+    </circle>
+    <circle r="4.5" fill="#26c6da" opacity="0.9">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="1.5s">
+        <mpath href="#arc2" />
+      </animateMotion>
+      <animate attributeName="opacity" values="0.9;0.3;0.9" dur="3s" begin="1.5s" repeatCount="indefinite" />
+    </circle>
+    <circle r="4.5" fill="#ec407a" opacity="0.9">
+      <animateMotion dur="3s" repeatCount="indefinite" begin="2.25s">
+        <mpath href="#arc3" />
+      </animateMotion>
+      <animate attributeName="opacity" values="0.9;0.3;0.9" dur="3s" begin="2.25s" repeatCount="indefinite" />
+    </circle>
+  </g>
 </svg>
