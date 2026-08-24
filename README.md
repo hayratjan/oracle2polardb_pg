@@ -1,6 +1,6 @@
 <!-- 文档版本：v2.4.3 · 企业级迁移平台 -->
 
-<img src="./hello.svg" width="880" height="100">
+<img src="https://raw.giteeusercontent.com/hayratjan/oracle2polardb_pg/raw/master/frontend/src/assets/logo.svg" width="880" height="100">
 </br>
 <h1 align="center">Oracle 至 PolarDB PostgreSQL</h1>
 <h3 align="center">企业级数据库迁移与同步平台</h3>
