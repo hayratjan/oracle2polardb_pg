@@ -2,8 +2,17 @@
 # v2.4: 修复生产配置(runserver→gunicorn, 设 DJANGO_ENV=prod, Redis 加密码, 加健康检查/restart)
 # v2.4.4: 新增可选服务组——
 #   · profile "meta-db"  : PostgreSQL 元数据库（DATABASE_URL 指向它，文档与实现终于一致）
-#   · profile "frontend" : nginx 前端托管 + API 同源反代（浏览器无 CORS 需求）
-# 启用方式: docker compose --profile meta-db --profile frontend up -d
+# 启用方式: docker compose --profile meta-db up -d
+#
+# v2.5: 前后端合并为单镜像——Vue 构建产物打进镜像，由 Django + WhiteNoise 同源直出
+#   (访问入口就是 8000，不再有 8080 的 nginx 前端服务，也不再需要 CORS)。
+#   切 thick 变体(连 Oracle 11g 源库需要 Instant Client):
+#     APP_TARGET=thick docker compose up -d --build
+#   四个应用服务共用同一个 build 定义，改一处即全部生效。
+x-app-build: &app-build
+  context: .
+  target: ${APP_TARGET:-thin}
+
 services:
   redis:
     image: redis:7-alpine
@@ -20,11 +29,12 @@ services:
       retries: 5
 
   web:
-    build: .
+    build: *app-build
     # v2.4: 生产用 gunicorn,移除 runserver(性能差/不安全)
+    # v2.5: 去掉启动期 collectstatic——镜像构建时已收集并生成 WhiteNoise 的 hash 清单，
+    #       运行时再重做一遍是 1900 个文件的重处理(实测约 10s)，且与 gunicorn 读清单存在竞态。
     command: >
       sh -c "python manage.py migrate --noinput &&
-             python manage.py collectstatic --noinput &&
              gunicorn oracle2polardb_pg.wsgi:application
              --bind 0.0.0.0:8000
              --workers ${GUNICORN_WORKERS:-2}
@@ -59,7 +69,7 @@ services:
       start_period: 30s
 
   celery-worker:
-    build: .
+    build: *app-build
     command: celery -A oracle2polardb_pg worker -l info
     env_file: .env
     environment:
@@ -80,7 +90,7 @@ services:
       start_period: 60s
 
   celery-beat:
-    build: .
+    build: *app-build
     command: celery -A oracle2polardb_pg beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
     env_file: .env
     environment:
@@ -113,20 +123,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # ═══ v2.4.4 可选:nginx 前端托管 + API 同源反代(profile: frontend) ═══
-  # 前端构建时 VITE_API_BASE_URL 留空(相对路径),经 nginx /api/ 反代到 web,
-  # 浏览器全程同源——生产环境无需任何 CORS 配置。
-  # 访问入口变为 http://<主机>:8080(nginx),后端 8000 可不再对宿主机暴露。
-  frontend:
-    build: ./frontend
-    profiles: ["frontend"]
-    ports:
-      - "${FRONTEND_PORT:-8080}:80"
-    depends_on:
-      web:
-        condition: service_healthy
-    restart: unless-stopped
 
 volumes:
   meta_db_data:

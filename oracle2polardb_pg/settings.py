@@ -170,6 +170,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # 合并镜像（单 gunicorn 进程）时直出 /static/ 与 Vue 的 /assets/；
+    # 必须排在 CommonMiddleware 之前，否则响应已被 GZip 接管，命中不到 WhiteNoise 的文件索引
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -291,6 +294,18 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Vue前端构建目录
 VITE_BUILD_DIR = os.path.join(BASE_DIR, 'frontend', 'dist')
+
+# WhiteNoise：把 Vue 构建产物目录按原路径直出（/assets/index-xxx.js、index.html）
+WHITENOISE_ROOT = VITE_BUILD_DIR
+# 带 hash 的清单文件名 + gzip/brotli 预压缩；容器内长缓存安全
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')

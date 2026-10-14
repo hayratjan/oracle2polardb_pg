@@ -5,11 +5,11 @@ The `urlpatterns` list routes URLs to views. For more information please see:
     https://docs.djangoproject.com/en/5.1/topics/http/urls/
 """
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, re_path, include
 from django.conf import settings
 from django.conf.urls.static import static
-from django.views.generic import RedirectView, TemplateView
-from django.http import JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseNotAllowed, JsonResponse
+from django.views.generic import RedirectView
 import os
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
@@ -28,6 +28,26 @@ def readyz(request):
         return JsonResponse({'status': 'ready', 'database': 'connected'})
     except Exception as e:
         return JsonResponse({'status': 'not_ready', 'error': str(e)}, status=503)
+
+
+# Vue history 路由的前缀白名单：这些前缀下的未知路径必须保持 404，
+# 否则 /api/xxx 打错会被回退视图伪装成首页，前端只能看到"200 但 JSON 解析失败"
+_SPA_RESERVED_PREFIXES = ('api', 'admin', 'static', 'media', 'healthz', 'readyz')
+
+
+def spa_fallback(request, path=''):
+    """生产环境下的 SPA 深层链接回退：非真实前缀的 GET/HEAD 一律返回 index.html。"""
+    if path.split('/')[0] in _SPA_RESERVED_PREFIXES:
+        raise Http404
+    if request.method not in ('GET', 'HEAD'):
+        return HttpResponseNotAllowed(['GET', 'HEAD'])
+    # 存在性检查放在请求期：CI 与未构建的仓库里没有 dist，
+    # 若依赖 import 期的 os.path.exists 注册路由，这条分支在测试里永远进不来
+    index = os.path.join(settings.VITE_BUILD_DIR, 'index.html')
+    if settings.DEBUG or not os.path.isfile(index):
+        raise Http404
+    with open(index, 'rb') as handle:
+        return HttpResponse(handle.read(), content_type='text/html; charset=utf-8')
 
 
 urlpatterns = [
@@ -56,12 +76,9 @@ if settings.DEBUG:
 
 # 生产环境配置
 else:
-    # 生产环境：提供Vue构建后的静态文件
-    if os.path.exists(settings.VITE_BUILD_DIR):
-        urlpatterns += [
-            path('', TemplateView.as_view(template_name='index.html'), name='frontend'),
-        ]
-        # 添加静态文件服务
-        from django.contrib.staticfiles.views import serve
-        urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
-        urlpatterns += static('/assets/', document_root=os.path.join(settings.VITE_BUILD_DIR, 'assets'))
+    # /static/ 与 Vue 的 /assets/ 由 WhiteNoise 中间件按文件直出，这里只剩路由回退。
+    # 原先这两行 static() 在 DEBUG=False 下恒返回空列表（django/conf/urls/static.py:23），
+    # 属于死代码：删掉后由 WhiteNoise 承担，index.html 引用 /assets/ 不再 404。
+    urlpatterns += [
+        re_path(r'^(?P<path>.*?)/?$', spa_fallback, name='spa_fallback'),
+    ]

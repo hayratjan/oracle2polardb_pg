@@ -33,10 +33,21 @@ frontend/dist
 .env
 .env.local
 .env.*.local
+# Docker 的模式是从上下文根匹配的，上面三条管不到 frontend/ 里那份：
+# Vite 会读 frontend/.env(本机内容是 VITE_API_BASE_URL=http://localhost:8000)，
+# 一旦它进了构建阶段，就可能把 Dockerfile 里的同源 ARG 顶掉，
+# 让"合并镜像"构建出来的前端又去请求构建机的 localhost
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
 
 # 数据库文件
 db.sqlite3
 db.sqlite3-journal
+
+# collectstatic 的输出目录：镜像内会重新生成(实测本机那份 67MB/3000 文件)。
+# 不排除的话每次 CI 都要把这 67MB 当作构建上下文上传，且进 COPY . . 层
+staticfiles/
 
 # 日志与临时文件
 *.log
@@ -57,6 +68,14 @@ Dockerfile
 docker-compose.yml
 .dockerignore
 
-# 文档(可选,不打入镜像可减小体积)
+# 文档(不打入镜像可减小体积)
 docs/
 *.md
+# 例外：admin 首页信息面板在运行时读 BASE_DIR/README.md(oracle2polardb_pg/admin.py:22)，
+# 缺文件时该面板是空白页；README 仅 46KB，留着比"生产 admin 首页没内容"划算
+!README.md
+
+# 前端构建残留(tsc 产物与增量缓存,构建阶段会自己重新生成)
+frontend/vite.config.js
+frontend/vite.config.d.ts
+frontend/*.tsbuildinfo

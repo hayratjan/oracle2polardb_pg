@@ -1131,3 +1131,89 @@ class PgDatabaseInfoAPIViewTest(TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.data['status'], 'error')
         self.assertIn('reset statement_timeout', ' || '.join(fake._cursor.executed))
+
+
+class SpaFallbackAndStaticTest(TestCase):
+    """合并镜像后由 Django 单进程托管 Vue SPA：深层路由回退 index.html，
+    且不能把 /api、/admin 等真实前缀的 404 吞成页面；静态资源交给 WhiteNoise。"""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        (root / 'assets').mkdir()
+        (root / 'index.html').write_text('<html>SPA-INDEX-MARKER</html>', encoding='utf-8')
+        (root / 'assets' / 'app-hash.js').write_text('console.log("ASSET-MARKER")', encoding='utf-8')
+        self.dist = root
+
+    def _get(self, url, **overrides):
+        from django.test import override_settings
+        base = dict(VITE_BUILD_DIR=str(self.dist),
+                    WHITENOISE_ROOT=str(self.dist),
+                    DEBUG=False,
+                    ROOT_URLCONF='oracle2polardb_pg.urls')
+        base.update(overrides)
+        with override_settings(**base):
+            return self.client.get(url)
+
+    def test_deep_link_falls_back_to_index(self):
+        resp = self._get('/postgres')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('SPA-INDEX-MARKER', resp.content.decode())
+
+    def test_api_paths_are_not_swallowed_by_fallback(self):
+        # /api/ 前缀命中但内部无匹配时 Django 会继续向下匹配，回退路由必须显式让行
+        resp = self._get('/api/definitely-not-an-endpoint/')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_healthz_probe_still_served(self):
+        resp = self._get('/healthz')
+        self.assertEqual(resp.status_code, 200)
+
+    def test_admin_prefix_not_shadowed(self):
+        resp = self._get('/admin/')
+        self.assertIn(resp.status_code, (302, 200))
+        if resp.status_code == 200:
+            self.assertNotIn('SPA-INDEX-MARKER', resp.content.decode())
+
+    def test_non_get_is_rejected_not_served_index(self):
+        from django.test import override_settings
+        with override_settings(VITE_BUILD_DIR=str(self.dist), DEBUG=False):
+            resp = self.client.post('/postgres')
+        self.assertEqual(resp.status_code, 405)
+
+    def test_fallback_404s_without_build_artifacts(self):
+        import os
+        empty = self._tmp.name + '-empty'
+        os.makedirs(empty, exist_ok=True)
+        resp = self._get('/postgres', VITE_BUILD_DIR=empty, WHITENOISE_ROOT=empty)
+        self.assertEqual(resp.status_code, 404)
+
+    def test_asset_served_from_build_dir(self):
+        resp = self._get('/assets/app-hash.js')
+        self.assertEqual(resp.status_code, 200, msg='静态资源应由 WhiteNoise 从 WHITENOISE_ROOT 直出')
+        # WhiteNoise 用流式响应，没有 .content；断言必须读 streaming_content
+        body = b''.join(resp.streaming_content) if getattr(resp, 'streaming', False) else resp.content
+        self.assertIn('ASSET-MARKER', body.decode())
+
+
+class WhiteNoiseConfigTest(TestCase):
+    """WhiteNoise 必须排在 SecurityMiddleware 之后、CommonMiddleware 之前，
+    否则 GZip/压缩中间件会先接管响应，命中不了缓存的静态文件。"""
+
+    def test_middleware_installed(self):
+        from django.conf import settings
+        mw = list(settings.MIDDLEWARE)
+        self.assertIn('whitenoise.middleware.WhiteNoiseMiddleware', mw)
+        self.assertLess(mw.index('django.middleware.security.SecurityMiddleware'),
+                        mw.index('whitenoise.middleware.WhiteNoiseMiddleware'))
+        self.assertLess(mw.index('whitenoise.middleware.WhiteNoiseMiddleware'),
+                        mw.index('django.middleware.common.CommonMiddleware'))
+
+    def test_static_root_uses_compressed_manifest_storage(self):
+        from django.conf import settings
+        storages = getattr(settings, 'STORAGES', {})
+        backend = storages.get('staticfiles', {}).get('BACKEND', '')
+        self.assertIn('CompressedManifestStaticFilesStorage', backend)

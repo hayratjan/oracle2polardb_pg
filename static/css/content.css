@@ -490,13 +490,6 @@
     z-index: 9999999999;
   }
   
-  @font-face {
-    font-family: 'TencentSans';
-    src: url(../../static/fonts/TencentSans.woff2) format('woff');
-    font-weight: normal;
-    font-style: normal;
-  }
-  
   .trans-ctx--container-panel-sidebar {
     position: fixed;
     right: 10px;

@@ -13,6 +13,8 @@ db.sqlite3
 
 # 静态文件收集目录
 static/*
+# collectstatic 的输出(STATIC_ROOT)，本机跑一次就是 67MB/3000 文件，绝不入库
+staticfiles/
 
 # 前端构建与缓存
 frontend/dist/

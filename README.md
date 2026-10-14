@@ -1003,11 +1003,14 @@ pnpm build      # 生产构建
 
 ## 🐳 Docker 部署
 
-项目提供 `Dockerfile` 与 `docker-compose.yml`，支持容器化一键部署：
+前后端合并为**单镜像**（Vue 产物打进镜像，由 Django + WhiteNoise 同源直出），`docker-compose.yml` 一键部署：
 
 ```bash
-# 一键启动（Redis + Django + Celery Worker + Celery Beat）
+# 一键启动（Redis + Django(含前端) + Celery Worker + Celery Beat）
 docker compose up -d
+
+# 源库是 Oracle 11g（thin 连不上，需要内置 Instant Client 的 thick 变体）
+APP_TARGET=thick docker compose up -d --build
 
 # 查看日志
 docker compose logs -f web
@@ -1018,16 +1021,20 @@ docker compose down
 
 | 服务 | 说明 | 端口 |
 |:-----|:-----|:-----|
-| `redis` | 消息队列与结果后端 | 6379 |
-| `web` | Django 应用（含 migrate） | 8000 |
+| `redis` | 消息队列与结果后端 | 6379（仅 compose 内网） |
+| `web` | Django 应用，SPA + API 同源（启动时自动 migrate） | 8000 |
 | `celery-worker` | 异步任务 Worker | — |
 | `celery-beat` | 定时任务调度器 | — |
+
+镜像两个 target：`thin`（默认，oracledb thin，可连 Oracle 12.1+）与 `thick`（内含 Instant Client 19.32，可连 11.2.0.4，仅 x86_64）。CI 会把两者分别推成 `:latest` 与 `:latest-thick`。
 
 **生产部署注意事项：**
 1. 修改 `.env` 中的 `DJANGO_SECRET_KEY` 和 `MIGRATION_FERNET_KEY`
 2. 设置 `DJANGO_DEBUG=false`
-3. 容器内需挂载 Oracle Instant Client（或使用包含客户端的基础镜像）
-4. 使用 Nginx 反向代理，将前端静态文件与 API 统一入口
+3. Oracle 11g 源库用 `APP_TARGET=thick`，无需再自行挂载 Instant Client
+4. 前置 Nginx/云 LB 终结 TLS 即可，应用侧不再需要为静态资源单独反代
+
+详见 [docs/Docker部署指南.md](docs/Docker部署指南.md)。
 
 ---
 

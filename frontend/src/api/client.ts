@@ -1,8 +1,15 @@
 import axios from 'axios'
 import { tokenManager } from './auth'
 
+// Vite 在构建期把 import.meta.env.VITE_API_BASE_URL 静态替换：变量未定义→undefined，
+// 显式定义为空→""。空串必须表示"同源"（合并镜像里 Django 同域提供 /api/），
+// 所以这里不能用 `|| 兜底`——那样同源构建仍会请求 http://localhost:8000。
+const envBaseUrl =
+  typeof (import.meta as any).env !== 'undefined' ? (import.meta as any).env.VITE_API_BASE_URL : undefined
+const apiBaseUrl = envBaseUrl === undefined ? 'http://localhost:8000' : envBaseUrl
+
 const apiClient = axios.create({
-  baseURL: (typeof (import.meta as any).env !== 'undefined' ? (import.meta as any).env.VITE_API_BASE_URL : undefined) || 'http://localhost:8000',
+  baseURL: apiBaseUrl,
   timeout: 30000,
   // 注意：不能设 withCredentials —— 凭据式跨域请求要求后端返回精确来源而非
   // 通配符 Access-Control-Allow-Origin: *，开发环境的 * 会导致浏览器在预检
@@ -45,8 +52,7 @@ apiClient.interceptors.response.use(
       try {
         const refreshToken = tokenManager.getRefreshToken()
         if (refreshToken) {
-          const baseURL = (typeof (import.meta as any).env !== 'undefined' ? (import.meta as any).env.VITE_API_BASE_URL : undefined) || 'http://localhost:8000'
-          const response = await axios.post(`${baseURL}/api/token/refresh/`, {
+          const response = await axios.post(`${apiBaseUrl}/api/token/refresh/`, {
             refresh: refreshToken
           })
 
