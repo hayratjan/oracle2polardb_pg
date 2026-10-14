@@ -33,15 +33,48 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+logger = logging.getLogger(__name__)
+
+
+def _load_dotenv(path: Path) -> None:
+    """加载项目根目录 .env（零依赖实现）。
+
+    真实环境变量优先（setdefault），因此 docker-compose 的 environment、CI 与
+    shell export 始终覆盖 .env 中的同名项；.env 缺失时静默跳过。
+    """
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding='utf-8').splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, _, value = line.partition('=')
+        key = key.strip()
+        if key.startswith('export '):
+            key = key[len('export '):].strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_dotenv(BASE_DIR / '.env')
+
 # Initialize Oracle client（生产/开发通过 ORACLE_CLIENT_LIB 指定；CI 可留空跳过）
 # v2.5: cx_Oracle → oracledb 迁移。oracledb 默认 thin 模式(纯 Python,无需 Instant Client)。
 # 仅当显式设置 ORACLE_CLIENT_LIB 时才切换到 thick 模式(需要 Instant Client)。
-_ORACLE_CLIENT_LIB = os.environ.get('ORACLE_CLIENT_LIB', '')
+_ORACLE_CLIENT_LIB = os.path.expanduser((os.environ.get('ORACLE_CLIENT_LIB') or '').strip())
 if _ORACLE_CLIENT_LIB:
     try:
         oracledb.init_oracle_client(lib_dir=_ORACLE_CLIENT_LIB)
-    except Exception:
-        pass  # 无本地 Instant Client 时仍可运行(thin 模式)不依赖 Oracle 的 API/单测
+        logger.info('Oracle Instant Client 已加载(thick 模式): %s', _ORACLE_CLIENT_LIB)
+    except Exception as exc:
+        # 静默退回 thin 模式会让低版本库报出难以理解的 DPY-3010，故显式告警
+        logger.warning(
+            'Oracle Instant Client 加载失败，已退回 thin 模式(仅支持 Oracle 12.1+)。'
+            'lib_dir=%s err=%s', _ORACLE_CLIENT_LIB, exc,
+        )
 
 
 # ============================================================================

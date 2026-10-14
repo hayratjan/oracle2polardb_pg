@@ -82,8 +82,8 @@
             </h5>
           </div>
           <div class="card-body">
-            <div v-if="selectedConnection">
-              <div class="mb-4">
+            <div v-if="connections.length">
+              <div class="mb-3">
                 <label class="form-label">选择连接</label>
                 <select v-model="selectedConnection" class="form-select-sm" @change="loadDatabaseInfo">
                   <option value="">请选择</option>
@@ -92,7 +92,82 @@
                   </option>
                 </select>
               </div>
-              
+
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="mb-0">
+                  <i class="bi bi-speedometer2 me-1"></i>运行指标
+                </h6>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                        :disabled="dbInfoLoading || !selectedConnection" @click="loadDatabaseInfo">
+                  <i class="bi bi-arrow-clockwise me-1"></i>刷新
+                </button>
+              </div>
+
+              <div v-if="dbInfoLoading" class="text-muted small py-3">
+                <span class="spinner-border spinner-border-sm me-2"></span>正在采集源库指标…
+              </div>
+              <div v-else-if="dbInfoError" class="alert alert-danger py-2 small mb-3">
+                <div class="fw-semibold">{{ dbInfoError.message }}</div>
+                <div v-if="dbInfoError.hint" class="mt-1">{{ dbInfoError.hint }}</div>
+                <pre v-if="dbInfoError.detail" class="bg-white border rounded p-2 mt-2 mb-0 small"
+                     style="max-height: 140px; overflow: auto; white-space: pre-wrap;">{{ dbInfoError.detail }}</pre>
+              </div>
+
+              <template v-else-if="dbInfo">
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                  <span class="badge text-bg-light border"
+                        :title="'取连接耗时 ' + dbInfo.acquire_ms + ' ms（连接池命中时接近 0；首次建连包含 TCP+认证握手）'">
+                    <i class="bi bi-stopwatch me-1"></i>往返 {{ dbInfo.ping_ms }} ms · 取连接 {{ dbInfo.acquire_ms }} ms
+                  </span>
+                  <span class="badge text-bg-light border">
+                    {{ dbInfo.version?.release || '版本未知' }}
+                  </span>
+                  <span class="badge text-bg-light border">{{ dbInfo.connection_name }}</span>
+                </div>
+
+                <div class="row g-2 mb-3">
+                  <div v-for="stat in dbInfoStats" :key="stat.label" class="col-6 col-xl-4">
+                    <div class="border rounded p-2 h-100">
+                      <div class="text-muted" style="font-size: .72rem;">{{ stat.label }}</div>
+                      <div class="fw-semibold text-truncate" :title="String(stat.value)">{{ stat.value }}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-for="bar in memoryBars" :key="bar.label" class="mb-2">
+                  <div class="d-flex justify-content-between small">
+                    <span>{{ bar.label }} 内存</span>
+                    <span class="text-muted">{{ bar.usedText }} / {{ bar.totalText }}</span>
+                  </div>
+                  <div class="progress" style="height: 6px;">
+                    <div class="progress-bar bg-primary" role="progressbar"
+                         :style="{ width: (bar.pct ?? 0) + '%' }"></div>
+                  </div>
+                </div>
+
+                <div v-if="dbInfo.storage?.tablespaces?.length" class="mt-3">
+                  <div class="small text-muted mb-1">表空间占用 Top {{ dbInfo.storage.tablespaces.length }}</div>
+                  <div v-for="ts in dbInfo.storage.tablespaces" :key="ts.name" class="mb-2">
+                    <div class="d-flex justify-content-between small">
+                      <span>{{ ts.name }}</span>
+                      <span class="text-muted">
+                        {{ ts.used_pct }}% · {{ formatBytes(ts.used_bytes) }} / {{ formatBytes(ts.size_bytes) }}
+                      </span>
+                    </div>
+                    <div class="progress" style="height: 6px;">
+                      <div class="progress-bar" role="progressbar"
+                           :class="ts.used_pct >= 90 ? 'bg-danger' : 'bg-info'"
+                           :style="{ width: (ts.used_pct ?? 0) + '%' }"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="dbInfoErrorSummary" class="small text-muted mt-2">
+                  <i class="bi bi-exclamation-triangle me-1"></i>
+                  部分指标因权限或版本不可用：{{ dbInfoErrorSummary }}
+                </div>
+              </template>
+
               <div v-if="databaseInfo">
                 <h6 class="mb-3">
                   <i class="bi bi-diagram-3 me-1"></i>
@@ -250,6 +325,16 @@
               <i v-if="testResultModal.success" class="bi bi-check-circle-fill text-success mb-3" style="font-size: 3rem;"></i>
               <i v-else class="bi bi-x-circle-fill text-danger mb-3" style="font-size: 3rem;"></i>
               <p class="mb-0">{{ testResultModal.message }}</p>
+              <div v-if="testResultModal.hint" class="alert alert-warning text-start mt-3 mb-0 py-2 small">
+                <i class="bi bi-lightbulb me-1"></i>{{ testResultModal.hint }}
+              </div>
+              <div v-if="testResultModal.detail" class="mt-3 text-start">
+                <button type="button" class="btn btn-link btn-sm p-0 text-muted" @click="showRawError = !showRawError">
+                  {{ showRawError ? '收起' : '查看' }}原始数据库错误
+                </button>
+                <pre v-if="showRawError" class="bg-light border rounded p-2 mt-2 mb-0 small text-start"
+                     style="max-height: 180px; overflow: auto; white-space: pre-wrap;">{{ testResultModal.detail }}</pre>
+              </div>
             </template>
           </div>
           <div class="modal-footer" v-if="!testResultModal.loading">
@@ -262,7 +347,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { oracleConnectionApi, databaseApi } from '@/api'
 import type { OracleConnection } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
@@ -280,13 +365,73 @@ const testResultModal = ref<{
   loading: boolean
   success: boolean
   message: string
+  hint: string
+  detail: string
 }>({
   show: false,
   loading: false,
   success: false,
   message: '',
+  hint: '',
+  detail: '',
 })
+const showRawError = ref(false)
 const databaseInfo = ref<any>(null)
+const dbInfo = ref<any>(null)
+const dbInfoLoading = ref(false)
+const dbInfoError = ref<{ message: string; hint: string; detail: string } | null>(null)
+
+const formatBytes = (bytes?: number | null): string => {
+  if (bytes === null || bytes === undefined) return '—'
+  const gb = bytes / 1073741824
+  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${(bytes / 1048576).toFixed(1)} MB`
+}
+
+const formatNumber = (value: any): string => (value === null || value === undefined ? '—' : String(value))
+
+const dbInfoStats = computed(() => {
+  const d: any = dbInfo.value
+  if (!d) return []
+  const c = d.counts || {}
+  const p = d.processes || {}
+  const s = d.sessions || {}
+  const st = d.storage || {}
+  const inst = d.instance || {}
+  return [
+    { label: '数据库名', value: formatNumber(c.database_name) },
+    { label: '可插拔库', value: c.pdb_count ? `${c.pdb_count} 个 PDB` : '1（非 CDB / 11g）' },
+    { label: '实例 @ 主机', value: inst.instance_name ? `${inst.instance_name} @ ${inst.host_name}` : '—' },
+    { label: '实例状态', value: formatNumber(inst.status) },
+    { label: '用户数', value: formatNumber(c.users) },
+    { label: c.schema ? `表数量（${c.schema}）` : '表数量（全库）', value: formatNumber(c.tables) },
+    { label: '会话（活跃/总）', value: s.total === null || s.total === undefined ? '—' : `${s.active_user ?? 0} / ${s.total}` },
+    { label: '进程（当前/上限）', value: p.current === null || p.current === undefined ? '—' : `${p.current} / ${formatNumber(p.limit)}` },
+    { label: '数据文件', value: st.datafile_count ? `${st.datafile_count} 个 / ${formatBytes(st.datafile_bytes)}` : '—' },
+    { label: '实例启动时间', value: formatNumber(inst.startup_time) },
+  ]
+})
+
+const memoryBars = computed(() => {
+  const m: any = dbInfo.value?.memory
+  if (!m) return []
+  const build = (label: string, used?: number | null, total?: number | null) => ({
+    label,
+    usedText: formatBytes(used),
+    totalText: formatBytes(total),
+    pct: used && total ? Math.min(100, Math.round((used / total) * 1000) / 10) : null,
+  })
+  return [
+    build('SGA', m.sga_used_bytes, m.sga_target_bytes),
+    build('PGA', m.pga_allocated_bytes, m.pga_target_bytes),
+  ]
+})
+
+const dbInfoErrorSummary = computed(() => {
+  const errors = dbInfo.value?.errors || {}
+  const keys = Object.keys(errors)
+  if (!keys.length) return ''
+  return keys.map((k) => `${k}（${errors[k]}）`).join('、')
+})
 const alertMessage = ref<{
   show: boolean
   type: 'success' | 'danger' | 'warning' | 'info'
@@ -428,11 +573,12 @@ const testEditedConnection = async () => {
   const ed = editedConnection.value
   if (!ed.id) return
   if (!ed.host?.trim() || !ed.service_name?.trim() || !ed.username?.trim()) {
-    testResultModal.value = { show: true, loading: false, success: false, message: '请先填写主机、服务名和用户名' }
+    testResultModal.value = { show: true, loading: false, success: false, message: '请先填写主机、服务名和用户名', hint: '', detail: '' }
     return
   }
   testing.value = true
-  testResultModal.value = { show: true, loading: true, success: false, message: '' }
+  showRawError.value = false
+  testResultModal.value = { show: true, loading: true, success: false, message: '', hint: '', detail: '' }
   try {
     const res = await oracleConnectionApi.testWithParams({
       connection_id: ed.id,
@@ -444,14 +590,21 @@ const testEditedConnection = async () => {
     })
     testResultModal.value.loading = false
     testResultModal.value.success = res.data.status === 'success'
-    testResultModal.value.message = res.data.status === 'success'
-      ? '连接测试成功'
-      : '连接测试失败: ' + (res.data.message || '')
-  } catch (error) {
+    if (testResultModal.value.success) {
+      testResultModal.value.message = '连接测试成功'
+    } else {
+      testResultModal.value.message = res.data.message || '连接测试失败'
+      testResultModal.value.hint = res.data.hint || ''
+      testResultModal.value.detail = res.data.detail || ''
+    }
+  } catch (error: any) {
     console.error('Failed to test connection:', error)
+    const data = error?.response?.data
     testResultModal.value.loading = false
     testResultModal.value.success = false
-    testResultModal.value.message = (error as any)?.response?.data?.message || '连接测试失败'
+    testResultModal.value.message = data?.message || '连接测试失败'
+    testResultModal.value.hint = data?.hint || ''
+    testResultModal.value.detail = data?.detail || ''
   } finally {
     testing.value = false
   }
@@ -470,37 +623,72 @@ const deleteConnection = async (id: number) => {
 
 const testConnection = async (id: number) => {
   if (!id) return
-  testResultModal.value = { show: true, loading: true, success: false, message: '' }
+  showRawError.value = false
+  testResultModal.value = { show: true, loading: true, success: false, message: '', hint: '', detail: '' }
   try {
     const res = await oracleConnectionApi.test(id)
     testResultModal.value.loading = false
     testResultModal.value.success = res.data.status === 'success'
-    testResultModal.value.message = res.data.status === 'success'
-      ? '连接测试成功'
-      : '连接测试失败: ' + (res.data.message || '')
-  } catch (error) {
+    if (testResultModal.value.success) {
+      testResultModal.value.message = '连接测试成功'
+    } else {
+      testResultModal.value.message = res.data.message || '连接测试失败'
+      testResultModal.value.hint = res.data.hint || ''
+      testResultModal.value.detail = res.data.detail || ''
+    }
+  } catch (error: any) {
     console.error('Failed to test connection:', error)
+    const data = error?.response?.data
     testResultModal.value.loading = false
     testResultModal.value.success = false
-    testResultModal.value.message = '连接测试失败'
+    testResultModal.value.message = data?.message || '连接测试失败'
+    testResultModal.value.hint = data?.hint || ''
+    testResultModal.value.detail = data?.detail || ''
   }
 }
 
 const loadDatabaseInfo = async () => {
   if (!selectedConnection.value) return
-  
+  const connectionId = selectedConnection.value
+
+  dbInfoLoading.value = true
+  dbInfoError.value = null
+  dbInfo.value = null
+  try {
+    const res = await databaseApi.getDatabaseInfo({ connection_id: connectionId })
+    if (res.data.status === 'success') {
+      dbInfo.value = res.data
+    } else {
+      dbInfoError.value = {
+        message: res.data.message || '获取数据库信息失败',
+        hint: res.data.hint || '',
+        detail: res.data.detail || '',
+      }
+    }
+  } catch (error: any) {
+    const data = error?.response?.data
+    dbInfoError.value = {
+      message: data?.message || '获取数据库信息失败',
+      hint: data?.hint || '',
+      detail: data?.detail || '',
+    }
+  } finally {
+    dbInfoLoading.value = false
+  }
+
+  // 指标与对象列表相互独立：指标失败不影响 Schemas/Users 展示
   try {
     const [schemasRes, usersRes] = await Promise.all([
-      databaseApi.getOracleSchemas({ connection_id: selectedConnection.value }),
-      databaseApi.getOracleUsers({ connection_id: selectedConnection.value }),
+      databaseApi.getOracleSchemas({ connection_id: connectionId }),
+      databaseApi.getOracleUsers({ connection_id: connectionId }),
     ])
-    
+
     databaseInfo.value = {
       schemas: schemasRes.data.schemas || [],
       users: usersRes.data.users || [],
     }
   } catch (error) {
-    console.error('Failed to load database info:', error)
+    console.error('Failed to load database objects:', error)
   }
 }
 

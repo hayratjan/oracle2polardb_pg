@@ -24,6 +24,7 @@ from . import create_task
 from .migration_errors import format_db_error, safe_close_db_resources
 import json
 import logging
+import time
 import traceback
 import psycopg2
 
@@ -740,8 +741,59 @@ class BrowseDirectoriesAPIView(APIView):
 
 
 class DatabaseInfoAPIView(APIView):
+    """GET /api/database-info/?connection_id=<id>[&schema=<owner>]
+
+    返回 Oracle 源库运行指标：连通性耗时、版本、实例、SGA/PGA、数据文件与表空间
+    占用、会话/进程、用户与表数量。单个动态视图无权限只降级该格，不整体失败。
+    """
+
+    # 面板为只读探测，15s 上限足够覆盖 11g 上较慢的 dba_* 统计，又不至于拖住 worker
+    CALL_TIMEOUT_MS = 15_000
+
     def get(self, request):
-        return Response({'status': 'success', 'message': 'Database info endpoint'})
+        from . import views
+        from .oracle_diagnostics import diagnose_oracle_connect_error
+        from .oracle_info import collect_database_info
+
+        connection_id = request.query_params.get('connection_id')
+        if not connection_id:
+            return Response(
+                {'status': 'error', 'message': '未提供连接ID'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            conn_obj = OracleConnection.objects.get(pk=connection_id)
+        except (OracleConnection.DoesNotExist, ValueError):
+            return Response(
+                {'status': 'error', 'message': '连接不存在'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        schema = (request.query_params.get('schema') or '').strip() or None
+        target = f'{conn_obj.host}:{conn_obj.port}/{conn_obj.service_name}'
+        connection = None
+        try:
+            started = time.monotonic()
+            connection = views.get_oracle_connection(
+                conn_obj.pk, call_timeout_ms=self.CALL_TIMEOUT_MS
+            )
+            acquire_ms = int((time.monotonic() - started) * 1000)
+            info = collect_database_info(connection, schema=schema)
+            return Response({
+                'status': 'success',
+                'connection_id': conn_obj.pk,
+                'connection_name': conn_obj.name,
+                'target': target,
+                'acquire_ms': acquire_ms,
+                **info,
+            })
+        except Exception as exc:
+            logger.warning('采集 Oracle 指标失败 %s: %s', target, exc)
+            payload = diagnose_oracle_connect_error(exc, target=target)
+            return Response({'status': 'error', **payload},
+                            status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            safe_close_db_resources(connection)
 
 
 class OracleSchemasAPIView(APIView):

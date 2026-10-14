@@ -19,6 +19,7 @@ from .resume import (
     normalize_view_progress,
 )
 from .oracle_row_adapter import adapt_oracle_rows
+from .oracle_dsn import CONNECT_TIMEOUT_SECONDS, build_dsn
 from .data_writer import insert_rows_batch
 from .migration_validation import validate_row_counts
 from .schema_converter import apply_post_table_schema, pg_table_exists
@@ -67,6 +68,49 @@ from django.db import models
 
 # 配置日志
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# API 认证适配：JWT 或 session 二者其一即通过
+# ============================================================================
+def api_jwt_auth(view_func):
+    """为 @login_required 视图补充 JWT(Authorization: Bearer) 认证能力。
+
+    前端 api/client.ts 设 withCredentials=false（跨域凭据与开发环境 CORS `*`
+    互斥），浏览器从不发送 sessionid cookie，因此这些挂在 /api/ 下的原生视图
+    仅靠 @login_required 会恒判匿名并 302 跳转到 /accounts/login/，axios 将其
+    当作请求失败。此处先用 simplejwt 官方认证类解析请求头并写回 request.user，
+    再交由内层 @login_required 校验；/app/ 模板路由不套本装饰器，保持原有的
+    登录页重定向行为。
+
+    未认证返回 401 JSON（而非 302），以便前端拦截器识别并触发 token 刷新。
+    """
+    from functools import wraps
+    from rest_framework.exceptions import AuthenticationFailed
+    from rest_framework_simplejwt.authentication import JWTAuthentication
+
+    authenticator = JWTAuthentication()
+
+    @wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        if request.user.is_authenticated:
+            return view_func(request, *args, **kwargs)
+        try:
+            result = authenticator.authenticate(request)
+        except AuthenticationFailed:
+            return JsonResponse(
+                {'status': 'error', 'message': '未认证或登录状态已过期，请重新登录'},
+                status=401,
+            )
+        if result is None:
+            return JsonResponse(
+                {'status': 'error', 'message': '需要认证'}, status=401,
+            )
+        request.user, request.auth = result
+        return view_func(request, *args, **kwargs)
+
+    return _wrapped
+
 
 # 全局线程池
 _task_executor = None
@@ -156,12 +200,14 @@ def _get_oracle_connection_direct(connection_id, *, call_timeout_ms: int = 30000
             DPI-1067 或 ORA-01013。设为 0 表示不限制。
     """
     conn_obj = get_object_or_404(OracleConnection, pk=connection_id)
-    dsn = oracledb.makedsn(conn_obj.host, conn_obj.port, service_name=conn_obj.service_name)
+    dsn = build_dsn(conn_obj.host, conn_obj.port, conn_obj.service_name)
     pwd = _connection_plain_password(conn_obj.password)
     connection = oracledb.connect(
         user=conn_obj.username,
         password=pwd,
         dsn=dsn,
+        # tcp_connect_timeout 供 thin 模式使用；thick 模式由 DSN 内的 CONNECT_TIMEOUT 兜住
+        tcp_connect_timeout=CONNECT_TIMEOUT_SECONDS,
         # 说明：oracledb 已移除 cx_Oracle 的 encoding/nencoding 参数，
         # thin 模式自动按数据库字符集（通常 AL32UTF8）正确解码，无需显式指定
     )
@@ -2512,29 +2558,62 @@ def oracle_database_management(request):
     }
     return render(request, 'migration_app/oracle/database_management.html', context)
 
+_ORACLE_CALL_TIMEOUT_MS = 15_000
+
+
+def _oracle_test_error_response(err):
+    """把诊断结果统一成形：message=结论, hint=下一步, detail=脱敏原始错误。"""
+    payload = err or {}
+    return JsonResponse({
+        'status': 'error',
+        'message': payload.get('message') or '连接测试失败',
+        'hint': payload.get('hint', ''),
+        'detail': payload.get('detail', ''),
+    })
+
+
 def _test_oracle_connect_with_params(host, port, service_name, username, password):
-    """使用给定参数测试 Oracle 连接，返回 (success, error_message)。"""
+    """使用给定参数测试 Oracle 连接，返回 (success, error_payload)。
+
+    error_payload 为 diagnose_oracle_connect_error() 产出的
+    {'message','hint','detail'} 字典；成功时为 None。
+    """
+    from .oracle_diagnostics import diagnose_oracle_connect_error
+
     try:
         port = int(port) if port is not None else 1521
     except (TypeError, ValueError):
-        return False, '端口格式无效'
+        return False, {
+            'message': '端口格式无效',
+            'hint': '端口需为数字，Oracle 默认监听端口为 1521。',
+            'detail': f'port={port!r}',
+        }
+
+    target = f'{host}:{port}/{service_name}'
+    connection = None
     try:
-        dsn = oracledb.makedsn(host, port, service_name=service_name)
-        # oracledb.connect() 不支持 connect_timeout 参数，需通过 DSN 或 Oracle 客户端配置超时
+        dsn = build_dsn(host, port, service_name)
+        # DSN 内的 CONNECT_TIMEOUT 约束 thick 模式握手，tcp_connect_timeout 约束 thin 模式；
+        # call_timeout 是连接对象属性（connect() 不接受该入参），需在连接后设置，
+        # 用于兜住后续任何一次往返。
         connection = oracledb.connect(
             user=username,
             password=password or '',
-            dsn=dsn
+            dsn=dsn,
+            tcp_connect_timeout=CONNECT_TIMEOUT_SECONDS,
         )
-        connection.close()
+        connection.call_timeout = _ORACLE_CALL_TIMEOUT_MS
         return True, None
     except oracledb.DatabaseError as e:
-        error_obj, = e.args
-        if error_obj.code == 12170 or 'timeout' in str(e).lower():
-            return False, '无法连接到数据库，连接超时'
-        return False, str(e)
+        return False, diagnose_oracle_connect_error(e, target=target)
     except Exception as e:
-        return False, str(e)
+        return False, diagnose_oracle_connect_error(e, target=target)
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
 
 
 @login_required
@@ -2578,7 +2657,7 @@ def test_oracle_connection(request):
                 success, err_msg = _test_oracle_connect_with_params(host, port, service_name, username, password)
                 if success:
                     return JsonResponse({'status': 'success'})
-                return JsonResponse({'status': 'error', 'message': err_msg or '连接测试失败'})
+                return _oracle_test_error_response(err_msg)
 
             if not connection_id:
                 return JsonResponse({'status': 'error', 'message': '未提供连接ID'})
@@ -2590,7 +2669,7 @@ def test_oracle_connection(request):
             )
             if success:
                 return JsonResponse({'status': 'success'})
-            return JsonResponse({'status': 'error', 'message': err_msg or '连接测试失败'})
+            return _oracle_test_error_response(err_msg)
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': format_db_error(e)})
     return JsonResponse({'status': 'error', 'message': '无效的请求方法'})

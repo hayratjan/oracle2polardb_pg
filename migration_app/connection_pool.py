@@ -18,6 +18,7 @@ from django.conf import settings
 
 from .models import OracleConnection, PostgresConnection
 from .credentials import require_plain_connection_password
+from .oracle_dsn import CONNECT_TIMEOUT_SECONDS, build_dsn
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +28,78 @@ logger = logging.getLogger(__name__)
 _oracle_pools = {}  # {connection_id: oracledb.ConnectionPool}
 _pg_pools = {}      # {connection_id: psycopg2.pool.ThreadedConnectionPool}
 
+# 仅保护上面两个字典的读写；建池本身按 connection_id 分锁，见 _oracle_pool_locks
 _oracle_pool_lock = threading.Lock()
 _pg_pool_lock = threading.Lock()
+# 同一台库只建一个池，不同库的建池互不阻塞：一个不可达主机不能把全站 Oracle 请求排成一队
+_oracle_pool_locks = {}
 
 # 池配置参数
 POOL_MIN_CONNECTIONS = 2
 POOL_MAX_CONNECTIONS = 10
 POOL_INCREMENT = 1
 POOL_TIMEOUT = 30  # Oracle SessionPool timeout (seconds)
+
+
+def _oracle_create_lock(connection_id):
+    """取（或建）该 connection_id 专属的建池锁。"""
+    with _oracle_pool_lock:
+        lock = _oracle_pool_locks.get(connection_id)
+        if lock is None:
+            lock = _oracle_pool_locks[connection_id] = threading.Lock()
+        return lock
+
+
+def _get_or_create_oracle_pool(connection_id):
+    """返回该库的连接池，必要时创建。
+
+    建池耗时取决于对端是否可达（最坏是 DSN 里的 CONNECT_TIMEOUT），因此只在
+    按库分的锁内执行，绝不持有 _oracle_pool_lock —— 否则一台不可达的库会把
+    全站所有 Oracle 请求排成一队。
+    """
+    pool = _oracle_pools.get(connection_id)
+    if pool is not None:
+        return pool
+
+    with _oracle_create_lock(connection_id):
+        # 双检：等锁期间可能已被其他线程建好
+        pool = _oracle_pools.get(connection_id)
+        if pool is not None:
+            return pool
+
+        logger.info(f"创建 Oracle 连接池: connection_id={connection_id}")
+        conn_obj = get_object_or_404(OracleConnection, pk=connection_id)
+
+        # 构建 DSN（描述符内的 CONNECT_TIMEOUT/RETRY_COUNT 是 thick 模式唯一生效的握手超时）
+        dsn = build_dsn(conn_obj.host, conn_obj.port, conn_obj.service_name)
+
+        # 获取明文密码
+        pwd = require_plain_connection_password(conn_obj.password)
+
+        # v2.5: cx_Oracle.SessionPool → oracledb.create_pool
+        # oracledb 的池默认线程安全,无需 threaded=True 参数
+        try:
+            session_pool = oracledb.create_pool(
+                user=conn_obj.username,
+                password=pwd,
+                dsn=dsn,
+                tcp_connect_timeout=CONNECT_TIMEOUT_SECONDS,
+                min=POOL_MIN_CONNECTIONS,
+                max=POOL_MAX_CONNECTIONS,
+                increment=POOL_INCREMENT,
+                # v2.5: oracledb 将 cx_Oracle 的 POOL_ATTRVAL_WAIT 更名为 SPOOL_ATTRVAL_WAIT
+                getmode=oracledb.SPOOL_ATTRVAL_WAIT,
+                timeout=POOL_TIMEOUT,
+            )
+        except Exception as e:
+            logger.error(f"创建 Oracle 连接池失败: {e}")
+            raise Exception(f"创建 Oracle 连接池失败: {str(e)}")
+        _oracle_pools[connection_id] = session_pool
+        logger.info(
+            f"Oracle 连接池已创建: min={POOL_MIN_CONNECTIONS}, "
+            f"max={POOL_MAX_CONNECTIONS}, increment={POOL_INCREMENT}"
+        )
+        return session_pool
 
 
 def get_oracle_pooled_connection(connection_id, *, call_timeout_ms: int = 30000):
@@ -51,49 +116,8 @@ def get_oracle_pooled_connection(connection_id, *, call_timeout_ms: int = 30000)
     Raises:
         Exception: 连接池创建或获取连接失败时抛出异常
     """
-    with _oracle_pool_lock:
-        # 检查池是否已存在
-        if connection_id not in _oracle_pools:
-            logger.info(f"创建 Oracle 连接池: connection_id={connection_id}")
-            conn_obj = get_object_or_404(OracleConnection, pk=connection_id)
+    pool = _get_or_create_oracle_pool(connection_id)
 
-            # 构建 DSN
-            dsn = oracledb.makedsn(
-                conn_obj.host,
-                conn_obj.port,
-                service_name=conn_obj.service_name
-            )
-
-            # 获取明文密码
-            pwd = require_plain_connection_password(conn_obj.password)
-
-            # v2.5: cx_Oracle.SessionPool → oracledb.create_pool
-            # oracledb 的池默认线程安全,无需 threaded=True 参数
-            try:
-                session_pool = oracledb.create_pool(
-                    user=conn_obj.username,
-                    password=pwd,
-                    dsn=dsn,
-                    min=POOL_MIN_CONNECTIONS,
-                    max=POOL_MAX_CONNECTIONS,
-                    increment=POOL_INCREMENT,
-                    # v2.5: oracledb 将 cx_Oracle 的 POOL_ATTRVAL_WAIT 更名为 SPOOL_ATTRVAL_WAIT
-                    getmode=oracledb.SPOOL_ATTRVAL_WAIT,
-                    timeout=POOL_TIMEOUT,
-                )
-                _oracle_pools[connection_id] = session_pool
-                logger.info(
-                    f"Oracle 连接池已创建: min={POOL_MIN_CONNECTIONS}, "
-                    f"max={POOL_MAX_CONNECTIONS}, increment={POOL_INCREMENT}"
-                )
-            except Exception as e:
-                logger.error(f"创建 Oracle 连接池失败: {e}")
-                raise Exception(f"创建 Oracle 连接池失败: {str(e)}")
-
-        # 从池中获取连接
-        pool = _oracle_pools[connection_id]
-
-    # 在锁外获取连接，避免死锁
     try:
         connection = pool.acquire()
         # 设置单条 SQL 执行超时
