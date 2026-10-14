@@ -46,39 +46,35 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
+        id: ghcrlogin
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Aliyun ACR
-        # 未配置 Secrets 时跳过（GHCR 单通道照常工作）
-        if: ${{ secrets.ALIYUN_REGISTRY_PASSWORD != '' }}
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.ACR_REGISTRY }}
-          username: ${{ secrets.ALIYUN_REGISTRY_USER }}
-          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+      # ACR 的登录/推送刻意挪到 GHCR 冒烟之后（见下面的 acr-mirror 步骤），
+      # 原因很具体：上一轮把 Login to Aliyun ACR 放在构建之前，只要固定密码或用户名
+      # 填错，thin 和 thick 两条腿都会在"任何镜像推出之前"整轮终止 —— 于是既没有镜像，
+      # 也没有任何可以从外部匿名查到的失败线索。挪到后面之后，阿里云凭证错误只会让
+      # acr-mirror 这一步红，GHCR 侧的镜像和冒烟证据照样能拿到。
 
-      - name: Collect target registries
-        id: imagelist
+      - name: Detect optional registries
+        id: flags
         env:
-          # 只把"有没有配口令"传进脚本，不把口令本身写进命令行/日志
+          # 只把"有没有配口令"传进脚本，不把口令本身写进命令行/日志；
+          # 结论落进 outputs，后面的 if 用 outputs 判断，不依赖 step 级 if 能否直接读 secrets
           ACR_HAS_CREDENTIAL: ${{ secrets.ALIYUN_REGISTRY_PASSWORD != '' }}
-        run: |
-          images="ghcr.io/${GITHUB_REPOSITORY}"
-          if [ "${ACR_HAS_CREDENTIAL}" = "true" ]; then
-            images="${images},${ACR_REGISTRY}/${ACR_NAMESPACE_REPO}"
-          fi
-          echo "images=${images}" >> "${GITHUB_OUTPUT}"
+        run: echo "acr_enabled=${ACR_HAS_CREDENTIAL}" >> "${GITHUB_OUTPUT}"
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
+          # 只对 GHCR 生成标签；ACR 用同一批标签在镜像落地后改名推送，
+          # 因此不再有"元数据库里配了 ACR 就必须能用"的隐藏耦合。
           # 镜像名自动转小写(GHCR 要求小写)
-          images: ${{ steps.imagelist.outputs.images }}
+          images: ghcr.io/${{ github.repository }}
           flavor: ${{ matrix.flavor }}
           tags: |
             type=ref,event=branch
@@ -103,12 +99,11 @@ jobs:
       # 运行期冒烟：开发机是 arm64 且没有容器引擎，镜像（amd64）只在 CI 才可能真正跑起来，
       # 所以"打包成功 + 运行正常"必须在这里用真容器证明，而不是靠读 Dockerfile 推断。
       - name: Smoke test the pushed image
+        id: smoke
         env:
           # 按 digest 定位而不是按 tag：同一轮里 latest 会被上一轮覆盖，tag 无法证明"就是刚推的那份"
           DIGEST: ${{ steps.build.outputs.digest }}
           GHCR_IMAGE: ghcr.io/${{ github.repository }}
-          ACR_IMAGE: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE_REPO }}
-          ACR_ENABLED: ${{ secrets.ALIYUN_REGISTRY_PASSWORD != '' }}
         run: |
           set -euo pipefail
           name="smoke-${{ matrix.target }}"
@@ -175,18 +170,10 @@ jobs:
               "import oracledb; oracledb.init_oracle_client(lib_dir='/opt/oracle/instantclient_19_32'); print('thick runtime OK', oracledb.clientversion()[:3])"
           fi
 
-          # ACR 侧只验"能按同一 digest 拉到"，避免把 GHCR 成功误当成阿里云也成功
-          if [ "${ACR_ENABLED}" = "true" ]; then
-            docker pull -q "${ACR_IMAGE}@${DIGEST}" >/dev/null
-            echo "OK  ACR 同一 digest 可拉取 ${ACR_IMAGE}@${DIGEST}"
-          else
-            echo "未配置 ALIYUN_REGISTRY_PASSWORD，跳过 ACR 校验"
-          fi
-
-      # 开发机到 GitHub 的 HTTPS 被中间设备重置(TLS handshake reset)，看不到 Actions 日志。
-      # 冒烟全绿后再给同一 digest 打一个 smoke-<target> 标签，于是
-      # "容器真的起来并答对了所有端点" 可以从 ghcr.io 匿名查证，而不必依赖网页日志。
+      # 冒烟全绿的镜像先打一个公开可查的标记，再动阿里云：
+      # 顺序反过来的话，一次凭证错误就可能让我们连"镜像到底能不能跑"都无法证实。
       - name: Publish smoke marker
+        id: marker
         if: success()
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -199,3 +186,72 @@ jobs:
           docker tag "${src}" "${dst}"
           docker push "${dst}"
           echo "冒烟标记: ${dst}"
+
+      # 阿里云 ACR 个人版：用户名是"账号全名"（控制台右上角头像下的登录名），
+      # 密码必须是"容器镜像服务 → 访问凭证 → 固定密码"，用阿里云登录密码会直接 401。
+      - name: Mirror image to Aliyun ACR
+        id: acr
+        if: ${{ steps.smoke.outcome == 'success' && secrets.ALIYUN_REGISTRY_PASSWORD != '' }}
+        continue-on-error: true
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ACR_USER: ${{ secrets.ALIYUN_REGISTRY_USER }}
+          ACR_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+          GHCR_IMAGE: ghcr.io/${{ github.repository }}
+          ACR_IMAGE: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE_REPO }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          # 密码走 stdin：写在命令行参数里的值会原样出现在日志中
+          printf '%s' "${ACR_PASSWORD}" | docker login "${ACR_REGISTRY}" -u "${ACR_USER}" --password-stdin
+          src="${GHCR_IMAGE}@${DIGEST}"
+          docker pull -q "${src}" >/dev/null
+          first=""
+          while IFS= read -r tag; do
+            [ -n "${tag}" ] || continue
+            dst="${ACR_IMAGE}:${tag##*:}"
+            docker tag "${src}" "${dst}"
+            # 不用 docker push -q：quiet 在部分 CLI 版本里不存在，省掉它并把 stdout 丢弃即可
+            docker push "${dst}" >/dev/null
+            [ -n "${first}" ] || first="${dst}"
+            echo "OK  已推送 ${dst}"
+          done <<< "${TAGS}"
+          [ -n "${first}" ] || { echo "::error::metadata 没有产出任何标签，无从推送"; exit 1; }
+          # 回读一遍证明"阿里云侧真能拉到"。digest 只做记录不做断言：
+          # 客户端在不同 registry 间可能重新序列化 manifest，据此失败会把可用镜像误报成不可用。
+          docker pull -q "${first}" >/dev/null
+          echo "ACR 回读成功 ${first}; GHCR 本轮 digest ${DIGEST}"
+
+      # 开发机读不到 Actions 日志，所以让流水线自己把"挂在哪一步"写成 GHCR 标签。
+      # 标签名就是证据：ci-<sha>-<变体>-<失败步骤>，匿名 tags/list 可查。
+      - name: Publish diagnostic markers
+        id: diag
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -uo pipefail
+          ref="ghcr.io/${GITHUB_REPOSITORY}"
+          # build 之前就失败时拿不到本轮 digest，退化成引用已存在的 latest：
+          # 标记的价值全在标签名上，它指向哪份 manifest 无关紧要。
+          src="${ref}:latest"
+          [ -n "${DIGEST}" ] && src="${ref}@${DIGEST}"
+          # imagetools 直接在 registry 之间复制 manifest，不必把镜像拉到本地再推
+          mark() {
+            local tag="${ref}:ci-${GITHUB_SHA::8}-${{ matrix.target }}-$1"
+            docker buildx imagetools create -t "${tag}" "${src}" >/dev/null && echo "失败标记 ${tag}"
+          }
+          outcomes=""
+          outcomes="${outcomes} login-ghcr:${{ steps.ghcrlogin.outcome }}"
+          outcomes="${outcomes} extract-metadata:${{ steps.meta.outcome }}"
+          outcomes="${outcomes} build-push:${{ steps.build.outcome }}"
+          outcomes="${outcomes} smoke-test:${{ steps.smoke.outcome }}"
+          outcomes="${outcomes} smoke-marker:${{ steps.marker.outcome }}"
+          outcomes="${outcomes} acr-mirror:${{ steps.acr.outcome }}"
+          echo "本轮步骤结果: ${outcomes}"
+          markers=0
+          for item in ${outcomes}; do
+            if [ "${item##*:}" = "failure" ]; then mark "${item%%:*}"; markers=$((markers + 1)); fi
+          done
+          [ "${markers}" -gt 0 ] || echo "无失败步骤，未打标记"
