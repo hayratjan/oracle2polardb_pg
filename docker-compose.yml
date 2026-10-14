@@ -1,5 +1,9 @@
 # Oracle → PolarDB 迁移平台本地栈（Django + Redis + Celery Worker/Beat）
 # v2.4: 修复生产配置(runserver→gunicorn, 设 DJANGO_ENV=prod, Redis 加密码, 加健康检查/restart)
+# v2.4.4: 新增可选服务组——
+#   · profile "meta-db"  : PostgreSQL 元数据库（DATABASE_URL 指向它，文档与实现终于一致）
+#   · profile "frontend" : nginx 前端托管 + API 同源反代（浏览器无 CORS 需求）
+# 启用方式: docker compose --profile meta-db --profile frontend up -d
 services:
   redis:
     image: redis:7-alpine
@@ -67,6 +71,13 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      # v2.4.4: worker 存活检查（celery inspect ping）
+      test: ["CMD", "celery", "-A", "oracle2polardb_pg", "inspect", "ping", "-d", "celery@$${HOSTNAME}"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
 
   celery-beat:
     build: .
@@ -81,3 +92,41 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+
+  # ═══ v2.4.4 可选:PostgreSQL 元数据库(profile: meta-db) ═══
+  # 部署文档一直示例 DATABASE_URL=postgres://...@db:5432/... 但此前 compose 并无 db 服务。
+  # 启用后 .env 设 DATABASE_URL=postgres://migration:migrationpass@db:5432/migration_meta
+  db:
+    image: postgres:16-alpine
+    profiles: ["meta-db"]
+    environment:
+      POSTGRES_DB: migration_meta
+      POSTGRES_USER: ${META_DB_USER:-migration}
+      POSTGRES_PASSWORD: ${META_DB_PASSWORD:-changeme_metadb}
+    volumes:
+      - meta_db_data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${META_DB_USER:-migration} -d migration_meta"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ═══ v2.4.4 可选:nginx 前端托管 + API 同源反代(profile: frontend) ═══
+  # 前端构建时 VITE_API_BASE_URL 留空(相对路径),经 nginx /api/ 反代到 web,
+  # 浏览器全程同源——生产环境无需任何 CORS 配置。
+  # 访问入口变为 http://<主机>:8080(nginx),后端 8000 可不再对宿主机暴露。
+  frontend:
+    build: ./frontend
+    profiles: ["frontend"]
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  meta_db_data:

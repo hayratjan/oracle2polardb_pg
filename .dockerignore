@@ -10,7 +10,7 @@
 .venv
 venv
 env
-__pyycache__
+__pycache__
 *.pyc
 *.pyo
 *.pyd
@@ -47,6 +47,10 @@ tmp/
 # 操作系统文件
 .DS_Store
 Thumbs.db
+
+# 安全扫描产物
+.mimosa
+**/.mimosa
 
 # Docker 自身(避免循环引用)
 Dockerfile

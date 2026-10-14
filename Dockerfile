@@ -9,10 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DJANGO_ENV=prod \
     DJANGO_DEBUG=false
 
-# 系统依赖(libpq-dev for psycopg2, gcc for 编译)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc \
-    && rm -rf /var/lib/apt/lists/*
+# v2.4.4: 移除 gcc/libpq-dev——requirements 使用 psycopg2-binary(预编译 wheel)，
+# 无需源码编译；oracledb 为纯 Python(thin 模式)，无需 Oracle Instant Client。
+# 镜像体积从 ~450MB 减至 ~250MB。
+# 如需换源码版 psycopg2(性能略优)，恢复安装 libpq-dev gcc 并在 requirements 改为 psycopg2。
 
 COPY requirements.txt pyproject.toml ./
 RUN pip install --no-cache-dir -r requirements.txt

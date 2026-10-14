@@ -1,0 +1,33 @@
+# 构建上下文排除（frontend 目录自身即 build context，根 .dockerignore 不生效）
+# 缺省会把宿主机 node_modules 覆盖镜像内 pnpm install 的产物，
+# linux 镜像里用 darwin/arm64 原生二进制执行 vite build 会失败。
+node_modules
+dist
+dist-ssr
+*.local
+
+# 构建/类型检查缓存
+*.tsbuildinfo
+.vite
+
+# 依赖与编辑器产物
+pnpm-debug.log*
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+.idea
+.vscode
+*.swp
+
+# 安全扫描产物（与根 .dockerignore 约定一致）
+.mimosa
+**/.mimosa
+
+# 桌面端产物与本地数据（与镜像构建无关）
+src-tauri/target
+src-tauri/gen
+*.db
+*.sqlite3
+.env.local
+.env.*.local
