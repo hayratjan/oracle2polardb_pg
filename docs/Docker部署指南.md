@@ -85,7 +85,7 @@ cp .env.example .env && vim .env
 | 变量 | 说明 | 生成方式/示例 |
 |------|------|------|
 | `DJANGO_SECRET_KEY` | Django 密钥 | `python -c "import secrets;print(secrets.token_urlsafe(50))"` |
-| `ALLOWED_HOSTS` | 允许的域名（逗号分隔） | `mg.example.com,localhost` |
+| `ALLOWED_HOSTS` | 允许的域名（逗号分隔） | `mg.example.com`（探针已豁免 Host 校验，不必再写 `localhost`） |
 | `CORS_ALLOWED_ORIGINS` | 前端域名（逗号分隔） | 合并镜像后同源访问，可留空（仅前后端分离开发时需要） |
 | `MIGRATION_FERNET_KEY` | 连接密码加密密钥 | `python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"` |
 | `REDIS_PASSWORD` | Redis 密码 | 随机串 |
@@ -292,9 +292,16 @@ WhiteNoise 的 manifest 存储会校验 CSS 里每个 `url()` 都能解析到 `S
 
 ```bash
 docker compose logs web | tail -50
-docker compose exec web python -c "import django; django.setup()"
+docker inspect --format '{{json .State.Health}}' <容器> | python -m json.tool
+docker compose exec web python -c "import urllib.request;print(urllib.request.urlopen('http://localhost:8000/healthz',timeout=5).status)"
 ```
 常见原因：生产必填变量缺失，或 `DATABASE_URL` 指向的元数据库不可达。
+
+另一个曾出现过的原因是 `ALLOWED_HOSTS`：探针从容器内用 `localhost` 发起，而 Django 会校验 Host 头，
+只配真实域名时探针会拿到 400，应用其实healthy。现由
+`oracle2polardb_pg/probe_host.py` 对 `/healthz`、`/readyz` 两个固定 JSON 端点改写 Host，
+其余路径仍严格校验，因此 `ALLOWED_HOSTS` 不必再加 `localhost`。
+若用的是不含本次修复的旧镜像，临时绕法是把 `localhost` 加进 `ALLOWED_HOSTS`。
 
 ### Q8: 打开页面 404 / 刷新子路由白屏 / JS 拿不到
 

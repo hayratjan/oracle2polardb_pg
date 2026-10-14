@@ -169,6 +169,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # 容器 HEALTHCHECK 从 localhost 打探针，ALLOWED_HOSTS 只有真实域名时会被 Host 校验拒成 400；
+    # 必须排在 SecurityMiddleware 之前，改写完 Host 头后面的校验才拿得到放行的值
+    'oracle2polardb_pg.probe_host.ProbeHostExemptionMiddleware',
     'django.middleware.security.SecurityMiddleware',
     # 合并镜像（单 gunicorn 进程）时直出 /static/ 与 Vue 的 /assets/；
     # 必须排在 CommonMiddleware 之前，否则响应已被 GZip 接管，命中不到 WhiteNoise 的文件索引

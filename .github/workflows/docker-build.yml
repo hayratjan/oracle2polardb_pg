@@ -160,6 +160,14 @@ jobs:
           [ -n "${asset}" ] || { echo "::error::首页里没有 /assets/ 引用，前端产物可能没进镜像"; onfail; exit 1; }
           check "静态资源可访问"  200 "http://127.0.0.1:8000${asset}"
 
+          # 探针 Host 豁免（probe_host.py）：ALLOWED_HOSTS 之外的 Host 打探针要能 200，
+          # 打真实页面必须仍然 400 —— 一起断言才证明豁免是窄的，不是把 Host 校验整块放宽了
+          probe_code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: probe-only.invalid' http://127.0.0.1:8000/healthz)
+          [ "${probe_code}" = 200 ] || { echo "::error::/healthz 未知 Host 期望 200，实际 ${probe_code}（豁免未生效？）"; onfail; exit 1; }
+          root_code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: probe-only.invalid' http://127.0.0.1:8000/)
+          [ "${root_code}" = 400 ] || { echo "::error::首页未知 Host 期望 400，实际 ${root_code}（Host 校验被放宽）"; onfail; exit 1; }
+          echo "OK  探针豁免窄  /healthz=200  /=400"
+
           if [ "${{ matrix.target }}" = "thick" ]; then
             # 运行时再加载一次客户端库：Dockerfile 的构建期断言只证明"当时能加载"，
             # 换到运行用户/环境变量下仍可能缺依赖（libaio、LD_LIBRARY_PATH 未继承）

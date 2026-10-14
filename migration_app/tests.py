@@ -1217,3 +1217,56 @@ class WhiteNoiseConfigTest(TestCase):
         storages = getattr(settings, 'STORAGES', {})
         backend = storages.get('staticfiles', {}).get('BACKEND', '')
         self.assertIn('CompressedManifestStaticFilesStorage', backend)
+
+
+class ProbeHostExemptionTest(TestCase):
+    """镜像/compose 的健康检查从 localhost 打 /healthz，而生产 ALLOWED_HOSTS 只配真实域名时
+    Django 的 Host 校验会把探针变成 400 → 容器永远 unhealthy。豁免只能覆盖探针本身。"""
+
+    def _get(self, url, allowed=('migration.example.com',), host='localhost'):
+        from django.test import override_settings
+        with override_settings(ALLOWED_HOSTS=list(allowed), DEBUG=False, SECURE_SSL_REDIRECT=False):
+            return self.client.get(url, headers={'host': host})
+
+    def test_healthz_served_when_host_is_localhost(self):
+        resp = self._get('/healthz')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['status'], 'ok')
+
+    def test_readyz_served_when_host_is_localhost(self):
+        # 200(连得上)或 503(连不上)都算探针真正执行过；400 才是被 Host 校验半路拦下
+        self.assertIn(self._get('/readyz').status_code, (200, 503))
+
+    def test_subdomain_wildcard_allowlist_still_probeable(self):
+        # Django 的写法是 .example.com（不是 *.example.com）；改写目标必须落在它真正接受的 Host 上
+        self.assertEqual(self._get('/healthz', allowed=('.example.com',)).status_code, 200)
+
+    def test_unsupportable_allowlist_yields_no_rewrite_target(self):
+        """'mg.*' 这类写法 Django 对任何 Host 都拒绝，属于整站配错。
+
+        不在 HTTP 层断言：get_host() 的 is_valid_host 先就把带 '*' 的 Host 拒了，
+        无论改写逻辑怎么写结果都是 400，那样的断言没有牙。直接验选择函数的契约。
+        """
+        from django.http.request import validate_host
+        from oracle2polardb_pg.probe_host import _stand_in_host
+        self.assertIsNone(_stand_in_host(['mg.*']))
+        self.assertEqual(_stand_in_host(['migration.example.com']), 'migration.example.com')
+        self.assertTrue(validate_host(_stand_in_host(['.example.com']), ['.example.com']))
+
+    def test_real_host_is_untouched(self):
+        self.assertEqual(self._get('/healthz', host='migration.example.com').status_code, 200)
+
+    def test_non_probe_paths_keep_strict_validation(self):
+        self.assertEqual(self._get('/admin/').status_code, 400)
+        self.assertEqual(self._get('/api/oracle/connections/').status_code, 400)
+
+    def test_probe_lookalike_is_not_exempt(self):
+        self.assertEqual(self._get('/healthzz').status_code, 400)
+
+    def test_middleware_runs_before_security_middleware(self):
+        from django.conf import settings
+        mw = list(settings.MIDDLEWARE)
+        self.assertIn('oracle2polardb_pg.probe_host.ProbeHostExemptionMiddleware', mw)
+        self.assertLess(mw.index('oracle2polardb_pg.probe_host.ProbeHostExemptionMiddleware'),
+                        mw.index('django.middleware.security.SecurityMiddleware'))
+
