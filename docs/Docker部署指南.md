@@ -218,18 +218,21 @@ Django 的 `static()` 在 `DEBUG=False` 时恒返回空列表（`django/conf/url
 - **矩阵**：`thin` 与 `thick` 各构建一次，`thick` 的标签统一加 `-thick` 后缀（于是 `latest` 与 `latest-thick` 并存）；`fail-fast: false`，一个变体失败不影响另一个；
 - **触发**：push `master`、push `v*` 标签、手动 workflow_dispatch；
 - **标签策略**：master → `latest`(+`-thick`) 与 `master-<sha>`；`v2.5.0` → `v2.5.0` + `2.5`；
-- **推送目标**：GHCR 始终推；阿里云 ACR 只在配了下面两个 Secrets 时才推，没配就退化成"只发 GHCR"，构建不会失败；
+- **推送目标与顺序**：先 GHCR 构建并按标签推送 → 用刚推上去的 digest 起真容器做端点冒烟 → 冒烟全绿打 `smoke-<变体>` 标记 → 最后才镜像一份到阿里云 ACR。ACR 这步允许失败（`continue-on-error`），因为凭证填错不该把"镜像到底能不能跑"的证据一起抹掉；
+- **无日志权限时怎么判断卡在哪**：失败步骤名会以标签形式落到 GHCR，匿名可查——
+  `curl -s -H "Authorization: Bearer $(curl -s 'https://ghcr.io/token?scope=repository:<owner>/<repo>:pull' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" https://ghcr.io/<owner>/<repo>/tags/list`。
+  出现 `smoke-thin` 表示 thin 镜像真的起来并答对了所有端点；出现 `ci-<sha前8位>-<变体>-<步骤>` 表示该步骤失败（如 `acr-mirror` 就是阿里云凭证问题）；一个标签都没新增则是 GHCR 登录之前的失败；
 - **缓存**：`type=gha` 且按 target 分 scope（否则两个变体互相顶掉缓存层）。
 
 **一次性配置**：
 
 1. GitHub 仓库 Settings → Actions → General → Workflow permissions → **Read and write permissions**（GHCR 需要）；
-2. 阿里云容器镜像服务控制台：创建命名空间 `hayrat` + 仓库 `oracle2polardb_pg`，并设置**访问凭证（固定密码）**——建议用 RAM 子账号，不要用主账号密码；
+2. 阿里云容器镜像服务控制台：创建命名空间 `hayrat` + 仓库 `oracle2polardb_pg`，并在**访问凭证**里设置**固定密码**（这张固定密码只用于 Docker 登录，和阿里云登录密码是两回事，改它不影响登录控制台）；
 3. GitHub 仓库 Settings → Secrets and variables → Actions → 新增仓库 Secrets：
 
 | Secret | 值 |
 |--------|----|
-| `ALIYUN_REGISTRY_USER` | 容器镜像服务的登录名（如 `hayratjan245938`） |
+| `ALIYUN_REGISTRY_USER` | ACR 的**登录名**（控制台访问凭证页显示的那串，形如 `hayratjan245938`；填命名空间名 `hayrat` 会 401） |
 | `ALIYUN_REGISTRY_PASSWORD` | 上面设置的访问凭证固定密码 |
 
 > 口令只进 Secrets，不写进代码、workflow 明文、命令行或日志。注意"能编辑 workflow 的人 ≈ 能读到 Secrets"；若仓库有外部贡献者，改用 Environment + 必需审批人来推送 ACR。
@@ -282,7 +285,9 @@ WhiteNoise 的 manifest 存储会校验 CSS 里每个 `url()` 都能解析到 `S
 
 ### Q5: 阿里云推送报 `NAME_UNKNOWN` / `denied: requested access to the resource is hidden`
 
-命名空间或仓库没在 ACR 控制台创建；或登录用的是阿里云账号密码而不是"访问凭证固定密码"；或命名空间为私有且该凭证没有推送权限。
+命名空间或仓库没在 ACR 控制台创建；或登录用的是阿里云账号密码而不是"访问凭证固定密码"；或用户名填成了命名空间名（应为 ACR 登录名）；或命名空间为私有且该凭证没有推送权限。
+
+这一步现在排在 GHCR 冒烟之后且允许失败：它红了不影响 `master-<sha>`、`latest`、`smoke-<变体>` 已经推好，修凭证后重跑一次即可。
 
 ### Q6: compose up 后 web 启动即崩溃（RuntimeError）
 

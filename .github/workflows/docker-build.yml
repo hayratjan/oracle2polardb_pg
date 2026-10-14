@@ -7,9 +7,13 @@ name: Docker Build
 # v2.5: 改为 thin/thick 双变体矩阵，并可选同步推送到阿里云 ACR——
 #   · thin  → :latest 等基础标签（python-oracledb thin，连不了 11g 源库）
 #   · thick → 同名标签加 -thick 后缀（含 Instant Client 19.32，面向 11.2.0.4 这类老源库）
-#   · ACR 只在仓库配了 ALIYUN_REGISTRY_USER / ALIYUN_REGISTRY_PASSWORD 时启用；
-#     没配就退化成原来的"只发 GHCR"，不会让构建失败。
+#   · 步骤顺序固定为 GHCR 推送 → 真容器冒烟 → 冒烟标记 → ACR 镜像同步；
+#     ACR 只在配了 ALIYUN_REGISTRY_USER / ALIYUN_REGISTRY_PASSWORD 时执行，且失败不阻断，
+#     因为凭证填错不该把"镜像能不能跑"的证据一起抹掉。
 #   口令只放仓库 Secrets，绝不出现在代码或日志里。
+#
+# v2.6: 开发机到 GitHub 的 HTTPS 被中间设备重置，读不到 Actions 日志，因此让流水线
+#   自己把结果写进 GHCR 标签：smoke-<变体> = 冒烟全绿，ci-<sha8>-<变体>-<步骤> = 该步失败。
 on:
   push:
     branches: [master]
@@ -62,10 +66,30 @@ jobs:
       - name: Detect optional registries
         id: flags
         env:
-          # 只把"有没有配口令"传进脚本，不把口令本身写进命令行/日志；
-          # 结论落进 outputs，后面的 if 用 outputs 判断，不依赖 step 级 if 能否直接读 secrets
-          ACR_HAS_CREDENTIAL: ${{ secrets.ALIYUN_REGISTRY_PASSWORD != '' }}
-        run: echo "acr_enabled=${ACR_HAS_CREDENTIAL}" >> "${GITHUB_OUTPUT}"
+          # 官方文档明确：if 条件里不能引用 secrets —— 会被文件校验直接拒绝，
+          # 整个 run 一步都不执行（上一轮就是这么"零标签"静默死的）。
+          # 这里只用文档示例给出的形式把 secrets 放进步骤级 env，判断挪进 shell，
+          # 结论以 output 形式供后面的 if 使用；env 里只判断真假，不回显值本身。
+          ACR_PASSWORD_PRESENT: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+        run: |
+          set -u
+          if [ -n "${ACR_PASSWORD_PRESENT}" ]; then
+            echo "acr_enabled=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "acr_enabled=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      # 只要这个标签出现，就证明 workflow 通过了校验、job 真的分到了 runner。
+      # 它把"零标签"的两种解释分开：文件被拒/未触发（无 started）对比 构建阶段失败（有 started）。
+      # latest 此刻还是上一轮的镜像，指向它不影响结论——证据全在标签名里。
+      - name: Publish run-started marker
+        id: started
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          docker buildx imagetools create \
+            -t "ghcr.io/${GITHUB_REPOSITORY}:ci-${GITHUB_SHA::8}-${{ matrix.target }}-started" \
+            "ghcr.io/${GITHUB_REPOSITORY}:latest"
 
       - name: Extract metadata
         id: meta
@@ -191,25 +215,28 @@ jobs:
       # 密码必须是"容器镜像服务 → 访问凭证 → 固定密码"，用阿里云登录密码会直接 401。
       - name: Mirror image to Aliyun ACR
         id: acr
-        if: ${{ steps.smoke.outcome == 'success' && secrets.ALIYUN_REGISTRY_PASSWORD != '' }}
+        # 用 flags 的 output 判断，不在 if 里碰 secrets
+        if: ${{ steps.smoke.outcome == 'success' && steps.flags.outputs.acr_enabled == 'true' }}
         continue-on-error: true
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           ACR_USER: ${{ secrets.ALIYUN_REGISTRY_USER }}
           ACR_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
-          GHCR_IMAGE: ghcr.io/${{ github.repository }}
-          ACR_IMAGE: ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE_REPO }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
+          # workflow 级 env 在 run 里就是普通 shell 变量，不必用表达式去引用 env 上下文
+          # （step 级 env 能否引用 env 上下文文档未列明，不赌；注意 run 脚本里的表达式
+          #   会被 GitHub 先替换，所以注释里也不要出现表达式字面量）
+          acr_image="${ACR_REGISTRY}/${ACR_NAMESPACE_REPO}"
+          src="ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}"
           # 密码走 stdin：写在命令行参数里的值会原样出现在日志中
           printf '%s' "${ACR_PASSWORD}" | docker login "${ACR_REGISTRY}" -u "${ACR_USER}" --password-stdin
-          src="${GHCR_IMAGE}@${DIGEST}"
           docker pull -q "${src}" >/dev/null
           first=""
           while IFS= read -r tag; do
             [ -n "${tag}" ] || continue
-            dst="${ACR_IMAGE}:${tag##*:}"
+            dst="${acr_image}:${tag##*:}"
             docker tag "${src}" "${dst}"
             # 不用 docker push -q：quiet 在部分 CLI 版本里不存在，省掉它并把 stdout 丢弃即可
             docker push "${dst}" >/dev/null
