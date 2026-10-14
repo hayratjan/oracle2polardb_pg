@@ -191,7 +191,7 @@ jobs:
             # 运行时再加载一次客户端库：Dockerfile 的构建期断言只证明"当时能加载"，
             # 换到运行用户/环境变量下仍可能缺依赖（libaio、LD_LIBRARY_PATH 未继承）
             docker run --rm "${img}" python -c \
-              "import oracledb; oracledb.init_oracle_client(lib_dir='/opt/oracle/instantclient_19_32'); print('thick runtime OK', oracledb.clientversion()[:3])"
+              "import oracledb; oracledb.init_oracle_client(lib_dir='/usr/lib/oracle/19.32/client64/lib'); print('thick runtime OK', oracledb.clientversion()[:3])"
           fi
 
       # 冒烟全绿的镜像先打一个公开可查的标记，再动阿里云：
@@ -203,12 +203,14 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          ref="${{ github.repository }}"
-          src="ghcr.io/${ref}@${DIGEST}"
-          dst="ghcr.io/${ref}:smoke-${{ matrix.target }}"
-          docker pull -q "${src}" >/dev/null
-          docker tag "${src}" "${dst}"
-          docker push "${dst}"
+          ref="ghcr.io/${GITHUB_REPOSITORY}"
+          src="${ref}@${DIGEST}"
+          dst="${ref}:smoke-${{ matrix.target }}"
+          # 用 registry 侧复制，而不是 pull+tag+push：后者会经过本地镜像存储重新序列化
+          # manifest，上一轮就出现 smoke-thin 与 master-<sha> digest 不一致（内容相同但
+          # 无法自证同源）。imagetools create 原样搬运 manifest，digest 保持不变，
+          # 于是在外面比对两个标签的 digest 就能证明"冒烟跑的就是这一轮的镜像"。
+          docker buildx imagetools create -t "${dst}" "${src}"
           echo "冒烟标记: ${dst}"
 
       # 阿里云 ACR 个人版：用户名是"账号全名"（控制台右上角头像下的登录名），

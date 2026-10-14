@@ -156,7 +156,7 @@ docker compose up -d          # 已启用 profile 的照原样加 --profile 参�
 | target | Oracle 驱动 | 可连源库版本 | 镜像内容 |
 |--------|-------------|--------------|----------|
 | `thin`（默认） | python-oracledb thin，纯 Python | **12.1 及以上** | 无 Oracle 客户端 |
-| `thick` | python-oracledb thick | 11.2 起（含 11.2.0.4） | `/opt/oracle/instantclient_19_32`，已设 `ORACLE_CLIENT_LIB` |
+| `thick` | python-oracledb thick | 11.2 起（含 11.2.0.4） | `/usr/lib/oracle/19.32/client64/lib`，已设 `ORACLE_CLIENT_LIB` |
 
 - 切换方式：`docker build --target thick`，或 compose 里 `APP_TARGET=thick`；也可以在运行时用 `ORACLE_CLIENT_LIB` 指向自备的 Instant Client 目录（settings 里该变量非空才切 thick）。
 - **thick 变体仅 x86_64**（Oracle 只为 x86_64 发布 19c 客户端 RPM）。arm 机器上运行需要 `--platform linux/amd64` 转译。
@@ -320,9 +320,11 @@ docker compose exec web ls frontend/dist                          # 应有 index
 
 同源部署要求构建时 `VITE_API_BASE_URL` 为空串。`frontend/src/api/client.ts` 现在区分"未定义"（开发，回落 `http://localhost:8000`）与"空串"（同源，走相对路径）；如果你在别处手工设过 `VITE_API_BASE_URL=http://...`，就以那个值为准。
 
-### Q10: thick 变体构建报 `DPI-1047` / 缺 `libaio.so.1`
+### Q10: thick 变体构建报 `DPI-1047` / 缺 `libaio.so.1` / `libclntsh.so.19.1: No such file`
 
 Instant Client 需要 `libaio`。Debian 新版把包名改成 `libaio1t64`（提供 `libaio.so.1t64`），Dockerfile 里已做"装不到 `libaio1` 就装 `libaio1t64` 并补软链"的处理；另外 thick 阶段用的是 x86_64 RPM，arm 机器构建需 `--platform linux/amd64`。
+
+`libclntsh.so.19.1: No such file` 是另一回事：**RPM 版**解压后落在 `/usr/lib/oracle/19.32/client64/lib`，`/opt/oracle/instantclient_XX_X` 那个布局属于 **ZIP 版**（`unzip` 到 /opt）。两种布局不能混用，`ORACLE_CLIENT_LIB`/`LD_LIBRARY_PATH` 必须指向前者。
 
 ### Q11: 容器内能连 Oracle 吗？要装 Instant Client 吗？
 

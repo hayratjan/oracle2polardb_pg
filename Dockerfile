@@ -62,7 +62,10 @@ RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 FROM base AS thick
 ARG IC_VERSION=19.32.0.0.0
 ARG IC_RPM=oracle-instantclient19.32-basic-${IC_VERSION}-1.el9.x86_64.rpm
-# Debian slim 装不了 RPM，用 rpm2cpio|cpio 解包到 /opt/oracle/instantclient_19_32
+# Debian slim 装不了 RPM，用 rpm2cpio|cpio 解包。落地路径是
+# /usr/lib/oracle/<版本>/client64/lib —— 已用 Oracle 仓库的 filelists.xml 逐条核对；
+# /opt/oracle/instantclient_XX_X 是 ZIP 发行版解压出来的布局，RPM 不产生那个路径，
+# 之前按 ZIP 路径断言导致 thick 每次都构建失败（libclntsh.so.19.1: No such file）。
 # （Oracle 公共源的公开路径是 .../x86_64/getPackage/<rpm>，直接列目录里的文件名会 404）
 RUN set -eux; \
     apt-get update; \
@@ -78,11 +81,11 @@ RUN set -eux; \
     apt-get purge -y rpm2cpio curl; \
     apt-get autoremove -y; \
     rm -rf /var/lib/apt/lists/*; \
-    ls -l /opt/oracle/instantclient_19_32/libclntsh.so.19.1
+    ls -l /usr/lib/oracle/19.32/client64/lib/libclntsh.so.19.1
 # 构建期即加载一次客户端库：缺 .so 会在这里报 DPI-1047，而不是等到运行时
-RUN python -c "import oracledb; oracledb.init_oracle_client(lib_dir='/opt/oracle/instantclient_19_32'); print('thick OK', oracledb.clientversion()[:3])"
-ENV ORACLE_CLIENT_LIB=/opt/oracle/instantclient_19_32 \
-    LD_LIBRARY_PATH=/opt/oracle/instantclient_19_32
+RUN python -c "import oracledb; oracledb.init_oracle_client(lib_dir='/usr/lib/oracle/19.32/client64/lib'); print('thick OK', oracledb.clientversion()[:3])"
+ENV ORACLE_CLIENT_LIB=/usr/lib/oracle/19.32/client64/lib \
+    LD_LIBRARY_PATH=/usr/lib/oracle/19.32/client64/lib
 USER appuser
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
