@@ -34,10 +34,19 @@
             </div>
             <div v-else-if="connections.length > 0">
               <div class="list-group list-group-flush">
-                <div v-for="conn in connections" :key="conn.id" class="list-group-item">
+                <div v-for="conn in connections" :key="conn.id"
+                     class="list-group-item connection-item"
+                     :class="{ 'connection-item-active': selectedConnection === conn.id }"
+                     role="button"
+                     :aria-pressed="selectedConnection === conn.id"
+                     title="点击在右侧查看该连接的数据库信息"
+                     @click="selectConnection(conn)">
                   <div class="d-flex justify-content-between align-items-start">
                     <div class="flex-grow-1">
-                      <h6 class="mb-1">{{ conn.name }}</h6>
+                      <h6 class="mb-1">
+                        <i v-if="selectedConnection === conn.id" class="bi bi-check-circle-fill text-primary me-1"></i>
+                        {{ conn.name }}
+                      </h6>
                       <div class="text-muted small">
                         <i class="bi bi-geo-alt me-1"></i>
                         {{ conn.host }}:{{ conn.port }}
@@ -47,13 +56,13 @@
                       </div>
                     </div>
                     <div v-if="conn.id" class="btn-group">
-                        <button @click="testConnection(conn.id)" class="btn btn-outline-info btn-xs" title="测试连接">
+                        <button @click.stop="testConnection(conn.id)" class="btn btn-outline-info btn-xs" title="测试连接">
                           <i class="bi bi-check-circle"></i>
                         </button>
-                        <button @click="openEditModal(conn)" class="btn btn-outline-success btn-xs" title="编辑连接">
+                        <button @click.stop="openEditModal(conn)" class="btn btn-outline-success btn-xs" title="编辑连接">
                           <i class="bi bi-pencil"></i>
                         </button>
-                        <button @click="deleteConnection(conn.id)" class="btn btn-outline-danger btn-xs" title="删除连接">
+                        <button @click.stop="deleteConnection(conn.id)" class="btn btn-outline-danger btn-xs" title="删除连接">
                           <i class="bi bi-trash"></i>
                         </button>
                       </div>
@@ -82,17 +91,7 @@
             </h5>
           </div>
           <div class="card-body">
-            <div v-if="connections.length">
-              <div class="mb-3">
-                <label class="form-label">选择连接</label>
-                <select v-model="selectedConnection" class="form-select-sm" @change="loadDatabaseInfo">
-                  <option value="">请选择</option>
-                  <option v-for="conn in connections" :key="conn.id" :value="conn.id">
-                    {{ conn.name }}
-                  </option>
-                </select>
-              </div>
-
+            <div v-if="selectedConnection">
               <div class="d-flex justify-content-between align-items-center mb-2">
                 <h6 class="mb-0">
                   <i class="bi bi-speedometer2 me-1"></i>运行指标
@@ -193,8 +192,8 @@
               </div>
             </div>
             <div v-else class="text-center py-5 text-muted">
-              <i class="bi bi-bell mb-3" style="font-size: 48px;"></i>
-              <p>请先选择一个连接</p>
+              <i class="bi bi-cursor mb-3" style="font-size: 48px;"></i>
+              <p>{{ connections.length ? '请在左侧点击选择一个连接' : '暂无连接，请先添加连接' }}</p>
             </div>
           </div>
         </div>
@@ -475,11 +474,28 @@ const loadConnections = async () => {
   try {
     const res = await oracleConnectionApi.list()
     connections.value = res.data.results || res.data
+    // 选中项被删除后，右侧面板不应继续指向失效的连接 ID
+    if (selectedConnection.value
+        && !connections.value.some(conn => conn.id === selectedConnection.value)) {
+      selectedConnection.value = null
+      databaseInfo.value = null
+      dbInfo.value = null
+      dbInfoError.value = null
+    }
   } catch (error) {
     console.error('Failed to load connections:', error)
   } finally {
     loading.value = false
   }
+}
+
+const selectConnection = (conn: OracleConnection) => {
+  if (!conn.id) return
+  const connectionId = conn.id
+  selectedConnection.value = connectionId
+  // 清空上一个连接的对象列表，避免右侧短暂显示错误来源的数据
+  databaseInfo.value = null
+  loadDatabaseInfo()
 }
 
 const createConnection = async () => {
@@ -846,5 +862,20 @@ h6 {
 
 .text-muted small {
   line-height: 1.6;
+}
+
+.connection-item {
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+
+.connection-item:hover {
+  background-color: rgba(13, 110, 253, .06);
+}
+
+.connection-item-active {
+  border-left-color: var(--bs-primary);
+  background-color: rgba(13, 110, 253, .1);
 }
 </style>

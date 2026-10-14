@@ -929,3 +929,205 @@ class OracleDriverTimeoutTest(TestCase):
             fast_elapsed, SLEEP / 2,
             msg=f'快池等待了 {fast_elapsed:.2f}s，说明建池仍被全局锁串行化',
         )
+
+
+class _FakePgConn:
+    """psycopg2 连接桩：出错后事务进入 aborted 状态，必须 rollback 才能继续查询，
+    所以这里记录 rollback 次数供断言。"""
+
+    def __init__(self, routes, fail_markers=()):
+        self._cursor = _FakeCursor(routes, fail_markers)
+        self.closed = False
+        self.rollbacks = 0
+
+    def cursor(self):
+        return self._cursor
+
+    def rollback(self):
+        self.rollbacks += 1
+
+    def close(self):
+        self.closed = True
+
+
+_PG_SHARED_BUFFERS = 32 * 1024 ** 3
+_PG_WORK_MEM = 4 * 1024 * 1024
+_PG_CACHE = 12 * 1024 ** 3
+
+
+def _pg_routes(shmem_col='allocated_size'):
+    return {
+        'o2p:ping': [(1,)],
+        'o2p:pgver': [('PostgreSQL 17.9 (PolarDB 17.9.1.0 build 248cd221) on x86_64-linux-gnu',)],
+        'o2p:polarver': [('17.9.1.0',)],
+        'o2p:inst': [('migration_meta', '2026-09-21 16:32:04', 1930000.0)],
+        'o2p:settings': [
+            ('shared_buffers', '4194304', '8kB'),
+            ('work_mem', '4096', 'kB'),
+            ('effective_cache_size', '1572864', '8kB'),
+            ('max_connections', '200', None),
+            ('superuser_reserved_connections', '3', None),
+        ],
+        'o2p:counts': [(21, 19, 4, 3, 2)],
+        'o2p:sessions': [(9, 1, 6)],
+        'o2p:dbsize': [(8214195,)],
+        # 故意小到大返回：若未按占用降序排序，Top 5 断言就会失败
+        'o2p:dblist': [('small_db', 1000), ('appdb_2024', 6690218511), ('efmis_old', 4000)],
+        'o2p:shmemcol': [(shmem_col,)],
+        'o2p:shmemsum': [(18_000_000_000,)],
+    }
+
+
+class PgInfoCollectorTest(TestCase):
+    """PolarDB-PG 指标采集：逐条降级，且出错后必须回滚，否则后续查询会全部失败。"""
+
+    def _collect(self, fail_markers=(), routes=None):
+        from migration_app.pg_info import collect_database_info
+        conn = _FakePgConn(routes or _pg_routes(), fail_markers)
+        return collect_database_info(conn), conn
+
+    def test_returns_all_sections(self):
+        info, _ = self._collect()
+        for key in ('version', 'instance', 'memory', 'sessions', 'counts', 'storage'):
+            self.assertIn(key, info, msg=f'缺少区块 {key}')
+        self.assertEqual(info['errors'], {})
+
+    def test_reads_version_and_polar_version(self):
+        info, _ = self._collect()
+        self.assertEqual(info['version']['server_version'], '17.9')
+        self.assertEqual(info['version']['polar_version'], '17.9.1.0')
+
+    def test_polar_version_falls_back_to_banner(self):
+        """线上实测：PolarDB 17.9.1.0 没有 polar_version()，但 version() 的 banner 里带着它。"""
+        routes = _pg_routes()
+        routes['o2p:polarver'] = []
+        info, _ = self._collect(routes=routes)
+        self.assertEqual(info['version']['polar_version'], '17.9.1.0')
+        self.assertEqual(info['errors'], {})
+
+    def test_community_pg_reports_no_polar_version(self):
+        """社区版既没有函数、banner 里也没有 PolarDB 字样：属预期缺失而非故障。"""
+        routes = _pg_routes()
+        routes['o2p:polarver'] = []
+        routes['o2p:pgver'] = [('PostgreSQL 17.9 on x86_64-linux-gnu',)]
+        info, _ = self._collect(routes=routes)
+        self.assertIsNone(info['version']['polar_version'])
+        self.assertEqual(info['version']['server_version'], '17.9')
+        self.assertEqual(info['errors'], {})
+
+    def test_counts_are_scoped_to_current_database(self):
+        info, _ = self._collect()
+        self.assertEqual(info['counts']['databases'], 21)
+        self.assertEqual(info['counts']['roles'], 19)
+        self.assertEqual(info['counts']['non_system_roles'], 4)
+        self.assertEqual(info['counts']['tables'], 2)
+        self.assertEqual(info['counts']['database_name'], 'migration_meta')
+
+    def test_memory_uses_setting_units(self):
+        info, _ = self._collect()
+        self.assertEqual(info['memory']['shared_buffers_bytes'], _PG_SHARED_BUFFERS)
+        self.assertEqual(info['memory']['work_mem_bytes'], _PG_WORK_MEM)
+        self.assertEqual(info['memory']['effective_cache_size_bytes'], _PG_CACHE)
+        self.assertEqual(info['memory']['shmem_allocated_bytes'], 18_000_000_000)
+
+    def test_shmem_column_name_follows_the_server(self):
+        """PolarDB 的 pg_shmem_allocations 列名是 allocated_size，社区版是 allocated_bytes。"""
+        routes = _pg_routes(shmem_col='allocated_bytes')
+        info, conn = self._collect(routes=routes)
+        self.assertEqual(info['memory']['shmem_allocated_bytes'], 18_000_000_000)
+        sum_sql = [sql for sql in conn._cursor.executed if 'o2p:shmemsum' in sql]
+        self.assertTrue(sum_sql, msg='未发起共享内存求和查询')
+        self.assertIn('allocated_bytes', sum_sql[0])
+        self.assertNotIn('allocated_size', sum_sql[0])
+
+    def test_sessions_and_limits(self):
+        info, _ = self._collect()
+        self.assertEqual(info['sessions'], {'total': 9, 'active': 1, 'idle': 6,
+                                            'max': 200, 'superuser_reserved': 3})
+
+    def test_top_databases_sorted_by_size_desc(self):
+        info, _ = self._collect()
+        names = [db['name'] for db in info['storage']['top_databases']]
+        self.assertEqual(names, ['appdb_2024', 'efmis_old', 'small_db'])
+        self.assertEqual(info['storage']['instance_total_bytes'], 6690223511)
+        self.assertEqual(info['storage']['current_database_bytes'], 8214195)
+
+    def test_single_failure_degrades_only_that_metric(self):
+        info, conn = self._collect(fail_markers=('o2p:dblist',))
+        self.assertIn('storage.top_databases', info['errors'])
+        self.assertEqual(info['storage']['top_databases'], [])
+        self.assertEqual(info['counts']['databases'], 21, msg='其他区块不应被牵连')
+        self.assertGreaterEqual(conn.rollbacks, 1, msg='查询失败后必须回滚，否则后续全部报错')
+
+    def test_collector_does_not_close_connection(self):
+        _, conn = self._collect()
+        self.assertFalse(conn.closed)
+
+
+class PgDatabaseInfoAPIViewTest(TestCase):
+    """GET /api/polardb/info/ —— 与 Oracle 侧同形状，并带语句超时守卫。"""
+
+    def setUp(self):
+        from rest_framework.test import APIClient
+        from migration_app.models import PostgresConnection
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='pginfo', password='testpass')
+        self.client.force_authenticate(user=self.user)
+        self.conn = PostgresConnection.objects.create(
+            name='meta', host='192.0.2.20', port=5432,
+            database='migration_meta', username='appuser', password='pw',
+        )
+
+    def _patch(self, conn=None, side_effect=None):
+        from unittest.mock import patch
+        target = conn if conn is not None else _FakePgConn(_pg_routes())
+        return patch('migration_app.views.get_postgres_connection',
+                     return_value=target, side_effect=side_effect), target
+
+    def test_requires_connection_id(self):
+        resp = self.client.get('/api/polardb/info/')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data['status'], 'error')
+
+    def test_unknown_connection_returns_404(self):
+        resp = self.client.get('/api/polardb/info/?connection_id=999999')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_returns_metrics_and_both_latencies(self):
+        ctx, fake = self._patch()
+        with ctx:
+            resp = self.client.get(f'/api/polardb/info/?connection_id={self.conn.pk}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['status'], 'success')
+        self.assertEqual(resp.data['connection_name'], 'meta')
+        self.assertEqual(resp.data['target'], '192.0.2.20:5432/migration_meta')
+        self.assertIn('ping_ms', resp.data)
+        self.assertIn('acquire_ms', resp.data)
+        self.assertEqual(resp.data['counts']['databases'], 21)
+        # get_postgres_connection 返回池代理，close() 即归还；不调用会漏连接、耗尽池
+        self.assertTrue(fake.closed, msg='请求结束必须归还/关闭连接')
+
+    def test_statement_timeout_is_bounded_and_reset(self):
+        """只读探测不得留下会话级超时：池连接会被其他迁移任务复用。"""
+        ctx, fake = self._patch()
+        with ctx:
+            self.client.get(f'/api/polardb/info/?connection_id={self.conn.pk}')
+        executed = ' || '.join(fake._cursor.executed)
+        self.assertIn('set statement_timeout', executed)
+        timeout_sql = [s for s in fake._cursor.executed if 'set statement_timeout' in s][0]
+        limit = int([tok for tok in timeout_sql.split() if tok.isdigit()][0])
+        self.assertGreater(limit, 0)
+        self.assertLessEqual(limit, 15_000, msg='语句超时上限过大，会拖住 worker')
+        self.assertIn('reset statement_timeout', executed)
+
+    def test_reset_runs_even_when_collection_fails(self):
+        import psycopg2
+        from unittest.mock import patch
+        ctx, fake = self._patch()
+        with ctx:
+            with patch('migration_app.pg_info.collect_database_info',
+                       side_effect=psycopg2.OperationalError('server closed the connection')):
+                resp = self.client.get(f'/api/polardb/info/?connection_id={self.conn.pk}')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data['status'], 'error')
+        self.assertIn('reset statement_timeout', ' || '.join(fake._cursor.executed))

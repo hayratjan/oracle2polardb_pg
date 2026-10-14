@@ -280,6 +280,7 @@ export const databaseApi = {
   getOracleTables: (params: any) => apiClient.get('/api/oracle/tables/', { params }),
   getOracleUsers: (params: any) => apiClient.get('/api/oracle/users/', { params }),
   getPgSchemas: (params: any) => apiClient.get('/api/polardb/schemas/', { params }),
+  getPgDatabaseInfo: (params: any) => apiClient.get('/api/polardb/info/', { params }),
   getPgTables: (params: any) => apiClient.get('/api/polardb/tables/', { params }),
   getPgUsers: (params: any) => apiClient.get('/api/polardb/users/', { params }),
   /** Oracle 整库发现：Schema 及对象统计 */

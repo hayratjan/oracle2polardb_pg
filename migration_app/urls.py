@@ -36,6 +36,7 @@ urlpatterns = [
     path('oracle/save-connection/', views.api_jwt_auth(views.save_oracle_connection), name='api_save_oracle_connection'),
     path('oracle/delete-connection/', views.api_jwt_auth(views.delete_oracle_connection), name='api_delete_oracle_connection'),
     path('oracle/edit-connection/', views.api_jwt_auth(views.edit_oracle_connection), name='api_edit_oracle_connection'),
+    path('polardb/info/', api.PgDatabaseInfoAPIView.as_view(), name='api_pg_database_info'),
     path('polardb/schemas/', api.PgSchemasAPIView.as_view(), name='api_pg_schemas'),
     path('polardb/tables/', api.PgTablesAPIView.as_view(), name='api_pg_tables'),
     path('polardb/users/', api.PgUsersAPIView.as_view(), name='api_pg_users'),

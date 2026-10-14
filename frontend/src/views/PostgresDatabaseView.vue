@@ -34,10 +34,19 @@
             </div>
             <div v-else-if="connections.length > 0">
               <div class="list-group list-group-flush">
-                <div v-for="conn in connections" :key="conn.id" class="list-group-item">
+                <div v-for="conn in connections" :key="conn.id"
+                     class="list-group-item connection-item"
+                     :class="{ 'connection-item-active': selectedConnection === conn.id }"
+                     role="button"
+                     :aria-pressed="selectedConnection === conn.id"
+                     title="点击在右侧查看该连接的数据库信息"
+                     @click="selectConnection(conn)">
                   <div class="d-flex justify-content-between align-items-start">
                     <div class="flex-grow-1">
-                      <h6 class="mb-1">{{ conn.name }}</h6>
+                      <h6 class="mb-1">
+                        <i v-if="selectedConnection === conn.id" class="bi bi-check-circle-fill text-primary me-1"></i>
+                        {{ conn.name }}
+                      </h6>
                       <div class="text-muted small">
                         <i class="bi bi-geo-alt me-1"></i>
                         {{ conn.host }}:{{ conn.port }}
@@ -50,13 +59,13 @@
                       </span>
                     </div>
                     <div v-if="conn.id" class="btn-group">
-                      <button @click="testConnection(conn.id)" class="btn btn-outline-info btn-xs" title="测试连接">
+                      <button @click.stop="testConnection(conn.id)" class="btn btn-outline-info btn-xs" title="测试连接">
                         <i class="bi bi-check-lg"></i>
                       </button>
-                      <button @click="openEditModal(conn)" class="btn btn-outline-success btn-xs" title="编辑连接">
+                      <button @click.stop="openEditModal(conn)" class="btn btn-outline-success btn-xs" title="编辑连接">
                         <i class="bi bi-pencil"></i>
                       </button>
-                      <button @click="deleteConnection(conn.id)" class="btn btn-outline-danger btn-xs" title="删除连接">
+                      <button @click.stop="deleteConnection(conn.id)" class="btn btn-outline-danger btn-xs" title="删除连接">
                         <i class="bi bi-trash"></i>
                       </button>
                     </div>
@@ -86,16 +95,80 @@
           </div>
           <div class="card-body">
             <div v-if="selectedConnection">
-              <div class="mb-4">
-                <label class="form-label">选择连接</label>
-                <select v-model="selectedConnection" class="form-select-sm" @change="loadDatabaseInfo">
-                  <option value="">请选择</option>
-                  <option v-for="conn in connections" :key="conn.id" :value="conn.id">
-                    {{ conn.name }}
-                  </option>
-                </select>
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="mb-0">
+                  <i class="bi bi-speedometer2 me-1"></i>运行指标
+                </h6>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
+                        :disabled="dbInfoLoading" @click="loadDatabaseInfo">
+                  <i class="bi bi-arrow-clockwise me-1"></i>刷新
+                </button>
               </div>
-              
+
+              <div v-if="dbInfoLoading" class="text-muted small py-3">
+                <span class="spinner-border spinner-border-sm me-2"></span>正在采集目标库指标…
+              </div>
+              <div v-else-if="dbInfoError" class="alert alert-danger py-2 small mb-3">
+                <div class="fw-semibold">{{ dbInfoError.message }}</div>
+              </div>
+
+              <template v-else-if="dbInfo">
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                  <span class="badge text-bg-light border"
+                        :title="'取连接耗时 ' + dbInfo.acquire_ms + ' ms（连接池命中时接近 0；首次建连包含 TCP+认证握手）'">
+                    <i class="bi bi-stopwatch me-1"></i>往返 {{ dbInfo.ping_ms }} ms · 取连接 {{ dbInfo.acquire_ms }} ms
+                  </span>
+                  <span class="badge text-bg-light border">
+                    PostgreSQL {{ dbInfo.version?.server_version || '版本未知' }}
+                  </span>
+                  <span v-if="dbInfo.version?.polar_version" class="badge text-bg-light border">
+                    PolarDB {{ dbInfo.version.polar_version }}
+                  </span>
+                  <span class="badge text-bg-light border">{{ dbInfo.target }}</span>
+                </div>
+
+                <div class="row g-2 mb-3">
+                  <div v-for="stat in pgInfoStats" :key="stat.label" class="col-6 col-xl-4">
+                    <div class="border rounded p-2 h-100">
+                      <div class="text-muted" style="font-size: .72rem;">{{ stat.label }}</div>
+                      <div class="fw-semibold text-truncate" :title="String(stat.value)">{{ stat.value }}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mb-2">
+                  <div class="d-flex justify-content-between small">
+                    <span>共享内存（实际分配 / shared_buffers 配置）</span>
+                    <span class="text-muted">{{ pgShmemText }}</span>
+                  </div>
+                  <div class="progress" style="height: 6px;">
+                    <div class="progress-bar bg-primary" role="progressbar"
+                         :style="{ width: pgShmemPct + '%' }"></div>
+                  </div>
+                </div>
+
+                <div v-if="pgTopDatabases.length" class="mt-3">
+                  <div class="small text-muted mb-1">数据库占用 Top {{ pgTopDatabases.length }}</div>
+                  <div v-for="db in pgTopDatabases" :key="db.name" class="mb-2">
+                    <div class="d-flex justify-content-between small">
+                      <span :class="{ 'fw-semibold': db.name === dbInfo.counts?.database_name }">{{ db.name }}</span>
+                      <span class="text-muted">
+                        {{ db.pct }}% · {{ formatBytes(db.size_bytes) }}
+                      </span>
+                    </div>
+                    <div class="progress" style="height: 6px;">
+                      <div class="progress-bar bg-info" role="progressbar"
+                           :style="{ width: (db.pct ?? 0) + '%' }"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="dbInfoErrorSummary" class="small text-muted mt-2">
+                  <i class="bi bi-exclamation-triangle me-1"></i>
+                  部分指标因权限或版本不可用：{{ dbInfoErrorSummary }}
+                </div>
+              </template>
+
               <div v-if="databaseInfo">
                 <h6 class="mb-3">
                   <i class="bi bi-diagram-3 me-1"></i>
@@ -121,8 +194,8 @@
               </div>
             </div>
             <div v-else class="text-center py-5 text-muted">
-              <i class="bi bi-server mb-3" style="font-size: 48px;"></i>
-              <p>请先选择一个连接</p>
+              <i class="bi bi-cursor mb-3" style="font-size: 48px;"></i>
+              <p>{{ connections.length ? '请在左侧点击选择一个连接' : '暂无连接，请先添加连接' }}</p>
             </div>
           </div>
         </div>
@@ -284,7 +357,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { postgresConnectionApi, databaseApi } from '@/api'
 import type { PostgresConnection } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
@@ -309,6 +382,82 @@ const testResultModal = ref<{
   message: '',
 })
 const databaseInfo = ref<any>(null)
+const dbInfo = ref<any>(null)
+const dbInfoLoading = ref(false)
+const dbInfoError = ref<{ message: string } | null>(null)
+
+const formatBytes = (bytes?: number | null): string => {
+  if (bytes === null || bytes === undefined) return '—'
+  const gb = bytes / 1073741824
+  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${(bytes / 1048576).toFixed(1)} MB`
+}
+
+const formatNumber = (value: any): string => (value === null || value === undefined ? '—' : String(value))
+
+const formatUptime = (seconds?: number | null): string => {
+  if (seconds === null || seconds === undefined) return '—'
+  const days = Math.floor(seconds / 86400)
+  return days >= 1 ? `${days} 天` : `${Math.floor(seconds / 3600)} 小时`
+}
+
+// PG 系统目录不跨库：表/角色/Schema 只统计当前连接的库，标签里必须写明库名，
+// 否则用户会以为是整个实例的数量。
+const pgInfoStats = computed(() => {
+  const d: any = dbInfo.value
+  if (!d) return []
+  const c = d.counts || {}
+  const s = d.sessions || {}
+  const m = d.memory || {}
+  const st = d.storage || {}
+  const scoped = c.database_name ? `（当前库 ${c.database_name}）` : ''
+  return [
+    { label: '数据库数量', value: formatNumber(c.databases) },
+    { label: `角色总数${scoped}`, value: formatNumber(c.roles) },
+    { label: `业务角色${scoped}`, value: formatNumber(c.non_system_roles) },
+    { label: `Schema 数${scoped}`, value: formatNumber(c.schemas) },
+    { label: `表数量${scoped}`, value: formatNumber(c.tables) },
+    { label: '会话（活跃/总）',
+      value: s.total === null || s.total === undefined ? '—' : `${s.active ?? 0} / ${s.total}` },
+    { label: '连接上限',
+      value: s.max === null || s.max === undefined
+        ? '—' : `${s.max}（超管预留 ${formatNumber(s.superuser_reserved)}）` },
+    { label: '当前库大小', value: formatBytes(st.current_database_bytes) },
+    { label: '实例总大小', value: formatBytes(st.instance_total_bytes) },
+    { label: 'work_mem', value: formatBytes(m.work_mem_bytes) },
+    { label: 'effective_cache_size', value: formatBytes(m.effective_cache_size_bytes) },
+    { label: '实例启动时长', value: formatUptime(d.instance?.uptime_seconds) },
+  ]
+})
+
+const pgShmemPct = computed(() => {
+  const m: any = dbInfo.value?.memory
+  if (!m?.shared_buffers_bytes || !m.shmem_allocated_bytes) return 0
+  return Math.min(100, Math.round(m.shmem_allocated_bytes / m.shared_buffers_bytes * 1000) / 10)
+})
+
+const pgShmemText = computed(() => {
+  const m: any = dbInfo.value?.memory
+  if (!m) return '—'
+  return `${formatBytes(m.shmem_allocated_bytes)} / ${formatBytes(m.shared_buffers_bytes)}`
+})
+
+const pgTopDatabases = computed(() => {
+  const st: any = dbInfo.value?.storage
+  const rows = st?.top_databases || []
+  const total = st?.instance_total_bytes || 0
+  return rows.map((db: any) => ({
+    ...db,
+    pct: total && db.size_bytes ? Math.round(db.size_bytes / total * 1000) / 10 : null,
+  }))
+})
+
+const dbInfoErrorSummary = computed(() => {
+  const errors = dbInfo.value?.errors || {}
+  const keys = Object.keys(errors)
+  if (!keys.length) return ''
+  return keys.map((k) => `${k}（${errors[k]}）`).join('、')
+})
+
 const alertMessage = ref<{
   show: boolean
   type: 'success' | 'danger' | 'warning' | 'info'
@@ -372,6 +521,14 @@ const loadConnections = async () => {
   try {
     const res = await postgresConnectionApi.list()
     connections.value = res.data.results || res.data
+    // 选中项被删除后，右侧面板不应继续指向失效的连接 ID
+    if (selectedConnection.value
+        && !connections.value.some(conn => conn.id === selectedConnection.value)) {
+      selectedConnection.value = null
+      databaseInfo.value = null
+      dbInfo.value = null
+      dbInfoError.value = null
+    }
   } catch (error) {
     console.error('Failed to load connections:', error)
   } finally {
@@ -534,13 +691,33 @@ const testEditedConnection = async () => {
 
 const loadDatabaseInfo = async () => {
   if (!selectedConnection.value) return
-  
+  const connectionId = selectedConnection.value
+
+  dbInfoLoading.value = true
+  dbInfoError.value = null
+  dbInfo.value = null
+  // 指标与对象列表相互独立：指标失败不影响 Schemas/Databases 展示
+  try {
+    const res = await databaseApi.getPgDatabaseInfo({ connection_id: connectionId })
+    if (res.data.status === 'success') {
+      dbInfo.value = res.data
+    } else {
+      dbInfoError.value = { message: res.data.message || '获取数据库信息失败' }
+    }
+  } catch (error: any) {
+    dbInfoError.value = {
+      message: error?.response?.data?.message || '获取数据库信息失败',
+    }
+  } finally {
+    dbInfoLoading.value = false
+  }
+
   try {
     const [schemasRes, databasesRes] = await Promise.all([
-      databaseApi.getPgSchemas({ connection_id: selectedConnection.value }),
-      databaseApi.getPostgresDatabases({ connection_id: selectedConnection.value }),
+      databaseApi.getPgSchemas({ connection_id: connectionId }),
+      databaseApi.getPostgresDatabases({ connection_id: connectionId }),
     ])
-    
+
     databaseInfo.value = {
       schemas: schemasRes.data.schemas || [],
       databases: databasesRes.data.databases || [],
@@ -548,6 +725,15 @@ const loadDatabaseInfo = async () => {
   } catch (error) {
     console.error('Failed to load database info:', error)
   }
+}
+
+const selectConnection = (conn: PostgresConnection) => {
+  if (!conn.id) return
+  const connectionId = conn.id
+  selectedConnection.value = connectionId
+  // 清空上一个连接的数据，避免右侧短暂显示错误来源的对象列表
+  databaseInfo.value = null
+  loadDatabaseInfo()
 }
 
 onMounted(() => {
@@ -710,5 +896,20 @@ h6 {
 .badge {
   font-weight: 500;
   padding: 0.35em 0.65em;
+}
+
+.connection-item {
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+
+.connection-item:hover {
+  background-color: rgba(13, 110, 253, .06);
+}
+
+.connection-item-active {
+  border-left-color: var(--bs-primary);
+  background-color: rgba(13, 110, 253, .1);
 }
 </style>

@@ -796,6 +796,70 @@ class DatabaseInfoAPIView(APIView):
             safe_close_db_resources(connection)
 
 
+class PgDatabaseInfoAPIView(APIView):
+    """GET /api/polardb/info/?connection_id=<id>
+
+    返回 PolarDB-PG 目标库运行指标：连通性耗时、版本（含 PolarDB 版本）、
+    内存配置与共享内存实际分配、会话数与上限、当前库对象数量、Top 5 数据库占用。
+    单项查询失败只降级该格；语句超时在归还连接前撤销，避免残留给迁移任务。
+    """
+
+    def get(self, request):
+        from . import views
+        from .pg_info import (
+            STATEMENT_TIMEOUT_MS,
+            apply_statement_timeout,
+            clear_statement_timeout,
+            collect_database_info,
+        )
+
+        connection_id = request.query_params.get('connection_id')
+        if not connection_id:
+            return Response(
+                {'status': 'error', 'message': '未提供连接ID'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            conn_obj = PostgresConnection.objects.get(pk=connection_id)
+        except (PostgresConnection.DoesNotExist, ValueError):
+            return Response(
+                {'status': 'error', 'message': '连接不存在'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        target = f'{conn_obj.host}:{conn_obj.port}/{conn_obj.database}'
+        connection = None
+        try:
+            started = time.monotonic()
+            connection = views.get_postgres_connection(conn_obj.pk)
+            acquire_ms = int((time.monotonic() - started) * 1000)
+            apply_statement_timeout(connection, STATEMENT_TIMEOUT_MS)
+            info = collect_database_info(connection)
+            return Response({
+                'status': 'success',
+                'connection_id': conn_obj.pk,
+                'connection_name': conn_obj.name,
+                'target': target,
+                'acquire_ms': acquire_ms,
+                'statement_timeout_ms': STATEMENT_TIMEOUT_MS,
+                **info,
+            })
+        except Exception as exc:
+            logger.warning('采集 PolarDB-PG 指标失败 %s: %s', target, exc)
+            return Response({
+                'status': 'error',
+                'target': target,
+                'message': format_db_error(exc),
+            }, status=status.HTTP_400_BAD_REQUEST)
+        finally:
+            # 顺序不可颠倒：先撤销会话级超时，再把连接还给池
+            try:
+                clear_statement_timeout(connection)
+            except Exception as reset_err:
+                logger.warning('撤销 statement_timeout 失败 %s: %s', target, reset_err)
+            safe_close_db_resources(connection)
+
+
 class OracleSchemasAPIView(APIView):
     def get(self, request):
         connection = cursor = None
