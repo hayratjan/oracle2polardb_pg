@@ -33,6 +33,11 @@ jobs:
           DJANGO_SECRET_KEY: ci-test-secret-key
           DJANGO_DEBUG: "false"
           ORACLE_CLIENT_LIB: ""
+          # settings.py 把 SSL 跳转挂在 `if not DEBUG` 上，默认 true。测试客户端走 http，
+          # 于是每个请求都被 SecurityMiddleware 301 到 https，31 个视图测试一起挂成
+          # "301 != 200/405"。这里关掉跳转、保留其余加固项（Cookie Secure、X-Frame-Options…），
+          # 与 docker-build.yml 冒烟起容器时的 -e SECURE_SSL_REDIRECT=false 同一套约定。
+          SECURE_SSL_REDIRECT: "false"
 
       - name: Install security linter
         run: pip install bandit
@@ -57,11 +62,15 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # 与 Dockerfile 的 web-builder 阶段保持一致（corepack prepare pnpm@11.17.0）。
+          # pnpm-workspace.yaml 里没有 packages: 字段，只有 pnpm 11 的 allowBuilds 配置；
+          # pnpm 9 在加载配置阶段就报 "packages field missing or empty"，装不动也构建不了。
+          version: 11.17.0
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Dockerfile 用的是 node:22-alpine，这里同版本，避免 CI 校验的运行时和镜像里的不是同一个
+          node-version: "22"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
