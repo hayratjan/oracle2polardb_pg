@@ -3,6 +3,7 @@
 <img src="./frontend/src/assets/logo.svg" width="880" height="100" />
 </br>
 <h1 align="center">Oracle 至 PolarDB PostgreSQL</h1>
+<p align="center">中文 | <a href="./README_EN.md">English</a></p>
 <h3 align="center">企业级数据库迁移与同步平台</h3>
 
 <p align="center">
@@ -114,7 +115,7 @@
 | [📖 使用手册](#-使用手册) | 三条上手路径与策略速查 |
 | [🔌 API 速查](#-api-速查--新增) | v2 新增 REST 端点 |
 | [🔧 开发指南](#-开发指南) | 技术栈与关键模块 |
-| [🐳 Docker 部署](#-docker-部署) | 容器化一键部署 |
+| [🐳 Docker 部署](#-docker-部署) | 单镜像 · 预构建镜像地址 · compose 一键部署 |
 | [❓ 常见问题 FAQ](#-常见问题-faq) | 排障与错误诊断 |
 | [📚 文档与支持](#-文档与支持) | 子文档索引 |
 | [📄 许可证](#-许可证) | 版权信息 |
@@ -1028,11 +1029,51 @@ docker compose down
 
 镜像两个 target：`thin`（默认，oracledb thin，可连 Oracle 12.1+）与 `thick`（内含 Instant Client 19.32，可连 11.2.0.4，仅 x86_64）。CI 会把两者分别推成 `:latest` 与 `:latest-thick`。
 
+### 直接用 CI 产物（不本地构建）
+
+每次推 `master` 都会把两个变体同时推到两个仓库，内容一致（amd64 的 config blob digest 相同）：
+
+| 仓库 | 地址 | 匿名可拉 |
+|:-----|:-----|:-----|
+| GHCR | `ghcr.io/hayratjan/oracle2polardb_pg` | 是（包为公开；直接 `docker pull` 即可，无需 login） |
+| 阿里云 ACR（杭州） | `registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg` | 是（仓库为公开） |
+
+标签：`latest` / `latest-thick`（跟随 master）、`master` / `master-thick`、`master-<短sha>` / `master-<短sha>-thick`（本轮构建的不可变引用）。
+
+镜像里不含任何口令——数据库密码、`DJANGO_SECRET_KEY`、`MIGRATION_FERNET_KEY` 全部在运行时由 `.env` 注入，所以 ACR 公开只影响"能不能下到代码产物"，不泄露连接信息。两个 registry 都只有 `linux/amd64`，Apple Silicon/ARM 上需 `--platform linux/amd64` 走模拟。
+
+单容器起（前端同源，8000 一个端口即可；Redis 与 Celery 仍需另起，见 `docker-compose.yml`）：
+
+```bash
+docker pull -q registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
+docker run -d --name o2p -p 8000:8000 --env-file .env \
+  registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
+```
+
+要走 compose 但用现成镜像，加一个 override（`docker-compose.prebuilt.yml`）——三个应用服务都指到同一个镜像，`pull` 之后 `up` 就不会再触发本地构建：
+
+```yaml
+services:
+  web:
+    image: registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
+  celery-worker:
+    image: registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
+  celery-beat:
+    image: registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
+```
+
+```bash
+C="-f docker-compose.yml -f docker-compose.prebuilt.yml"
+docker compose $C pull        # 连 11g 源库时把上面三个标签都换成 :latest-thick
+docker compose $C up -d
+```
+
 **生产部署注意事项：**
 1. 修改 `.env` 中的 `DJANGO_SECRET_KEY` 和 `MIGRATION_FERNET_KEY`
 2. 设置 `DJANGO_DEBUG=false`
-3. Oracle 11g 源库用 `APP_TARGET=thick`，无需再自行挂载 Instant Client
-4. 前置 Nginx/云 LB 终结 TLS 即可，应用侧不再需要为静态资源单独反代
+3. Oracle 11g 源库用 `APP_TARGET=thick`（本地构建）或 `:latest-thick`（拉现成镜像），无需再自行挂载 Instant Client
+4. **纯 HTTP 直连（前面没有反代终结 TLS）时 `.env` 必须设 `SECURE_SSL_REDIRECT=false`**，否则首页会被 301 到 `https://`，而容器没监听 443
+5. 前置 Nginx/云 LB 终结 TLS 即可，应用侧不再需要为静态资源单独反代
 
 详见 [docs/Docker部署指南.md](docs/Docker部署指南.md)。
 
