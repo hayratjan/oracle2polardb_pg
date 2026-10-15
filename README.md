@@ -93,7 +93,7 @@
 ## 📋 目录
 
 > [!TIP]
-> 建议首次阅读顺序：**产品概述** → **亮点功能 v2** → **快速开始** → **使用手册**
+> 建议首次阅读顺序：**产品概述** → **快速体验（Docker 免构建）** → **亮点功能 v2** → **使用手册**
 
 <details open>
 <summary><b>📂 展开完整导航</b></summary>
@@ -103,6 +103,7 @@
 | 章节 | 说明 |
 |:-----|:-----|
 | [🎯 产品概述](#-产品概述) | 平台定位与核心能力矩阵 |
+| [⚡ 快速体验（Docker 免构建）](#-快速体验docker-免构建) | 拉 CI 镜像，三条命令起服务 |
 | [✨ 亮点功能 · v2](#-亮点功能--v2) | 表级向导 · 整库编排 · 目标环境 DDL |
 | [🆕 v2.1 优化与修复](#-v21-优化与修复) | 日志体系 · 事务保护 · bigint 截断 · 超时控制 |
 | [🆕 v2.2 企业级加固](#-v22-企业级加固) | 安全加固 · 运维命令 · 类型补全 · 索引告警 · 注释迁移 · 多层校验 |
@@ -189,6 +190,54 @@ flowchart TB
     </tr>
   </tbody>
 </table>
+
+---
+
+## ⚡ 快速体验（Docker 免构建）
+
+不装 Python/Node、不在本地编译镜像，直接拉 CI 产物把平台跑起来：
+
+```bash
+# 1) 运行时配置：镜像里不含任何密钥，缺这三项容器会拒绝启动
+cat > .env <<'EOF'
+DJANGO_ENV=prod
+DJANGO_DEBUG=false
+DJANGO_SECRET_KEY=trial-please-change-me
+MIGRATION_FERNET_KEY=trial-fernet-please-change-me
+ALLOWED_HOSTS=localhost,127.0.0.1
+SECURE_SSL_REDIRECT=false
+EOF
+
+# 2) 拉镜像并起容器（前后端同源，只需 8000 一个端口）
+docker pull registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
+docker run -d --name o2p -p 8000:8000 --env-file .env \
+  registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
+
+# 3) 建表 + 建登录账号，然后打开 http://localhost:8000
+docker exec o2p python manage.py migrate --noinput
+docker exec -it o2p python manage.py createsuperuser
+```
+
+拉不动 ACR 就换 GHCR（同样匿名可拉）：`ghcr.io/hayratjan/oracle2polardb_pg:latest`。
+
+这份 `.env` 只给本机试跑，`.gitignore` 已忽略它——**别提交进仓库**，两个密钥上线前都要换成随机值。
+
+三个坑，踩中一定"起不来"：
+
+| 现象 | 原因 | 处理 |
+|:-----|:-----|:-----|
+| 容器反复重启，日志 `生产环境必须通过 … 提供密钥` | `DJANGO_SECRET_KEY` / `MIGRATION_FERNET_KEY` / `ALLOWED_HOSTS` 任一为空（`.env.example` 里 `MIGRATION_FERNET_KEY=` 就是空的） | 三项都填非空值；Fernet 接受任意字符串（内部按 SHA-256 派生），正式环境换成随机密钥 |
+| 首页 301 跳到 `https://` 后打不开 | 生产默认开 `SECURE_SSL_REDIRECT`，而容器只监听 8000 | `SECURE_SSL_REDIRECT=false`（前面有反代终结 TLS 时再打开） |
+| `docker pull` 报 `no matching manifest for linux/arm64` | 两个 registry 都只发布 `linux/amd64` | 加 `--platform linux/amd64`，Apple Silicon 走模拟，能跑但慢 |
+
+- 源库是 **Oracle 11g（11.2.0.4）**：把标签换成 `:latest-thick`（内置 Instant Client），`thin` 变体连不上老版本。
+- 单容器只有 Web + API。**整库编排、定时增量同步需要 Redis + Celery**，直接上 compose 全栈（override 文件见 [🐳 Docker 部署](#-docker-部署)）：
+  ```bash
+  C="-f docker-compose.yml -f docker-compose.prebuilt.yml"
+  docker compose $C pull && docker compose $C up -d
+  ```
+- 没挂数据卷时元数据写在容器内的 `db.sqlite3`，`docker rm` 就没了；正式部署把 `DATABASE_URL` 指向 PolarDB/PostgreSQL。
+- 想改代码再构建，走本地构建路径：[🚀 快速开始](#-快速开始) 与 [🐳 Docker 部署](#-docker-部署)。
 
 ---
 
@@ -1042,13 +1091,7 @@ docker compose down
 
 镜像里不含任何口令——数据库密码、`DJANGO_SECRET_KEY`、`MIGRATION_FERNET_KEY` 全部在运行时由 `.env` 注入，所以 ACR 公开只影响"能不能下到代码产物"，不泄露连接信息。两个 registry 都只有 `linux/amd64`，Apple Silicon/ARM 上需 `--platform linux/amd64` 走模拟。
 
-单容器起（前端同源，8000 一个端口即可；Redis 与 Celery 仍需另起，见 `docker-compose.yml`）：
-
-```bash
-docker pull -q registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
-docker run -d --name o2p -p 8000:8000 --env-file .env \
-  registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
-```
+单容器起（免构建最短路径已写在文首 [⚡ 快速体验](#-快速体验docker-免构建)，含 `.env` 必填项与 `migrate` / `createsuperuser`）。
 
 要走 compose 但用现成镜像，加一个 override（`docker-compose.prebuilt.yml`）——三个应用服务都指到同一个镜像，`pull` 之后 `up` 就不会再触发本地构建：
 

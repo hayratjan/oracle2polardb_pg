@@ -95,7 +95,7 @@
 ## 📋 Table of Contents
 
 > [!TIP]
-> Suggested reading order for first-time readers: **Product Overview** → **v2 Highlights** → **Quick Start** → **User Guide**
+> Suggested reading order for first-time readers: **Product Overview** → **Quick trial (Docker)** → **v2 Highlights** → **User Guide**
 
 <details open>
 <summary><b>📂 Expand full navigation</b></summary>
@@ -105,6 +105,7 @@
 | Section | Description |
 |:--------|:------------|
 | [🎯 Product Overview](#-product-overview) | Platform positioning and core capability matrix |
+| [⚡ Quick trial (Docker, no build)](#-quick-trial-docker-no-build) | Pull the CI image; three commands to a running service |
 | [✨ Highlights · v2](#-highlights--v2) | Table-level wizard · full-database orchestration · target environment DDL |
 | [🆕 Release highlights (v2.1 – v2.4.3)](#release-highlights-v21--v243) | Condensed changelog: logging · security hardening · migration correctness · syntax compatibility |
 | [📌 Supported Scenarios & Versions](#-supported-scenarios--versions) | Source/target versions and typical scenarios |
@@ -189,6 +190,54 @@ flowchart TB
     </tr>
   </tbody>
 </table>
+
+---
+
+## ⚡ Quick trial (Docker, no build)
+
+No Python/Node toolchain, no local image build — pull the CI artifact and run the platform:
+
+```bash
+# 1) Runtime config: the image ships no secrets; the container refuses to start without these
+cat > .env <<'EOF'
+DJANGO_ENV=prod
+DJANGO_DEBUG=false
+DJANGO_SECRET_KEY=trial-please-change-me
+MIGRATION_FERNET_KEY=trial-fernet-please-change-me
+ALLOWED_HOSTS=localhost,127.0.0.1
+SECURE_SSL_REDIRECT=false
+EOF
+
+# 2) Pull the image and start the container (SPA + API same-origin, port 8000 only)
+docker pull registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
+docker run -d --name o2p -p 8000:8000 --env-file .env \
+  registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
+
+# 3) Create tables + an account, then open http://localhost:8000
+docker exec o2p python manage.py migrate --noinput
+docker exec -it o2p python manage.py createsuperuser
+```
+
+If ACR is unreachable, pull from GHCR instead (also anonymous): `ghcr.io/hayratjan/oracle2polardb_pg:latest`.
+
+This `.env` is only for a local trial and is already covered by `.gitignore` — **never commit it**, and replace both secrets with random values before going live.
+
+Three traps that always show up as "it won't start":
+
+| Symptom | Cause | Fix |
+|:--------|:------|:----|
+| Container restarts in a loop; log says `生产环境必须通过 … 提供密钥` | Any of `DJANGO_SECRET_KEY` / `MIGRATION_FERNET_KEY` / `ALLOWED_HOSTS` is empty (`.env.example` ships `MIGRATION_FERNET_KEY=` blank) | Set all three to non-empty values; the Fernet key accepts any string (SHA-256 derived internally) — use a random secret in production |
+| Home page 301-redirects to `https://` and then fails | Production defaults `SECURE_SSL_REDIRECT` to on, but the container only listens on 8000 | `SECURE_SSL_REDIRECT=false` (turn it back on behind a TLS-terminating proxy) |
+| `docker pull` fails with `no matching manifest for linux/arm64` | Both registries publish only `linux/amd64` | Add `--platform linux/amd64`; emulated on Apple Silicon — works, just slower |
+
+- Source database is **Oracle 11g (11.2.0.4)**: switch the tag to `:latest-thick` (Instant Client built in); the `thin` variant cannot reach old versions.
+- A single container runs Web + API only. **Full-database orchestration and scheduled incremental sync need Redis + Celery** — use the compose stack (override file below in [🐳 Docker Deployment](#-docker-deployment)):
+  ```bash
+  C="-f docker-compose.yml -f docker-compose.prebuilt.yml"
+  docker compose $C pull && docker compose $C up -d
+  ```
+- Without a data volume, metadata lives in the container's `db.sqlite3` and disappears with `docker rm`; point `DATABASE_URL` at PolarDB/PostgreSQL for real deployments.
+- To modify code and build locally instead: [🚀 Quick Start](#-quick-start) and [🐳 Docker Deployment](#-docker-deployment).
 
 ---
 
@@ -905,13 +954,7 @@ Tags: `latest` / `latest-thick` (track master), `master` / `master-thick`, and `
 
 The image contains no secrets — database passwords, `DJANGO_SECRET_KEY`, and `MIGRATION_FERNET_KEY` are all injected at runtime via `.env`, so a public ACR repository only affects whether the build artifact can be downloaded; it never leaks connection information. Both registries publish `linux/amd64` only; on Apple Silicon/ARM add `--platform linux/amd64` to run under emulation.
 
-Single container (the frontend is served from the same origin, so the single port 8000 is enough; Redis and Celery still need to run separately — see `docker-compose.yml`):
-
-```bash
-docker pull -q registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
-docker run -d --name o2p -p 8000:8000 --env-file .env \
-  registry.cn-hangzhou.aliyuncs.com/hayrat/oracle2polardb_pg:latest
-```
+The shortest single-container path is the **Quick trial** at the top of this file (it includes the required `.env` keys plus `migrate` / `createsuperuser`): [⚡ Quick trial (Docker, no build)](#-quick-trial-docker-no-build).
 
 To use compose with the ready-made image, add an override file (`docker-compose.prebuilt.yml`) — all three application services point to the same image, so after `pull` there is no longer any local build triggered by `up`:
 
